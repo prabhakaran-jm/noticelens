@@ -1,0 +1,18 @@
+SYNTHETIC SAMPLE — FOR TESTING ONLY
+
+Final Payment Reminder
+18 November 2026
+
+Dear Sarah Example,
+
+Account reference: EXAMPLE-8472
+14 Example Road, Reading, RG0 0AA
+
+Our records show an outstanding balance of £1,280 for electricity supplied between January and June 2025.
+
+Please pay the balance or contact our billing team by 25 November 2026 to discuss your account.
+
+If you believe you have already provided meter readings or there is an error, please provide the relevant records when you contact us.
+
+Yours sincerely,
+Example Energy Billing Team
