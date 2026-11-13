@@ -303,6 +303,18 @@ describe("review probes — unicode dashes, name parts, long numbers, delivery, 
     expect(() => reject({ replyTemplateWithPlaceholders: "Dear [[RECIPIENT_NAME]]" })).toThrow(
       /canonical set/
     );
+    expect(() => reject({ replyTemplateWithPlaceholders: "Dear {{RECIPIENT_NAME}}" })).toThrow(
+      /canonical set/
+    );
+    expect(() => reject({ replyTemplateWithPlaceholders: "Dear {{{ACCOUNT_REF}}}" })).toThrow(
+      /canonical set/
+    );
+    expect(() => reject({ replyTemplateWithPlaceholders: "Dear {[RECIPIENT_NAME]}" })).toThrow(
+      /canonical set/
+    );
+    expect(() => reject({ replyTemplateWithPlaceholders: "Dear [{PHONE}]" })).toThrow(
+      /canonical set/
+    );
     expect(() =>
       reject({
         summaryPlainEnglish: "Please see [account_ref] before you reply.",
@@ -341,5 +353,100 @@ describe("review probes — unicode dashes, name parts, long numbers, delivery, 
 
     const stillBlocked = editLocalDraft(reintroduced, "Dear Sarah Example [ACCOUNT_REF");
     expect(stillBlocked.copyOrDownloadBlocked).toBe(true);
+
+    const doubled = createReplyDraftState("Hello {{RECIPIENT_NAME}}", [
+      { placeholder: "[RECIPIENT_NAME]", localValue: "Sarah Example" },
+    ]);
+    expect(doubled.unresolvedPlaceholders).toContain("{{RECIPIENT_NAME}}");
+    expect(doubled.copyOrDownloadBlocked).toBe(true);
+    expect(doubled.localDraft).toContain("{{RECIPIENT_NAME}}");
+    expect(doubled.localDraft).not.toContain("Sarah Example");
+  });
+
+  it("keeps a canonical placeholder valid while rejecting O10 double-brace forms", () => {
+    const ready = createReplyDraftState("Dear [RECIPIENT_NAME]", [
+      { placeholder: "[RECIPIENT_NAME]", localValue: "Sarah Example" },
+    ]);
+    expect(ready.copyOrDownloadBlocked).toBe(false);
+    expect(ready.localDraft).toBe("Dear Sarah Example");
+    expect(
+      validateCloudDraftOutput(acceptedCloudOutput(), M0_SMOKE_TEST_CLOUD_PAYLOAD)
+        .replyTemplateWithPlaceholders
+    ).toBe("Dear [RECIPIENT_NAME]");
+  });
+
+  it("matches name components as whole words and leaves domain phrases in place", () => {
+    expect(() =>
+      validateCloudBoundPayload(
+        clausePayload("Please contact the billing team before the response date."),
+        { forbiddenIdentifiers: ["Bill Payer"] }
+      )
+    ).not.toThrow();
+    expect(() =>
+      validateCloudBoundPayload(clausePayload("Please contact Bill before the response date."), {
+        forbiddenIdentifiers: ["Bill Payer"],
+      })
+    ).toThrow(/forbidden local identifier/);
+
+    expect(() =>
+      validateCloudBoundPayload(
+        clausePayload("The annual amount is due before the response date."),
+        { forbiddenIdentifiers: ["Ann Example"] }
+      )
+    ).not.toThrow();
+    expect(() =>
+      validateCloudBoundPayload(clausePayload("Please contact Ann before the response date."), {
+        forbiddenIdentifiers: ["Ann Example"],
+      })
+    ).toThrow(/forbidden local identifier/);
+
+    expect(() =>
+      validateCloudBoundPayload(
+        clausePayload("There is a problem with the stated balance before the date."),
+        { forbiddenIdentifiers: ["Rob Sample"] }
+      )
+    ).not.toThrow();
+    expect(() =>
+      validateCloudBoundPayload(clausePayload("Please contact Rob before the response date."), {
+        forbiddenIdentifiers: ["Rob Sample"],
+      })
+    ).toThrow(/forbidden local identifier/);
+
+    expect(() =>
+      validateCloudBoundPayload(clausePayload("Please contact Sarah before the response date."), {
+        forbiddenIdentifiers: ["Sarah Example"],
+      })
+    ).toThrow(/forbidden local identifier/);
+
+    const energyNotice = noticeWith([
+      "18 November 2026",
+      "Dear Alex Energy,",
+      "Please review energy billing before 25 November 2026.",
+      "Account reference: EXAMPLE-8472",
+    ]);
+    const energyQuote = "Please review energy billing before 25 November 2026.";
+    const energy = briefFrom(energyNotice, energyQuote);
+    expect(energy.ok).toBe(true);
+    if (energy.ok) {
+      expect(energy.structuralBrief.redactedObligations[0]?.redactedClause).toContain(
+        "energy billing"
+      );
+      expect(energy.structuralBrief.redactedObligations[0]?.redactedClause).not.toContain(
+        "[RECIPIENT_NAME]"
+      );
+      expect(energy.redactedNoticePreview).toContain("energy billing");
+      expect(energy.redactedNoticePreview).toContain("Dear [RECIPIENT_NAME]");
+    }
+    expect(() =>
+      validateCloudBoundPayload(
+        clausePayload("Please review energy billing before the response date."),
+        { forbiddenIdentifiers: ["Alex Energy"] }
+      )
+    ).not.toThrow();
+    expect(() =>
+      validateCloudBoundPayload(clausePayload("Please contact Energy before the response date."), {
+        forbiddenIdentifiers: ["Alex Energy"],
+      })
+    ).toThrow(/forbidden local identifier/);
   });
 });

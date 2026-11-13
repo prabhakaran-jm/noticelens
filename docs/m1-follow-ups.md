@@ -17,4 +17,19 @@ This note is not a product screen. Milestone 1 stays on the deterministic domain
 - Strengthen checks on conditional legal language and on cloud output.
 - Improve the benchmark beyond the current synthetic fixtures.
 
+## Deferred
+
+These items are not implemented here:
+
+- On-device inference timeout.
+- Residual PII detection limitations, including unusual names, addresses, and Unicode homoglyphs.
+- Production test-injection seam review and restriction.
+- Dead raw-embed guard.
+- Source role grounding and truncated evidence.
+- Cloud output legal-conclusion validation.
+- False positives in grouped number detection.
+- Bracketed instructional text versus supported placeholder tokens.
+- Real Chrome request-body audit.
+- Content Security Policy, and removal of the legacy SpikeHarness before a demo.
+
 Inference mode, the cloud model `gemini-3.5-flash-lite`, App Check, and the canonical immutable cloud snapshot stay as they are.

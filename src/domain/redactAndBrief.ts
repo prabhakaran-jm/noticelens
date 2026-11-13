@@ -1,11 +1,11 @@
 import { readAmount } from "./amounts";
 import {
-  compactIdentifier,
-  containsWholeWord,
   hasLongNumericIdentifier,
+  identifierLeaks,
   isCalendarToken,
   meaningfulNameComponents,
   normalizeDashes,
+  replaceNameComponent,
 } from "./textNormalize";
 import {
   CloudPayloadValidationError,
@@ -137,27 +137,6 @@ function failure(
     localIdentifierMap: map,
     excludedUnverifiedQuotes,
   };
-}
-
-function fold(value: string): string {
-  return value
-    .normalize("NFKC")
-    .replace(/[\u200B-\u200D\uFEFF\u00AD]/g, "")
-    .toLowerCase();
-}
-
-function compact(value: string): string {
-  return compactIdentifier(fold(value));
-}
-
-function replaceWholeWord(input: string, needle: string, replacement: string): string {
-  if (!needle) {
-    return input;
-  }
-  const pattern = new RegExp(`(^|[^A-Za-z])(${escapeRegExp(needle)})([^A-Za-z]|$)`, "gi");
-  return input.replace(pattern, (_match, before: string, _word: string, after: string) => {
-    return `${before}${replacement}${after}`;
-  });
 }
 
 function escapeRegExp(value: string): string {
@@ -336,24 +315,7 @@ function createPlaceholderAllocator(): (span: Span) => string {
 }
 
 function leaksKnownIdentifier(text: string, rawValues: readonly string[]): boolean {
-  const folded = fold(text);
-  const compacted = compact(text);
-  return rawValues.some((raw) => {
-    const clean = raw.trim();
-    if (clean.length < 3) {
-      return false;
-    }
-    if (folded.includes(fold(clean)) || containsWholeWord(folded, fold(clean))) {
-      return true;
-    }
-    for (const part of meaningfulNameComponents(clean)) {
-      if (containsWholeWord(folded, fold(part))) {
-        return true;
-      }
-    }
-    const compactId = compact(clean);
-    return compactId.length >= 6 && compacted.includes(compactId);
-  });
+  return rawValues.some((raw) => identifierLeaks(text, raw));
 }
 
 function residualPattern(text: string): string | null {
@@ -520,7 +482,7 @@ export function redactAndBuildBrief(input: RedactAndBriefInput): RedactAndBriefR
     const ordered = [...replacements].sort((a, b) => b.rawValue.length - a.rawValue.length);
     return ordered.reduce((text, item) => {
       if (item.wholeWord) {
-        return replaceWholeWord(text, item.rawValue, item.placeholder);
+        return replaceNameComponent(text, item.rawValue, item.placeholder);
       }
       return replaceAllInsensitive(text, item.rawValue, item.placeholder);
     }, value);

@@ -1,10 +1,8 @@
 import { hasAtMostTwoDecimalPlaces } from "./amounts";
 import { parseCalendarDate } from "./dates";
 import {
-  compactIdentifier,
-  containsWholeWord,
   hasLongNumericIdentifier,
-  meaningfulNameComponents,
+  identifierLeaks,
   normalizeDashes,
 } from "./textNormalize";
 import { UNTRUSTED_DATA_BEGIN, UNTRUSTED_DATA_END } from "./untrustedFence";
@@ -114,14 +112,6 @@ function stripInvisibles(value: string): string {
   return value.normalize("NFKC").replace(/[\u200B-\u200D\uFEFF\u00AD]/g, "");
 }
 
-function foldForLeakCheck(value: string): string {
-  return normalizeDashes(stripInvisibles(value)).toLowerCase();
-}
-
-function compactForLeakCheck(value: string): string {
-  return compactIdentifier(stripInvisibles(value));
-}
-
 function inspectStringForPiiOrLeakage(
   value: string,
   options: CloudPayloadGuardOptions | undefined,
@@ -160,23 +150,8 @@ function inspectStringForPiiOrLeakage(
   }
 
   if (options?.forbiddenIdentifiers) {
-    const foldedVal = foldForLeakCheck(value);
-    const compactVal = compactForLeakCheck(value);
     for (const rawId of options.forbiddenIdentifiers) {
-      const cleanId = rawId.trim();
-      if (cleanId.length < 3) {
-        continue;
-      }
-      const foldedId = foldForLeakCheck(cleanId);
-      const compactId = compactForLeakCheck(cleanId);
-      const componentLeak = meaningfulNameComponents(cleanId).some((part) =>
-        containsWholeWord(foldedVal, part.toLowerCase())
-      );
-      const leaked =
-        foldedVal.includes(foldedId) ||
-        componentLeak ||
-        (compactId.length >= 6 && compactVal.includes(compactId));
-      if (leaked) {
+      if (identifierLeaks(value, rawId)) {
         violations.push("a text field contains a forbidden local identifier");
         break;
       }
