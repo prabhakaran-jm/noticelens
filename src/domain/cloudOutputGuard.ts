@@ -99,13 +99,23 @@ export function validateCloudDraftOutput(
     "reply template",
     violations
   );
-  if (template) {
-    for (const token of listPlaceholderTokens(template)) {
+  const rejectUnexpectedPlaceholders = (text: string, label: string) => {
+    for (const token of listPlaceholderTokens(text)) {
       if (!isCanonicalPlaceholder(token)) {
-        violations.push("reply template contains a placeholder outside the canonical set");
-        break;
+        violations.push(
+          label === "reply template"
+            ? "reply template contains a placeholder outside the canonical set"
+            : `${label} contains an unexpected placeholder`
+        );
+        return;
       }
     }
+  };
+  if (summary) {
+    rejectUnexpectedPlaceholders(summary, "summary");
+  }
+  if (template) {
+    rejectUnexpectedPlaceholders(template, "reply template");
   }
 
   const options: CloudDraftOutput["options"] = [];
@@ -131,6 +141,9 @@ export function validateCloudDraftOutput(
         violations
       );
       if (title && rationale && applicableCondition) {
+        rejectUnexpectedPlaceholders(title, "option title");
+        rejectUnexpectedPlaceholders(rationale, "option rationale");
+        rejectUnexpectedPlaceholders(applicableCondition, "option condition");
         options.push({ title, rationale, applicableCondition });
       }
     }

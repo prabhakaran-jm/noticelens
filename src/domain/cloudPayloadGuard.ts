@@ -1,5 +1,12 @@
 import { hasAtMostTwoDecimalPlaces } from "./amounts";
 import { parseCalendarDate } from "./dates";
+import {
+  compactIdentifier,
+  containsWholeWord,
+  hasLongNumericIdentifier,
+  meaningfulNameComponents,
+  normalizeDashes,
+} from "./textNormalize";
 import { UNTRUSTED_DATA_BEGIN, UNTRUSTED_DATA_END } from "./untrustedFence";
 import {
   ALLOWED_ACTION_SUMMARIES,
@@ -59,7 +66,9 @@ export const CLOUD_PAYLOAD_REDACTION_LIMITATION =
 
 const UK_POSTCODE_REGEX = /\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b/i;
 const EMAIL_REGEX = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i;
-const PHONE_REGEX = /(?:\+44\s?\d{3,4}|\(?0\d{3,4}\)?)\s?\d{3}\s?\d{3,4}\b/;
+const PHONE_REGEX = /(?:\+44\s?\d{3,4}|\(?0\d{3,4}\)?)\s?\d{3}\s?\d{3,4}\b(?![\s-]*\d)/;
+const PARTIAL_PLACEHOLDER_IDENTIFIER =
+  /\[(?:ACCOUNT_REF|PHONE|LOCAL_ID|NINO)(?:_[1-9]\d*)?\](?!\s+[A-Za-z])\s*-?\s*\d/;
 const SALUTATION_NAME_REGEX =
   /\b(?:Dear|Mr|Mrs|Ms|Miss|Dr)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b/;
 const STREET_ADDRESS_REGEX =
@@ -106,11 +115,11 @@ function stripInvisibles(value: string): string {
 }
 
 function foldForLeakCheck(value: string): string {
-  return stripInvisibles(value).toLowerCase();
+  return normalizeDashes(stripInvisibles(value)).toLowerCase();
 }
 
 function compactForLeakCheck(value: string): string {
-  return foldForLeakCheck(value).replace(/[\s-]/g, "");
+  return compactIdentifier(stripInvisibles(value));
 }
 
 function inspectStringForPiiOrLeakage(
@@ -118,7 +127,7 @@ function inspectStringForPiiOrLeakage(
   options: CloudPayloadGuardOptions | undefined,
   violations: string[]
 ): void {
-  const visible = stripInvisibles(value);
+  const visible = normalizeDashes(stripInvisibles(value));
   if (
     visible.includes(UNTRUSTED_DATA_BEGIN) ||
     visible.includes(UNTRUSTED_DATA_END)
@@ -131,8 +140,11 @@ function inspectStringForPiiOrLeakage(
   if (EMAIL_REGEX.test(visible)) {
     violations.push("a text field contains an email address pattern");
   }
-  if (PHONE_REGEX.test(visible)) {
+  if (PHONE_REGEX.test(visible) || hasLongNumericIdentifier(visible)) {
     violations.push("a text field contains a telephone number pattern");
+  }
+  if (PARTIAL_PLACEHOLDER_IDENTIFIER.test(visible)) {
+    violations.push("a text field contains a partial identifier beside a placeholder");
   }
   if (SALUTATION_NAME_REGEX.test(visible)) {
     violations.push("a text field contains a personal salutation pattern");
@@ -157,8 +169,12 @@ function inspectStringForPiiOrLeakage(
       }
       const foldedId = foldForLeakCheck(cleanId);
       const compactId = compactForLeakCheck(cleanId);
+      const componentLeak = meaningfulNameComponents(cleanId).some((part) =>
+        containsWholeWord(foldedVal, part.toLowerCase())
+      );
       const leaked =
         foldedVal.includes(foldedId) ||
+        componentLeak ||
         (compactId.length >= 6 && compactVal.includes(compactId));
       if (leaked) {
         violations.push("a text field contains a forbidden local identifier");

@@ -1,4 +1,5 @@
 import { getGenerativeModel, InferenceMode } from "firebase/ai";
+import { acceptCloudCallResult } from "./cloudCallDelivery";
 import {
   getCloudFirebaseAI,
   getConfiguredCloudModelName,
@@ -35,6 +36,25 @@ export interface CloudDraftCallResult extends InferenceCallRecord<CloudDraftOutp
   evidence: ReturnType<typeof buildInferenceEvidenceReceipt>;
 }
 
+export interface CloudDraftGenerateResult {
+  text: string;
+  inferenceSource: string | undefined;
+}
+
+export interface CloudDraftCallOptions {
+  /** Finite bound, at most 60 seconds. Defaults to 20 seconds. */
+  timeoutMs?: number;
+  /**
+   * Test seam. Production calls omit this and use ONLY_IN_CLOUD.
+   * A resolved value is still discarded when the call was cancelled or timed out.
+   */
+  generate?: (args: {
+    prompt: string;
+    signal: AbortSignal;
+    modelName: string;
+  }) => Promise<CloudDraftGenerateResult>;
+}
+
 const PLACEHOLDER_LINE = CANONICAL_PLACEHOLDER_BASES.map((base) => `[${base}]`).join(", ");
 
 export function buildCloudDraftPrompt(
@@ -67,10 +87,34 @@ export function buildCloudDraftPrompt(
   ].join("\n");
 }
 
+async function generateWithFirebase(
+  prompt: string,
+  signal: AbortSignal,
+  modelName: string
+): Promise<CloudDraftGenerateResult> {
+  const ai = getCloudFirebaseAI();
+  const model = getGenerativeModel(ai, {
+    mode: InferenceMode.ONLY_IN_CLOUD,
+    inCloudParams: {
+      model: modelName,
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: CLOUD_DRAFT_SCHEMA,
+      },
+    },
+  });
+  const result = await model.generateContent(prompt, { signal });
+  return {
+    text: result.response.text(),
+    inferenceSource: result.response.inferenceSource,
+  };
+}
+
 export async function runCloudDraftFromApprovedPayload(
   candidatePayload: unknown,
   guardOptions?: CloudPayloadGuardOptions,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  callOptions?: CloudDraftCallOptions
 ): Promise<CloudDraftCallResult> {
   const approval = approveCloudPayload(candidatePayload, guardOptions);
   throwIfCloudSendAborted(signal);
@@ -83,25 +127,22 @@ export async function runCloudDraftFromApprovedPayload(
       throw new CloudOutputValidationError(["Approved snapshot did not match the payload to send"]);
     }
 
-    const ai = getCloudFirebaseAI();
     const modelName = getConfiguredCloudModelName();
-    const model = getGenerativeModel(ai, {
-      mode: InferenceMode.ONLY_IN_CLOUD,
-      inCloudParams: {
-        model: modelName,
-        generationConfig: {
-          responseMimeType: "application/json",
-          responseSchema: CLOUD_DRAFT_SCHEMA,
-        },
-      },
-    });
-
     const prompt = buildCloudDraftPrompt(approval.serialized, approval.payload);
     const t0 = performance.now();
-    const result = await model.generateContent(prompt, signal ? { signal } : undefined);
+    const generated = await acceptCloudCallResult({
+      signal,
+      timeoutMs: callOptions?.timeoutMs,
+      execute: (callSignal) => {
+        if (callOptions?.generate) {
+          return callOptions.generate({ prompt, signal: callSignal, modelName });
+        }
+        return generateWithFirebase(prompt, callSignal, modelName);
+      },
+    });
     const latencyMs = Math.round(performance.now() - t0);
-    const rawResponseText = result.response.text();
-    const inferenceSource = result.response.inferenceSource;
+    const rawResponseText = generated.text;
+    const inferenceSource = generated.inferenceSource;
     requireInferenceSource(inferenceSource, "in_cloud");
 
     let parsed: unknown;

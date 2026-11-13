@@ -14,6 +14,7 @@ import {
   InferenceBadge,
   resolveInferenceBadgeState,
 } from "../../src/ui/InferenceBadge";
+import { normalizeNewlines } from "../../src/domain/textNormalize";
 import { SpikeHarness } from "../../src/ui/SpikeHarness";
 
 describe("InferenceBadge & SpikeHarness privacy/scope guardrails (automated mocked tests)", () => {
@@ -84,7 +85,9 @@ describe("InferenceBadge & SpikeHarness privacy/scope guardrails (automated mock
     expect(alert).toHaveTextContent(/accepts plain text \(\.txt\) files only/i);
     expect(readSpy).not.toHaveBeenCalled();
     expect(
-      (screen.getByTestId("textarea-notice") as HTMLTextAreaElement).value
-    ).toBe(BENCHMARK_NOTICE_FIXTURES[0]!.rawText);
+      normalizeNewlines(
+        (screen.getByTestId("textarea-notice") as HTMLTextAreaElement).value
+      )
+    ).toBe(normalizeNewlines(BENCHMARK_NOTICE_FIXTURES[0]!.rawText));
   });
 });

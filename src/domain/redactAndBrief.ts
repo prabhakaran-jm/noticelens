@@ -1,5 +1,13 @@
 import { readAmount } from "./amounts";
 import {
+  compactIdentifier,
+  containsWholeWord,
+  hasLongNumericIdentifier,
+  isCalendarToken,
+  meaningfulNameComponents,
+  normalizeDashes,
+} from "./textNormalize";
+import {
   CloudPayloadValidationError,
   validateCloudBoundPayload,
 } from "./cloudPayloadGuard";
@@ -61,6 +69,7 @@ interface Span {
 interface Replacement {
   rawValue: string;
   placeholder: string;
+  wholeWord?: boolean;
 }
 
 export interface BriefSourceObligation {
@@ -138,7 +147,17 @@ function fold(value: string): string {
 }
 
 function compact(value: string): string {
-  return fold(value).replace(/[\s-]/g, "");
+  return compactIdentifier(fold(value));
+}
+
+function replaceWholeWord(input: string, needle: string, replacement: string): string {
+  if (!needle) {
+    return input;
+  }
+  const pattern = new RegExp(`(^|[^A-Za-z])(${escapeRegExp(needle)})([^A-Za-z]|$)`, "gi");
+  return input.replace(pattern, (_match, before: string, _word: string, after: string) => {
+    return `${before}${replacement}${after}`;
+  });
 }
 
 function escapeRegExp(value: string): string {
@@ -193,8 +212,13 @@ function pushMatch(
   });
 }
 
+function digitCount(value: string): number {
+  return value.replace(/\D/g, "").length;
+}
+
 function detectSpans(rawNoticeText: string): Span[] {
   const spans: Span[] = [];
+  const normalized = normalizeDashes(rawNoticeText);
 
   const address =
     /\b\d{1,4}[A-Z]?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3}\s+(?:Road|Street|Lane|Avenue|Close|Drive|Way|Court|Place|Gardens|Crescent|Terrace),\s*[A-Z][a-z]+,\s*[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b/g;
@@ -202,45 +226,62 @@ function detectSpans(rawNoticeText: string): Span[] {
     /\b\d{1,4}[A-Z]?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3}\s+(?:Road|Street|Lane|Avenue|Close|Drive|Way|Court|Place|Gardens|Crescent|Terrace)\b/g;
   const postcode = /\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b/gi;
   const email = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
-  const phone = /(?:\+44\s?\d{3,4}|\(?0\d{3,4}\)?)\s?\d{3}\s?\d{3,4}\b/gi;
+  const phone =
+    /(?:\+44\s?\d{3,4}|\(?0\d{3,4}\)?)\s?\d{3}\s?\d{3,4}\b(?![\s-]*\d)/gi;
   const account =
     /\b(?:Account|Tenancy|Customer|Council\s*Tax)\s*(?:reference|ref|number|no\.?)\s*[:#-]?\s*([A-Z0-9][A-Z0-9/-]{2,20})/gi;
+  const longNumber = /\d(?:[\s\u00A0-]*\d){7,}/g;
   const salutation = /\bDear\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b/g;
   const nino = /\b[A-CEGHJ-PR-TW-Z]{2}\s?\d{2}\s?\d{2}\s?\d{2}\s?[A-D]\b/gi;
 
-  for (const match of rawNoticeText.matchAll(address)) {
-    pushMatch(spans, "supply_address", match.index ?? -1, match[0]);
+  for (const match of normalized.matchAll(address)) {
+    const start = match.index ?? -1;
+    pushMatch(spans, "supply_address", start, rawNoticeText.slice(start, start + match[0].length));
   }
-  for (const match of rawNoticeText.matchAll(street)) {
-    pushMatch(spans, "supply_address", match.index ?? -1, match[0]);
+  for (const match of normalized.matchAll(street)) {
+    const start = match.index ?? -1;
+    pushMatch(spans, "supply_address", start, rawNoticeText.slice(start, start + match[0].length));
   }
-  for (const match of rawNoticeText.matchAll(postcode)) {
-    pushMatch(spans, "supply_address", match.index ?? -1, match[0]);
+  for (const match of normalized.matchAll(postcode)) {
+    const start = match.index ?? -1;
+    pushMatch(spans, "supply_address", start, rawNoticeText.slice(start, start + match[0].length));
   }
-  for (const match of rawNoticeText.matchAll(email)) {
-    pushMatch(spans, "email", match.index ?? -1, match[0]);
+  for (const match of normalized.matchAll(email)) {
+    const start = match.index ?? -1;
+    pushMatch(spans, "email", start, rawNoticeText.slice(start, start + match[0].length));
   }
-  for (const match of rawNoticeText.matchAll(phone)) {
-    pushMatch(spans, "phone", match.index ?? -1, match[0]);
+  for (const match of normalized.matchAll(phone)) {
+    const start = match.index ?? -1;
+    pushMatch(spans, "phone", start, rawNoticeText.slice(start, start + match[0].length));
   }
-  for (const match of rawNoticeText.matchAll(account)) {
+  for (const match of normalized.matchAll(longNumber)) {
+    const start = match.index ?? -1;
+    const rawValue = rawNoticeText.slice(start, start + match[0].length);
+    if (digitCount(rawValue) < 8 || isCalendarToken(normalizeDashes(rawValue))) {
+      continue;
+    }
+    const kind: LocalIdentifierKind = /^(?:\+|0)/.test(rawValue.trim()) ? "phone" : "other";
+    pushMatch(spans, kind, start, rawValue);
+  }
+  for (const match of normalized.matchAll(account)) {
     const token = match[1];
     if (!token || match.index === undefined) {
       continue;
     }
     const start = match.index + match[0].lastIndexOf(token);
-    pushMatch(spans, "account_ref", start, token);
+    pushMatch(spans, "account_ref", start, rawNoticeText.slice(start, start + token.length));
   }
-  for (const match of rawNoticeText.matchAll(salutation)) {
+  for (const match of normalized.matchAll(salutation)) {
     const name = match[1];
     if (!name || match.index === undefined) {
       continue;
     }
     const start = match.index + match[0].indexOf(name);
-    pushMatch(spans, "recipient_name", start, name);
+    pushMatch(spans, "recipient_name", start, rawNoticeText.slice(start, start + name.length));
   }
-  for (const match of rawNoticeText.matchAll(nino)) {
-    pushMatch(spans, "other", match.index ?? -1, match[0]);
+  for (const match of normalized.matchAll(nino)) {
+    const start = match.index ?? -1;
+    pushMatch(spans, "other", start, rawNoticeText.slice(start, start + match[0].length));
   }
 
   return spans;
@@ -302,8 +343,13 @@ function leaksKnownIdentifier(text: string, rawValues: readonly string[]): boole
     if (clean.length < 3) {
       return false;
     }
-    if (folded.includes(fold(clean))) {
+    if (folded.includes(fold(clean)) || containsWholeWord(folded, fold(clean))) {
       return true;
+    }
+    for (const part of meaningfulNameComponents(clean)) {
+      if (containsWholeWord(folded, fold(part))) {
+        return true;
+      }
     }
     const compactId = compact(clean);
     return compactId.length >= 6 && compacted.includes(compactId);
@@ -311,26 +357,33 @@ function leaksKnownIdentifier(text: string, rawValues: readonly string[]): boole
 }
 
 function residualPattern(text: string): string | null {
-  if (/\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b/i.test(text)) {
+  const visible = normalizeDashes(text);
+  if (/\[(?:ACCOUNT_REF|PHONE|LOCAL_ID|NINO)(?:_[1-9]\d*)?\](?!\s+[A-Za-z])\s*-?\s*\d/.test(visible)) {
+    return "A partial identifier remained beside a placeholder";
+  }
+  if (hasLongNumericIdentifier(visible)) {
+    return "A long numeric identifier remained in the structural brief";
+  }
+  if (/\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b/i.test(visible)) {
     return "A postcode pattern remained in the structural brief";
   }
-  if (/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i.test(text)) {
+  if (/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i.test(visible)) {
     return "An email pattern remained in the structural brief";
   }
-  if (/(?:\+44\s?\d{3,4}|\(?0\d{3,4}\)?)\s?\d{3}\s?\d{3,4}\b/.test(text)) {
+  if (/(?:\+44\s?\d{3,4}|\(?0\d{3,4}\)?)\s?\d{3}\s?\d{3,4}\b(?![\s-]*\d)/.test(visible)) {
     return "A telephone pattern remained in the structural brief";
   }
-  if (/\b(?:Dear|Mr|Mrs|Ms|Miss|Dr)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b/.test(text)) {
+  if (/\b(?:Dear|Mr|Mrs|Ms|Miss|Dr)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b/.test(visible)) {
     return "A personal name pattern remained in the structural brief";
   }
   if (
     /\b\d{1,4}[A-Z]?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}\s+(?:Road|Street|Lane|Avenue|Close|Drive|Way|Court|Place|Gardens|Crescent|Terrace)\b/.test(
-      text
+      visible
     )
   ) {
     return "A street address pattern remained in the structural brief";
   }
-  if (/\b[A-Z]{2,12}-\d{3,12}\b/.test(text)) {
+  if (/\b[A-Z]{2,12}-\d{3,12}\b/.test(visible)) {
     return "An account reference pattern remained in the structural brief";
   }
   return null;
@@ -413,13 +466,20 @@ export function redactAndBuildBrief(input: RedactAndBriefInput): RedactAndBriefR
   const allocate = createPlaceholderAllocator();
   const replacements: Replacement[] = [];
   const seenRaw = new Set<string>();
-  const remember = (rawValue: string, placeholder: string) => {
+  const remember = (rawValue: string, placeholder: string, wholeWord = false) => {
     const key = rawValue.toLowerCase();
+    const existing = replacements.find((item) => item.rawValue.toLowerCase() === key);
+    if (existing) {
+      if (wholeWord) {
+        existing.wholeWord = true;
+      }
+      return;
+    }
     if (seenRaw.has(key)) {
       return;
     }
     seenRaw.add(key);
-    replacements.push({ rawValue, placeholder });
+    replacements.push({ rawValue, placeholder, wholeWord });
   };
   for (const span of merged.kept) {
     remember(span.rawValue, allocate(span));
@@ -440,6 +500,11 @@ export function redactAndBuildBrief(input: RedactAndBriefInput): RedactAndBriefR
   for (const extra of unlocated) {
     remember(extra.rawValue, allocate(extra));
   }
+  for (const item of [...replacements]) {
+    for (const part of meaningfulNameComponents(item.rawValue)) {
+      remember(part, item.placeholder, true);
+    }
+  }
 
   const entries: LocalIdentifierEntry[] = merged.kept.map((span) => ({
     kind: span.kind,
@@ -453,10 +518,12 @@ export function redactAndBuildBrief(input: RedactAndBriefInput): RedactAndBriefR
 
   const redact = (value: string) => {
     const ordered = [...replacements].sort((a, b) => b.rawValue.length - a.rawValue.length);
-    return ordered.reduce(
-      (text, item) => replaceAllInsensitive(text, item.rawValue, item.placeholder),
-      value
-    );
+    return ordered.reduce((text, item) => {
+      if (item.wholeWord) {
+        return replaceWholeWord(text, item.rawValue, item.placeholder);
+      }
+      return replaceAllInsensitive(text, item.rawValue, item.placeholder);
+    }, value);
   };
 
   const redactedNoticePreview = redact(input.rawNoticeText);

@@ -1,5 +1,6 @@
 import energyBackbillOriginalRaw from "../../examples/energy-backbill-original.txt?raw";
 import energyBackbillRevisedRaw from "../../examples/energy-backbill-revised.txt?raw";
+import { normalizeNewlines } from "../domain/textNormalize";
 import type { CloudBoundStructuralPayload, NoticeCategory } from "../domain/types";
 
 export interface BenchmarkNoticeFixture {
@@ -18,7 +19,7 @@ export interface BenchmarkNoticeFixture {
   };
 }
 
-const GAS_CATCHUP_ARREARS_TEXT = `SYNTHETIC SAMPLE — FOR TESTING ONLY
+const GAS_CATCHUP_ARREARS_TEXT = normalizeNewlines(`SYNTHETIC SAMPLE — FOR TESTING ONLY
 
 Gas Account Catch-Up Statement
 20 November 2026
@@ -36,9 +37,9 @@ If you have photographs of earlier meter readings, please keep them ready when y
 
 Yours sincerely,
 Example Gas Collections Team
-`;
+`);
 
-const COUNCIL_TAX_REMINDER_TEXT = `SYNTHETIC SAMPLE — FOR TESTING ONLY
+const COUNCIL_TAX_REMINDER_TEXT = normalizeNewlines(`SYNTHETIC SAMPLE — FOR TESTING ONLY
 
 Council Tax Instalment Reminder Notice
 16 November 2026
@@ -56,9 +57,9 @@ If payment is not received by 30 November 2026, your right to pay by monthly ins
 
 Yours faithfully,
 Example City Council Revenues Team
-`;
+`);
 
-const HOUSING_SERVICE_CHARGE_TEXT = `SYNTHETIC SAMPLE — FOR TESTING ONLY
+const HOUSING_SERVICE_CHARGE_TEXT = normalizeNewlines(`SYNTHETIC SAMPLE — FOR TESTING ONLY
 
 Quarterly Service Charge Adjustment Notice
 19 November 2026
@@ -76,13 +77,13 @@ You may inspect the supporting invoices free of charge by contacting our leaseho
 
 Yours sincerely,
 Example Housing Association Neighbourhood Team
-`;
+`);
 
 export const BENCHMARK_NOTICE_FIXTURES: readonly BenchmarkNoticeFixture[] = [
   {
     id: "energy-backbill-original",
     title: "1. UK Electricity Back-Bill (£1,280 — Starter Fixture)",
-    rawText: energyBackbillOriginalRaw,
+    rawText: normalizeNewlines(energyBackbillOriginalRaw),
     forbiddenPiiTokens: [
       "Sarah Example",
       "EXAMPLE-8472",
@@ -104,7 +105,7 @@ export const BENCHMARK_NOTICE_FIXTURES: readonly BenchmarkNoticeFixture[] = [
   {
     id: "energy-backbill-revised",
     title: "2. Revised Electricity Statement (£520 — Starter Fixture)",
-    rawText: energyBackbillRevisedRaw,
+    rawText: normalizeNewlines(energyBackbillRevisedRaw),
     forbiddenPiiTokens: [
       "Sarah Example",
       "EXAMPLE-8472",
