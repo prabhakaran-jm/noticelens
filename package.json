@@ -1,0 +1,38 @@
+{
+  "name": "noticelens",
+  "private": true,
+  "version": "0.1.0-m0",
+  "type": "module",
+  "description": "NoticeLens Milestone 0 — Firebase AI Logic hybrid feasibility gate and 5-fixture extraction benchmark",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5173",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 4173",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "chrome:dev-profile": "node scripts/launch-chrome-d-profile.mjs",
+    "verify:chrome": "node scripts/verify-real-chrome.mjs",
+    "verify:gemma4": "node scripts/inspect-chrome-flags-and-gemma4.mjs",
+    "test:real-chrome": "node scripts/verify-real-chrome.mjs"
+  },
+  "dependencies": {
+    "firebase": "^13.3.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.2.0",
+    "@types/node": "^22.13.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "firebase-tools": "^14.0.0",
+    "jsdom": "^26.0.0",
+    "playwright-core": "^1.51.0",
+    "typescript": "^5.7.3",
+    "vite": "^6.2.0",
+    "vitest": "^3.0.7"
+  }
+}
