@@ -1,0 +1,116 @@
+/* NoticeLens UX Prototype — Civic Calm Design Tokens
+ * Contrast ratios are design targets for WCAG 2.2 AA verification (>= 4.5:1 text, >= 3:1 UI controls).
+ */
+:root {
+  /* Surfaces */
+  --color-bg-canvas: #F6F5F1;
+  --color-bg-surface: #FFFFFF;
+  --color-bg-subtle: #EFECE6;
+  --color-bg-paper: #FCFBF8;
+  --color-bg-code: #F8FAFC;
+
+  /* Borders */
+  --color-border-subtle: #DDD9CE;
+  --color-border-strong: #8B95A5;
+  --color-border-paper: #E2DDD2;
+
+  /* Text */
+  --color-text-primary: #111827;
+  --color-text-secondary: #374151;
+  --color-text-muted: #4B5563;
+  --color-text-inverse: #FFFFFF;
+
+  /* Brand — Civic Navy */
+  --color-brand-navy: #1E3A5F;
+  --color-brand-navy-hover: #152A47;
+  --color-brand-navy-subtle: #EBF1F8;
+  --color-focus-ring: #1D4ED8;
+
+  /* Provenance: Simulated On-Device & Local Vault */
+  --color-on-device-bg: #ECFDF5;
+  --color-on-device-border: #059669;
+  --color-on-device-fg: #065F46;
+
+  /* Provenance: Simulated In-Cloud (Approved Brief) */
+  --color-in-cloud-bg: #EFF6FF;
+  --color-in-cloud-border: #2563EB;
+  --color-in-cloud-fg: #1E40AF;
+
+  /* Source Evidence & Verification */
+  --color-quote-verified-bg: #FEF3C7;
+  --color-quote-verified-active-bg: #FDE68A;
+  --color-quote-verified-border: #B45309;
+
+  /* Warnings: Unverified Quote, Conflicting Dates, Omitted Field, Limited Mode */
+  --color-warning-bg: #FFFBEB;
+  --color-warning-border: #D97706;
+  --color-warning-fg: #92400E;
+
+  /* Expired / Past Deadline */
+  --color-expired-bg: #FEF2F2;
+  --color-expired-border: #DC2626;
+  --color-expired-fg: #991B1B;
+
+  /* Diff Positive / Balance Reduction */
+  --color-diff-reduced-bg: #F0FDF4;
+  --color-diff-reduced-border: #16A34A;
+  --color-diff-reduced-fg: #166534;
+
+  /* Prototype Simulation Ribbon */
+  --color-proto-ribbon-bg: #1E293B;
+  --color-proto-ribbon-fg: #F8FAFC;
+  --color-proto-pill-bg: #334155;
+  --color-proto-accent: #FBBF24;
+
+  /* Typography */
+  --font-sans: "Plus Jakarta Sans", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --text-xs: 0.75rem;      /* 12px */
+  --text-sm: 0.8125rem;    /* 13px */
+  --text-base: 0.9375rem;  /* 15px */
+  --text-md: 1rem;         /* 16px */
+  --text-lg: 1.125rem;     /* 18px */
+  --text-xl: 1.375rem;     /* 22px */
+  --text-2xl: clamp(1.375rem, 2vw, 1.75rem);
+
+  /* Spacing & Radii */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-pill: 9999px;
+
+  /* Elevation */
+  --shadow-xs: 0 1px 2px rgba(17, 24, 39, 0.05);
+  --shadow-sm: 0 2px 6px rgba(17, 24, 39, 0.06);
+  --shadow-md: 0 8px 24px rgba(17, 24, 39, 0.10);
+  --shadow-lg: 0 20px 44px rgba(17, 24, 39, 0.18);
+
+  /* Layout */
+  --container-max: 1320px;
+  --container-narrow: 780px;
+
+  /* Motion */
+  --transition-base: 180ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --transition-base: 0ms linear;
+  }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

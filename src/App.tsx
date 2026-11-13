@@ -1,5 +1,5 @@
-import { SpikeHarness } from "./ui/SpikeHarness";
+import { NoticeLensApp } from "./ui/production/NoticeLensApp";
 
 export function App() {
-  return <SpikeHarness />;
+  return <NoticeLensApp />;
 }

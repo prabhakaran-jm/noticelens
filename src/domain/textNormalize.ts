@@ -37,7 +37,7 @@ export function normalizeDashes(value: string): string {
 export function compactIdentifier(value: string): string {
   return normalizeDashes(value)
     .normalize("NFKC")
-    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\p{Cf}/gu, "")
     .toLowerCase()
     .replace(/[\s-]/g, "");
 }
@@ -72,8 +72,20 @@ function escapeRegExp(value: string): string {
 function prepareForMatch(value: string): string {
   return normalizeDashes(value)
     .normalize("NFKC")
-    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\p{Cf}/gu, "")
     .toLowerCase();
+}
+
+/** Format characters may sit between letters. Ordinary spaces stay word breaks. */
+function componentBody(component: string): string {
+  return [...prepareForMatch(component)].map((char) => escapeRegExp(char)).join("\\p{Cf}*");
+}
+
+function componentPattern(component: string): RegExp {
+  return new RegExp(
+    `(?<![\\p{L}\\p{M}\\p{N}_])${componentBody(component)}(?![\\p{L}\\p{M}\\p{N}_])`,
+    "giu"
+  );
 }
 
 function isPersonalName(value: string): boolean {
@@ -81,41 +93,55 @@ function isPersonalName(value: string): boolean {
   return parts.length > 0 && parts.every((part) => NAME_WORD.test(part));
 }
 
-function wholeWordPattern(word: string): RegExp {
-  return new RegExp(
-    `(?<![\\p{L}\\p{M}\\p{N}_])${escapeRegExp(word)}(?![\\p{L}\\p{M}\\p{N}_])`,
-    "giu"
-  );
-}
-
 /**
- * A surname or given name that is also ordinary notice language.
- * It is protected when it stands alone, and left in place inside a domain phrase.
+ * True only when this exact occurrence is ordinary notice language.
+ * A domain phrase elsewhere in the sentence does not exempt a separate name.
+ * Unclassified occurrences stay protected.
  */
-function isAmbiguousDomainUse(window: string, component: string): boolean {
-  const word = component.toLowerCase();
-  const sample = window.toLowerCase();
+function isDomainUseAt(text: string, start: number, end: number, component: string): boolean {
+  const word = prepareForMatch(component);
+  const before = text.slice(0, start);
+  const after = text.slice(end);
   if (word === "energy") {
     return (
-      /(?<![\p{L}\p{N}_])energy[\s-]+(?:billing|bills?|supplier|supply|account|charges?|usage|costs?)(?![\p{L}\p{N}_])/iu.test(
-        sample
+      /^[\s-]+(?:billing|bills?|supplier|supply|account|charges?|usage|costs?)(?![\p{L}\p{N}_])/iu.test(
+        after
       ) ||
-      /(?<![\p{L}\p{N}_])(?:electricity|gas|water|dual)[\s-]+energy(?![\p{L}\p{N}_])/iu.test(
-        sample
-      )
+      /(?:^|[\s,.;:])(?:electricity|gas|water|dual)[\s-]+$/iu.test(before)
     );
   }
   if (word === "bill") {
     return (
-      /(?<![\p{L}\p{N}_])(?:energy|council|tax|water|gas|phone|final|this|the|your|a|an)[\s-]+bill(?![\p{L}\p{N}_])/iu.test(
-        sample
+      /(?:^|[\s,.;:])(?:energy|council|tax|water|gas|phone|final|this|the|your|a|an)[\s-]+$/iu.test(
+        before
       ) ||
-      /(?<![\p{L}\p{N}_])bill[\s-]+(?:payment|pay|due|amount|total)(?![\p{L}\p{N}_])/iu.test(
-        sample
-      )
+      /^[\s-]+(?:payment|pay|due|amount|total)(?![\p{L}\p{N}_])/iu.test(after)
     );
   }
   return false;
+}
+
+function personalNameParts(value: string): string[] {
+  const parts = value.trim().split(/[\s,]+/).filter((part) => part.length > 0);
+  if (parts.length < 2 || parts.some((part) => !NAME_WORD.test(part))) {
+    return [];
+  }
+  return parts;
+}
+
+function letterSpacedNamePattern(fullName: string): RegExp | null {
+  const parts = personalNameParts(fullName);
+  const compactId = compactIdentifier(fullName);
+  if (parts.length < 2 || compactId.length < 6) {
+    return null;
+  }
+  const body = [...compactId]
+    .map((char) => escapeRegExp(char))
+    .join("\\p{Cf}*[ \\t\\u00A0-]{0,3}\\p{Cf}*");
+  return new RegExp(
+    `(?<![\\p{L}\\p{M}\\p{N}_])${body}(?![\\p{L}\\p{M}\\p{N}_])`,
+    "giu"
+  );
 }
 
 export function isCalendarToken(value: string): boolean {
@@ -136,20 +162,18 @@ export function containsWholeWord(haystack: string, word: string): boolean {
   if (!word) {
     return false;
   }
-  return wholeWordPattern(word).test(prepareForMatch(haystack));
+  return componentPattern(word).test(haystack);
 }
 
 /** A name component matches a whole word, never a fragment such as Bill inside billing. */
 export function nameComponentMatches(text: string, component: string): boolean {
-  const prepared = prepareForMatch(text);
-  const needle = prepareForMatch(component);
-  if (!needle) {
+  if (!prepareForMatch(component)) {
     return false;
   }
-  for (const match of prepared.matchAll(wholeWordPattern(needle))) {
+  for (const match of text.matchAll(componentPattern(component))) {
     const start = match.index ?? 0;
-    const window = prepared.slice(Math.max(0, start - 32), start + needle.length + 32);
-    if (isAmbiguousDomainUse(window, needle)) {
+    const token = match[0] ?? "";
+    if (isDomainUseAt(text, start, start + token.length, component)) {
       continue;
     }
     return true;
@@ -165,10 +189,8 @@ export function replaceNameComponent(
   if (!component) {
     return input;
   }
-  const needle = prepareForMatch(component);
-  return input.replace(wholeWordPattern(component), (match, offset) => {
-    const window = input.slice(Math.max(0, offset - 32), offset + match.length + 32);
-    if (isAmbiguousDomainUse(window, needle)) {
+  return input.replace(componentPattern(component), (match, offset) => {
+    if (isDomainUseAt(input, offset, offset + match.length, component)) {
       return match;
     }
     return replacement;
@@ -176,8 +198,30 @@ export function replaceNameComponent(
 }
 
 /**
+ * Replaces a known multi-word name even when letters are spaced or carry
+ * format characters. A single domain word such as "energy billing" does not match.
+ */
+export function replacePersonalName(
+  input: string,
+  fullName: string,
+  replacement: string
+): string {
+  const pattern = letterSpacedNamePattern(fullName);
+  const compactId = compactIdentifier(fullName);
+  if (!pattern || compactId.length < 6) {
+    return input;
+  }
+  return input.replace(pattern, (match) =>
+    compactIdentifier(match) === compactId ? replacement : match
+  );
+}
+
+/**
  * Shared leak rule for redaction and cloud validation.
- * Personal-name components use whole words. Account references still use compact matching.
+ * Personal-name components use whole words. Multi-word names also use compact
+ * matching, so letter spacing and format characters cannot skip the check.
+ * Account references keep compact matching. A single domain word is not compacted
+ * onto ordinary notice language; an unclassified occurrence still counts as the name.
  */
 export function identifierLeaks(text: string, rawId: string): boolean {
   const clean = rawId.trim();
@@ -193,6 +237,10 @@ export function identifierLeaks(text: string, rawId: string): boolean {
         "iu"
       );
       if (phrasePattern.test(prepareForMatch(text))) {
+        return true;
+      }
+      const compactId = compactIdentifier(clean);
+      if (compactId.length >= 6 && compactIdentifier(text).includes(compactId)) {
         return true;
       }
     }
