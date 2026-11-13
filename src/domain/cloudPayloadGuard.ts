@@ -1,4 +1,5 @@
 import {
+  ALLOWED_CIRCUMSTANCE_FLAGS,
   ALLOWED_GUIDANCE_IDS,
   ALLOWED_NOTICE_CATEGORIES,
   ALLOWED_RESPONSE_GOALS,
@@ -23,6 +24,8 @@ export const ALLOWED_CLOUD_OBLIGATION_KEYS = [
   "redactedClause",
 ] as const;
 
+export const OPTIONAL_CLOUD_ROOT_KEYS = ["circumstanceFlags"] as const;
+
 export const CLOUD_PAYLOAD_LIMITS = {
   maxDateLength: 40,
   maxBillingPeriodLength: 80,
@@ -32,6 +35,7 @@ export const CLOUD_PAYLOAD_LIMITS = {
   minRedactedClauseLength: 4,
   maxRedactedClauseLength: 220,
   maxGuidanceIds: 5,
+  maxCircumstanceFlags: 8,
   maxTotalSerializedLength: 2_600,
 } as const;
 
@@ -71,39 +75,61 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return proto === Object.prototype || proto === null;
 }
 
+function stripInvisibles(value: string): string {
+  return value.normalize("NFKC").replace(/[\u200B-\u200D\uFEFF\u00AD]/g, "");
+}
+
+function foldForLeakCheck(value: string): string {
+  return stripInvisibles(value).toLowerCase();
+}
+
+function compactForLeakCheck(value: string): string {
+  return foldForLeakCheck(value).replace(/[\s-]/g, "");
+}
+
 function inspectStringForPiiOrLeakage(
   fieldPath: string,
   value: string,
   options: CloudPayloadGuardOptions | undefined,
   violations: string[]
 ): void {
-  if (UK_POSTCODE_REGEX.test(value)) {
+  const visible = stripInvisibles(value);
+  if (UK_POSTCODE_REGEX.test(visible)) {
     violations.push(`${fieldPath} contains a UK postcode pattern`);
   }
-  if (EMAIL_REGEX.test(value)) {
+  if (EMAIL_REGEX.test(visible)) {
     violations.push(`${fieldPath} contains an email address pattern`);
   }
-  if (PHONE_REGEX.test(value)) {
+  if (PHONE_REGEX.test(visible)) {
     violations.push(`${fieldPath} contains a telephone number pattern`);
   }
-  if (SALUTATION_NAME_REGEX.test(value)) {
+  if (SALUTATION_NAME_REGEX.test(visible)) {
     violations.push(`${fieldPath} contains a personal salutation/name pattern`);
   }
-  if (STREET_ADDRESS_REGEX.test(value)) {
+  if (STREET_ADDRESS_REGEX.test(visible)) {
     violations.push(`${fieldPath} contains a street address pattern`);
   }
   if (
-    LABELED_ACCOUNT_REF_REGEX.test(value) ||
-    ALPHANUMERIC_REF_TOKEN_REGEX.test(value)
+    LABELED_ACCOUNT_REF_REGEX.test(visible) ||
+    ALPHANUMERIC_REF_TOKEN_REGEX.test(visible)
   ) {
     violations.push(`${fieldPath} contains an unredacted account/reference token`);
   }
 
   if (options?.forbiddenIdentifiers) {
-    const lowerVal = value.toLowerCase();
+    const foldedVal = foldForLeakCheck(value);
+    const compactVal = compactForLeakCheck(value);
     for (const rawId of options.forbiddenIdentifiers) {
       const cleanId = rawId.trim();
-      if (cleanId.length >= 3 && lowerVal.includes(cleanId.toLowerCase())) {
+      if (cleanId.length < 3) {
+        continue;
+      }
+      const foldedId = foldForLeakCheck(cleanId);
+      const compactId = compactForLeakCheck(cleanId);
+      const leaked =
+        foldedVal.includes(foldedId) ||
+        (compactId.length >= 6 && compactVal.includes(compactId));
+      if (leaked) {
         violations.push(
           `${fieldPath} contains forbidden local identifier (${cleanId.slice(0, 2)}***)`
         );
@@ -113,7 +139,7 @@ function inspectStringForPiiOrLeakage(
 
   if (options?.rawNoticeText) {
     const normalizedRaw = options.rawNoticeText.replace(/\s+/g, " ").trim();
-    const normalizedVal = value.replace(/\s+/g, " ").trim();
+    const normalizedVal = visible.replace(/\s+/g, " ").trim();
     if (
       normalizedRaw.length >= 80 &&
       normalizedVal.length >= Math.min(normalizedRaw.length, 240) &&
@@ -138,7 +164,10 @@ export function validateCloudBoundPayload(
     ]);
   }
 
-  const allowedRootSet = new Set<string>(ALLOWED_CLOUD_ROOT_KEYS);
+  const allowedRootSet = new Set<string>([
+    ...ALLOWED_CLOUD_ROOT_KEYS,
+    ...OPTIONAL_CLOUD_ROOT_KEYS,
+  ]);
   for (const key of Object.keys(input)) {
     if (!allowedRootSet.has(key)) {
       violations.push(`Unexpected root key "${key}" is not on the allowlist`);
@@ -334,6 +363,47 @@ export function validateCloudBoundPayload(
     });
   }
 
+  if ("circumstanceFlags" in input) {
+    const flags = input.circumstanceFlags;
+    if (
+      !Array.isArray(flags) ||
+      flags.length > CLOUD_PAYLOAD_LIMITS.maxCircumstanceFlags
+    ) {
+      violations.push(
+        `circumstanceFlags must be an array of 0..${CLOUD_PAYLOAD_LIMITS.maxCircumstanceFlags} allowlisted ids`
+      );
+    } else {
+      const seen = new Set<string>();
+      flags.forEach((flag, idx) => {
+        if (
+          typeof flag !== "string" ||
+          !(ALLOWED_CIRCUMSTANCE_FLAGS as readonly string[]).includes(flag)
+        ) {
+          violations.push(
+            `circumstanceFlags[${idx}] is not an allowed circumstance flag`
+          );
+          return;
+        }
+        if (seen.has(flag)) {
+          violations.push(`circumstanceFlags[${idx}] duplicates "${flag}"`);
+        }
+        seen.add(flag);
+      });
+    }
+  }
+
+  if (Array.isArray(input.guidanceIds)) {
+    const seenGuidance = new Set<string>();
+    input.guidanceIds.forEach((gid, idx) => {
+      if (typeof gid === "string" && seenGuidance.has(gid)) {
+        violations.push(`guidanceIds[${idx}] duplicates "${gid}"`);
+      }
+      if (typeof gid === "string") {
+        seenGuidance.add(gid);
+      }
+    });
+  }
+
   const serialized = JSON.stringify(input);
   if (serialized.length > CLOUD_PAYLOAD_LIMITS.maxTotalSerializedLength) {
     violations.push(
@@ -346,4 +416,76 @@ export function validateCloudBoundPayload(
   }
 
   return input as unknown as CloudBoundStructuralPayload;
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const nested of Object.values(value)) {
+      deepFreeze(nested);
+    }
+  }
+  return value;
+}
+
+function assertJsonSafe(value: unknown, path: string, violations: string[]): void {
+  if (value === null) {
+    return;
+  }
+  const valueType = typeof value;
+  if (valueType === "string" || valueType === "boolean") {
+    return;
+  }
+  if (valueType === "number") {
+    if (!Number.isFinite(value)) {
+      violations.push(`${path} is not a finite JSON number`);
+    }
+    return;
+  }
+  if (
+    valueType === "undefined" ||
+    valueType === "function" ||
+    valueType === "symbol" ||
+    valueType === "bigint"
+  ) {
+    violations.push(`${path} is not a JSON value and was not silently dropped`);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      if (!Object.prototype.hasOwnProperty.call(value, index)) {
+        violations.push(`${path}[${index}] is an empty array slot`);
+      } else {
+        assertJsonSafe(value[index], `${path}[${index}]`, violations);
+      }
+    }
+    return;
+  }
+  if (!isPlainObject(value)) {
+    violations.push(`${path} is not a plain JSON object`);
+    return;
+  }
+  for (const key of Object.keys(value)) {
+    if (key === "__proto__" || key === "constructor" || key === "prototype") {
+      violations.push(`${path} contains forbidden key "${key}"`);
+    }
+    assertJsonSafe(value[key], path === "payload" ? key : `${path}.${key}`, violations);
+  }
+}
+
+/**
+ * Re-checks the payload the user is about to send, after edits.
+ * Rejects non-JSON values instead of dropping them, then applies the allowlist.
+ */
+export function revalidateFinalCloudPayload(
+  editedPayload: unknown,
+  options?: CloudPayloadGuardOptions
+): CloudBoundStructuralPayload {
+  const safetyViolations: string[] = [];
+  assertJsonSafe(editedPayload, "payload", safetyViolations);
+  if (safetyViolations.length > 0) {
+    throw new CloudPayloadValidationError(safetyViolations);
+  }
+  const validated = validateCloudBoundPayload(editedPayload, options);
+  return deepFreeze(structuredClone(validated));
 }

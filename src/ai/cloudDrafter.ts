@@ -12,14 +12,8 @@ import type {
   CloudDraftOutput,
   InferenceCallRecord,
 } from "../domain/types";
+import { buildOfgemCloudPromptExcerpt } from "../guidance/ofgemBackBilling";
 import { CLOUD_DRAFT_SCHEMA } from "./schemas";
-
-const OFGEM_ATTRIBUTABLE_GUIDANCE_SNIPPET = [
-  "Source: Ofgem consumer guidance — 'What to do if you get a back bill' (https://www.ofgem.gov.uk/your-energy-supply/your-energy-bill/what-do-if-you-get-back-bill).",
-  "Conditions: Domestic consumers generally cannot be charged for unbilled energy used more than 12 months before the bill date IF they did not previously receive an accurate bill or statement of account for it.",
-  "Exceptions: The 12-month limit does NOT apply if the consumer acted unreasonably (e.g. blocking meter access, ignoring supplier requests, or unlawful abstraction).",
-  "Boundary: Do NOT declare a bill legally invalid; explain the applicable conditions and draft an editable enquiry using placeholders [RECIPIENT_NAME], [ACCOUNT_REFERENCE], and [PROPERTY_ADDRESS].",
-].join("\n");
 
 export interface CloudDraftCallResult
   extends InferenceCallRecord<CloudDraftOutput> {
@@ -53,11 +47,11 @@ export async function runCloudDraftFromApprovedPayload(
 
   const prompt = [
     "You assist UK households in understanding response options to a redacted structural notice brief.",
-    "Never invent personal details; keep placeholders [RECIPIENT_NAME], [ACCOUNT_REFERENCE], and [PROPERTY_ADDRESS] verbatim.",
+    "Never invent personal details; keep placeholders [RECIPIENT_NAME], [ACCOUNT_REF], [SUPPLY_ADDRESS], [ACCOUNT_REFERENCE], and [PROPERTY_ADDRESS] verbatim.",
     "Never state that a notice is legally invalid; explain conditions from the supplied guidance.",
     "",
     "CURATED OFFICIAL GUIDANCE:",
-    OFGEM_ATTRIBUTABLE_GUIDANCE_SNIPPET,
+    buildOfgemCloudPromptExcerpt(),
     "",
     "USER-APPROVED REDACTED STRUCTURAL BRIEF (JSON):",
     JSON.stringify(validatedPayload, null, 2),
