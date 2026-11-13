@@ -169,7 +169,9 @@ async function main() {
     page.on("request", (req) => {
       const url = req.url();
       if (!url.startsWith("http://127.0.0.1") && !url.startsWith("data:")) {
-        outboundRequests.push({ method: req.method(), url });
+        // Strip query strings (such as ?key=...) so public Firebase API keys are never printed in telemetry logs
+        const sanitizedUrl = url.split("?")[0];
+        outboundRequests.push({ method: req.method(), url: sanitizedUrl });
       }
     });
 
@@ -217,12 +219,24 @@ async function main() {
       .getByTestId("firebase-appcheck-status")
       .innerText();
 
-    // 1. Click Real ONLY_ON_DEVICE Inference button
+    // 1. Click Real ONLY_ON_DEVICE Inference button (log progress heartbeats if model downloads on first run)
     await page.getByTestId("btn-run-on-device").click();
+    const progressTimer = setInterval(async () => {
+      try {
+        const bodyTxt = await page.locator("main").innerText();
+        const dlMatch = bodyTxt.match(/Device model download\/load progress:\s*([\d.]+%)/);
+        console.error(
+          `[verify-real-chrome heartbeat] waiting for ONLY_ON_DEVICE... ${dlMatch ? `download=${dlMatch[1]}` : "inferring/initializing"}`
+        );
+      } catch {
+        // ignore transient navigation/eval
+      }
+    }, 10_000);
+
     const onDeviceOutcome = await Promise.race([
       page
         .getByTestId("on-device-result")
-        .waitFor({ state: "visible", timeout: 180_000 })
+        .waitFor({ state: "visible", timeout: 600_000 })
         .then(async () => ({
           status: "succeeded",
           inferenceSource: await page
@@ -239,12 +253,12 @@ async function main() {
         })),
       page
         .getByTestId("on-device-error")
-        .waitFor({ state: "visible", timeout: 180_000 })
+        .waitFor({ state: "visible", timeout: 600_000 })
         .then(async () => ({
           status: "blocked_or_failed",
           error: await page.getByTestId("on-device-error").innerText(),
         })),
-    ]);
+    ]).finally(() => clearInterval(progressTimer));
 
     // 2. Offline repeat ONLY if online ONLY_ON_DEVICE succeeded
     let offlineRepeatOutcome = {
@@ -253,7 +267,12 @@ async function main() {
     if (onDeviceOutcome.status === "succeeded") {
       await context.setOffline(true);
       await page.getByTestId("btn-refresh-capability").click();
+      await page.waitForTimeout(300);
       await page.getByTestId("btn-run-on-device").click();
+      await page
+        .getByTestId("on-device-result")
+        .waitFor({ state: "hidden", timeout: 5_000 })
+        .catch(() => {});
       offlineRepeatOutcome = await Promise.race([
         page
           .getByTestId("on-device-result")
@@ -313,16 +332,29 @@ async function main() {
       benchmarkOutcome = await Promise.race([
         page
           .getByTestId("benchmark-summary")
-          .waitFor({ state: "visible", timeout: 300_000 })
-          .then(async () => ({
-            status: "succeeded",
-            summaryText: await page
+          .waitFor({ state: "visible", timeout: 600_000 })
+          .then(async () => {
+            const summaryText = await page
               .getByTestId("benchmark-summary")
-              .innerText(),
-          })),
+              .innerText();
+            const rows = await page
+              .locator('[data-testid="benchmark-summary"] tbody tr')
+              .evaluateAll((trs) =>
+                trs.map((tr) =>
+                  Array.from(tr.querySelectorAll("td")).map((td) =>
+                    (td.textContent || "").trim()
+                  )
+                )
+              );
+            return {
+              status: "succeeded",
+              summaryText,
+              rows,
+            };
+          }),
         page
           .getByTestId("benchmark-error")
-          .waitFor({ state: "visible", timeout: 300_000 })
+          .waitFor({ state: "visible", timeout: 600_000 })
           .then(async () => ({
             status: "blocked_or_failed",
             error: await page.getByTestId("benchmark-error").innerText(),

@@ -281,26 +281,60 @@ async function probeNativeProfile({
     });
 
     await appPage.getByTestId("btn-run-on-device").click();
-    const firebaseOnDeviceResult = await Promise.race([
-      appPage
-        .getByTestId("on-device-result")
-        .waitFor({ state: "visible", timeout: 60_000 })
-        .then(async () => ({
-          status: "succeeded",
-          inferenceSource: await appPage
-            .getByTestId("inference-badge-on-device")
-            .getAttribute("data-raw-inference-source"),
-          latency: await appPage.getByTestId("on-device-latency").innerText(),
-          text: await appPage.getByTestId("on-device-result").innerText(),
-        })),
-      appPage
-        .getByTestId("on-device-error")
-        .waitFor({ state: "visible", timeout: 60_000 })
-        .then(async () => ({
-          status: "blocked_or_failed",
-          error: await appPage.getByTestId("on-device-error").innerText(),
-        })),
-    ]);
+    let lastObservedDownloadPct = null;
+    const downloadTimeoutMs = Number(
+      process.env.NOTICELENS_GEMMA4_TIMEOUT_MS || "90000"
+    );
+    const hb = setInterval(async () => {
+      try {
+        const mainText = await appPage.locator("main").innerText();
+        const dl = mainText.match(
+          /Device model download\/load progress:\s*([\d.]+)%/
+        );
+        if (dl) {
+          lastObservedDownloadPct = Number(dl[1]);
+        }
+        console.error(
+          `[verify-gemma4 heartbeat] ${label}: ${dl ? `download=${dl[1]}%` : "inferring/initializing"}`
+        );
+      } catch {
+        // ignore
+      }
+    }, 10_000);
+
+    let firebaseOnDeviceResult;
+    try {
+      firebaseOnDeviceResult = await Promise.race([
+        appPage
+          .getByTestId("on-device-result")
+          .waitFor({ state: "visible", timeout: downloadTimeoutMs })
+          .then(async () => ({
+            status: "succeeded",
+            inferenceSource: await appPage
+              .getByTestId("inference-badge-on-device")
+              .getAttribute("data-raw-inference-source"),
+            latency: await appPage.getByTestId("on-device-latency").innerText(),
+            text: await appPage.getByTestId("on-device-result").innerText(),
+          })),
+        appPage
+          .getByTestId("on-device-error")
+          .waitFor({ state: "visible", timeout: downloadTimeoutMs })
+          .then(async () => ({
+            status: "blocked_or_failed",
+            error: await appPage.getByTestId("on-device-error").innerText(),
+          })),
+      ]);
+    } catch (waitErr) {
+      firebaseOnDeviceResult = {
+        status: "cold_download_timeout",
+        timeoutMs: downloadTimeoutMs,
+        lastObservedDownloadPct,
+        detail:
+          waitErr instanceof Error ? waitErr.message.split("\n")[0] : String(waitErr),
+      };
+    } finally {
+      clearInterval(hb);
+    }
 
     return {
       label,
