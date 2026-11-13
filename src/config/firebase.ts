@@ -6,7 +6,9 @@ import {
 } from "firebase/app-check";
 import { getAI, GoogleAIBackend, type AI } from "firebase/ai";
 
-export const DEFAULT_CLOUD_GEMINI_MODEL = "gemini-3.8-flash";
+// Default to the high-volume workhorse: gemini-3.8-flash returned HTTP 500
+// "high demand" on Gemini Developer API (Spark) during M0 live verification.
+export const DEFAULT_CLOUD_GEMINI_MODEL = "gemini-3.5-flash-lite";
 
 const FORBIDDEN_CLOUD_MODELS = new Set([
   "gemini-1.0-pro",
@@ -65,7 +67,7 @@ export function getConfiguredCloudModelName(): string {
   const candidate = cloudModel || DEFAULT_CLOUD_GEMINI_MODEL;
   if (FORBIDDEN_CLOUD_MODELS.has(candidate)) {
     throw new FirebaseSetupBlockerError(
-      `Configured cloud model "${candidate}" is retired or deprecated in Nov 2026. Use "gemini-3.8-flash" or "gemini-3.5-flash-lite".`
+      `Configured cloud model "${candidate}" is retired or deprecated in Nov 2026. Use "gemini-3.5-flash-lite" or "gemini-3.8-flash".`
     );
   }
   return candidate;

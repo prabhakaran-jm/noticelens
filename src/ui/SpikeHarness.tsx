@@ -789,10 +789,26 @@ export function SpikeHarness() {
                 borderRadius: "6px",
                 fontSize: "0.82rem",
                 whiteSpace: "pre-wrap",
-                margin: 0,
+                margin: "0 0 0.65rem",
               }}
             >
               {cloudResult.output.replyTemplateWithPlaceholders}
+            </pre>
+            <pre
+              data-testid="cloud-structured-json"
+              style={{
+                background: "#0f172a",
+                color: "#e2e8f0",
+                border: "1px solid #1e293b",
+                padding: "0.65rem",
+                borderRadius: "6px",
+                fontSize: "0.78rem",
+                whiteSpace: "pre-wrap",
+                margin: 0,
+                overflowX: "auto",
+              }}
+            >
+              {JSON.stringify(cloudResult.output, null, 2)}
             </pre>
           </div>
         ) : null}

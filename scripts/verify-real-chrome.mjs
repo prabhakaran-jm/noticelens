@@ -142,6 +142,10 @@ async function launchNativeChromeOverCdp(profileDir, cdpPort) {
 }
 
 async function main() {
+  const cloudOnly = process.env.NOTICELENS_CLOUD_ONLY === "1";
+  const skipBenchmark =
+    cloudOnly || process.env.NOTICELENS_SKIP_BENCHMARK === "1";
+
   const cDriveModelCache = inspectCachedModelDir(DEFAULT_C_MODEL_DIR);
   const dDriveModelCache = inspectCachedModelDir(
     path.join(D_PROFILE_DIR, "OptGuideOnDeviceModel")
@@ -160,7 +164,7 @@ async function main() {
     }
 
     // Allow Chrome's On-Device Model Broker performance class check to settle
-    await new Promise((r) => setTimeout(r, 3500));
+    await new Promise((r) => setTimeout(r, cloudOnly ? 1500 : 3500));
 
     const page =
       context.pages().find((p) => p.url().startsWith(DEV_URL)) ??
@@ -219,52 +223,62 @@ async function main() {
       .getByTestId("firebase-appcheck-status")
       .innerText();
 
-    // 1. Click Real ONLY_ON_DEVICE Inference button (log progress heartbeats if model downloads on first run)
-    await page.getByTestId("btn-run-on-device").click();
-    const progressTimer = setInterval(async () => {
-      try {
-        const bodyTxt = await page.locator("main").innerText();
-        const dlMatch = bodyTxt.match(/Device model download\/load progress:\s*([\d.]+%)/);
-        console.error(
-          `[verify-real-chrome heartbeat] waiting for ONLY_ON_DEVICE... ${dlMatch ? `download=${dlMatch[1]}` : "inferring/initializing"}`
-        );
-      } catch {
-        // ignore transient navigation/eval
-      }
-    }, 10_000);
+    // 1. Click Real ONLY_ON_DEVICE Inference button (skipped when NOTICELENS_CLOUD_ONLY=1)
+    let onDeviceOutcome = {
+      status: "skipped_by_env_flag",
+      reason: "NOTICELENS_CLOUD_ONLY=1",
+    };
+    if (!cloudOnly) {
+      await page.getByTestId("btn-run-on-device").click();
+      const progressTimer = setInterval(async () => {
+        try {
+          const bodyTxt = await page.locator("main").innerText();
+          const dlMatch = bodyTxt.match(
+            /Device model download\/load progress:\s*([\d.]+%)/
+          );
+          console.error(
+            `[verify-real-chrome heartbeat] waiting for ONLY_ON_DEVICE... ${dlMatch ? `download=${dlMatch[1]}` : "inferring/initializing"}`
+          );
+        } catch {
+          // ignore transient navigation/eval
+        }
+      }, 10_000);
 
-    const onDeviceOutcome = await Promise.race([
-      page
-        .getByTestId("on-device-result")
-        .waitFor({ state: "visible", timeout: 600_000 })
-        .then(async () => ({
-          status: "succeeded",
-          inferenceSource: await page
-            .getByTestId("inference-badge-on-device")
-            .getAttribute("data-raw-inference-source"),
-          badgeStatus: await page
-            .getByTestId("inference-badge-on-device")
-            .getAttribute("data-inference-status"),
-          latency: await page.getByTestId("on-device-latency").innerText(),
-          networkState: await page
-            .getByTestId("on-device-network-state")
-            .innerText(),
-          fullText: await page.getByTestId("on-device-result").innerText(),
-        })),
-      page
-        .getByTestId("on-device-error")
-        .waitFor({ state: "visible", timeout: 600_000 })
-        .then(async () => ({
-          status: "blocked_or_failed",
-          error: await page.getByTestId("on-device-error").innerText(),
-        })),
-    ]).finally(() => clearInterval(progressTimer));
+      onDeviceOutcome = await Promise.race([
+        page
+          .getByTestId("on-device-result")
+          .waitFor({ state: "visible", timeout: 600_000 })
+          .then(async () => ({
+            status: "succeeded",
+            inferenceSource: await page
+              .getByTestId("inference-badge-on-device")
+              .getAttribute("data-raw-inference-source"),
+            badgeStatus: await page
+              .getByTestId("inference-badge-on-device")
+              .getAttribute("data-inference-status"),
+            latency: await page.getByTestId("on-device-latency").innerText(),
+            networkState: await page
+              .getByTestId("on-device-network-state")
+              .innerText(),
+            fullText: await page.getByTestId("on-device-result").innerText(),
+          })),
+        page
+          .getByTestId("on-device-error")
+          .waitFor({ state: "visible", timeout: 600_000 })
+          .then(async () => ({
+            status: "blocked_or_failed",
+            error: await page.getByTestId("on-device-error").innerText(),
+          })),
+      ]).finally(() => clearInterval(progressTimer));
+    }
 
     // 2. Offline repeat ONLY if online ONLY_ON_DEVICE succeeded
     let offlineRepeatOutcome = {
-      status: "skipped_due_to_primary_on_device_blocker",
+      status: cloudOnly
+        ? "skipped_by_env_flag"
+        : "skipped_due_to_primary_on_device_blocker",
     };
-    if (onDeviceOutcome.status === "succeeded") {
+    if (!cloudOnly && onDeviceOutcome.status === "succeeded") {
       await context.setOffline(true);
       await page.getByTestId("btn-refresh-capability").click();
       await page.waitForTimeout(300);
@@ -303,31 +317,56 @@ async function main() {
     const inCloudOutcome = await Promise.race([
       page
         .getByTestId("cloud-result")
-        .waitFor({ state: "visible", timeout: 60_000 })
-        .then(async () => ({
-          status: "succeeded",
-          inferenceSource: await page
-            .getByTestId("inference-badge-in-cloud")
-            .getAttribute("data-raw-inference-source"),
-          badgeStatus: await page
-            .getByTestId("inference-badge-in-cloud")
-            .getAttribute("data-inference-status"),
-          latency: await page.getByTestId("cloud-latency").innerText(),
-        })),
+        .waitFor({ state: "visible", timeout: 90_000 })
+        .then(async () => {
+          const structuredJsonText = await page
+            .getByTestId("cloud-structured-json")
+            .innerText()
+            .catch(() => null);
+          let structuredJson = null;
+          if (structuredJsonText) {
+            try {
+              structuredJson = JSON.parse(structuredJsonText);
+            } catch {
+              structuredJson = { parseError: true, raw: structuredJsonText };
+            }
+          }
+          const modelMatch = (
+            await page.getByTestId("cloud-result").innerText()
+          ).match(/Model:\s*(\S+)/);
+          return {
+            status: "succeeded",
+            inferenceSource: await page
+              .getByTestId("inference-badge-in-cloud")
+              .getAttribute("data-raw-inference-source"),
+            badgeStatus: await page
+              .getByTestId("inference-badge-in-cloud")
+              .getAttribute("data-inference-status"),
+            modelName: modelMatch ? modelMatch[1] : null,
+            latency: await page.getByTestId("cloud-latency").innerText(),
+            structuredJson,
+            fullText: await page.getByTestId("cloud-result").innerText(),
+          };
+        }),
       page
         .getByTestId("cloud-error")
-        .waitFor({ state: "visible", timeout: 60_000 })
+        .waitFor({ state: "visible", timeout: 90_000 })
         .then(async () => ({
           status: "blocked_or_failed",
           error: await page.getByTestId("cloud-error").innerText(),
         })),
     ]);
 
-    // 4. Run 5-Fixture Benchmark ONLY if ONLY_ON_DEVICE succeeded
+    // 4. Run 5-Fixture Benchmark ONLY if ONLY_ON_DEVICE succeeded (and not skipped)
     let benchmarkOutcome = {
-      status: "skipped_due_to_primary_on_device_blocker",
+      status: skipBenchmark
+        ? "skipped_by_env_flag"
+        : "skipped_due_to_primary_on_device_blocker",
     };
-    if (onDeviceOutcome.status === "succeeded") {
+    if (
+      !skipBenchmark &&
+      onDeviceOutcome.status === "succeeded"
+    ) {
       await page.getByTestId("btn-run-benchmark").click();
       benchmarkOutcome = await Promise.race([
         page
@@ -368,6 +407,8 @@ async function main() {
           timestampIso: new Date().toISOString(),
           chromeExecutable: CHROME_EXE,
           dProfileDir: D_PROFILE_DIR,
+          cloudOnly,
+          skipBenchmark,
           cDriveModelCache,
           dDriveModelCache,
           chromeProbe,

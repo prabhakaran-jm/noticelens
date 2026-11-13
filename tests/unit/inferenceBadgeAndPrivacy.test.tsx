@@ -50,7 +50,7 @@ describe("InferenceBadge & SpikeHarness privacy/scope guardrails (automated mock
   });
 
   it("rejects retired or deprecated Gemini 1.5/2.0/2.5 cloud models", () => {
-    expect(getConfiguredCloudModelName()).toBe("gemini-3.8-flash");
+    expect(getConfiguredCloudModelName()).toBe("gemini-3.5-flash-lite");
 
     vi.stubEnv("VITE_FIREBASE_CLOUD_MODEL", "gemini-2.5-flash");
     expect(() => getConfiguredCloudModelName()).toThrow(
