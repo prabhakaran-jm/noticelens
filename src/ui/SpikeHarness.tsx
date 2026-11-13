@@ -685,7 +685,9 @@ export function SpikeHarness() {
           Strict runtime allowlist pre-check (
           <code>validateCloudBoundPayload</code>):{" "}
           <strong data-testid="allowlist-precheck">
-            {allowlistPrecheckPassed ? "PASSED (0 PII / closed keys)" : "FAILED"}
+            {allowlistPrecheckPassed
+              ? "PASSED (closed allowlist; pattern checks are not a redaction guarantee)"
+              : "FAILED"}
           </strong>
         </p>
 

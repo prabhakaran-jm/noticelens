@@ -1,8 +1,26 @@
+import { hasAtMostTwoDecimalPlaces } from "./amounts";
+import { parseCalendarDate } from "./dates";
 import {
+  hasLongNumericIdentifier,
+  identifierLeaks,
+  normalizeDashes,
+} from "./textNormalize";
+import { UNTRUSTED_DATA_BEGIN, UNTRUSTED_DATA_END } from "./untrustedFence";
+import {
+  ALLOWED_ACTION_SUMMARIES,
+  ALLOWED_CIRCUMSTANCE_FLAGS,
   ALLOWED_GUIDANCE_IDS,
   ALLOWED_NOTICE_CATEGORIES,
   ALLOWED_RESPONSE_GOALS,
+  GUIDANCE_IDS_BY_CATEGORY,
+  type ActionSummaryId,
+  type CircumstanceFlag,
+  type CloudBillingWindow,
+  type CloudBoundRedactedObligation,
   type CloudBoundStructuralPayload,
+  type GuidanceId,
+  type NoticeCategory,
+  type ResponseGoal,
 } from "./types";
 
 export const ALLOWED_CLOUD_ROOT_KEYS = [
@@ -10,8 +28,8 @@ export const ALLOWED_CLOUD_ROOT_KEYS = [
   "noticeCategory",
   "issueDate",
   "billingPeriod",
-  "amountGBP",
-  "responseDeadline",
+  "amountsGBP",
+  "responseDeadlines",
   "redactedObligations",
   "responseGoal",
   "guidanceIds",
@@ -23,21 +41,32 @@ export const ALLOWED_CLOUD_OBLIGATION_KEYS = [
   "redactedClause",
 ] as const;
 
+export const OPTIONAL_CLOUD_ROOT_KEYS = ["circumstanceFlags"] as const;
+
 export const CLOUD_PAYLOAD_LIMITS = {
-  maxDateLength: 40,
-  maxBillingPeriodLength: 80,
-  maxAmountGBP: 1_000_000,
   maxObligations: 6,
-  maxActionSummaryLength: 160,
+  maxAmounts: 6,
+  maxDeadlines: 6,
   minRedactedClauseLength: 4,
   maxRedactedClauseLength: 220,
   maxGuidanceIds: 5,
+  maxCircumstanceFlags: 8,
+  maxAmountGBP: 1_000_000,
   maxTotalSerializedLength: 2_600,
 } as const;
 
+/**
+ * Pattern checks can reject some obvious personal data.
+ * They do not prove that a payload is free of personal information.
+ */
+export const CLOUD_PAYLOAD_REDACTION_LIMITATION =
+  "Pattern checks do not guarantee that personal information was removed. A person must review the brief before any cloud request.";
+
 const UK_POSTCODE_REGEX = /\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b/i;
 const EMAIL_REGEX = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i;
-const PHONE_REGEX = /(?:\+44\s?\d{3,4}|\(?0\d{3,4}\)?)\s?\d{3}\s?\d{3,4}\b/;
+const PHONE_REGEX = /(?:\+44\s?\d{3,4}|\(?0\d{3,4}\)?)\s?\d{3}\s?\d{3,4}\b(?![\s-]*\d)/;
+const PARTIAL_PLACEHOLDER_IDENTIFIER =
+  /\[(?:ACCOUNT_REF|PHONE|LOCAL_ID|NINO)(?:_[1-9]\d*)?\](?!\s+[A-Za-z])\s*-?\s*\d/;
 const SALUTATION_NAME_REGEX =
   /\b(?:Dear|Mr|Mrs|Ms|Miss|Dr)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b/;
 const STREET_ADDRESS_REGEX =
@@ -45,21 +74,29 @@ const STREET_ADDRESS_REGEX =
 const LABELED_ACCOUNT_REF_REGEX =
   /\b(?:Account|Tenancy|Customer|Council\s*Tax)\s*(?:reference|ref|number|no\.?)\s*[:#-]?\s*[A-Z0-9-]{3,}\b/i;
 const ALPHANUMERIC_REF_TOKEN_REGEX = /\b[A-Z]{2,12}-\d{3,12}\b/;
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const ISO_MONTH = /^(\d{4})-(\d{2})$/;
+const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 export interface CloudPayloadGuardOptions {
   rawNoticeText?: string;
   forbiddenIdentifiers?: string[];
 }
 
+export interface CanonicalCloudPayload {
+  payload: CloudBoundStructuralPayload;
+  serialized: string;
+}
+
 export class CloudPayloadValidationError extends Error {
-  public readonly violations: string[];
+  public readonly violations: readonly string[];
 
   constructor(violations: string[]) {
     super(
-      `Cloud-bound payload rejected by strict allowlist guard (${violations.length} violation(s)): ${violations.join("; ")}`
+      `Cloud-bound payload rejected (${violations.length} violation(s)): ${violations.join("; ")}`
     );
     this.name = "CloudPayloadValidationError";
-    this.violations = violations;
+    this.violations = Object.freeze([...violations]);
   }
 }
 
@@ -71,279 +108,525 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return proto === Object.prototype || proto === null;
 }
 
+function stripInvisibles(value: string): string {
+  return value.normalize("NFKC").replace(/[\u200B-\u200D\uFEFF\u00AD]/g, "");
+}
+
 function inspectStringForPiiOrLeakage(
-  fieldPath: string,
   value: string,
   options: CloudPayloadGuardOptions | undefined,
   violations: string[]
 ): void {
-  if (UK_POSTCODE_REGEX.test(value)) {
-    violations.push(`${fieldPath} contains a UK postcode pattern`);
+  const visible = normalizeDashes(stripInvisibles(value));
+  if (
+    visible.includes(UNTRUSTED_DATA_BEGIN) ||
+    visible.includes(UNTRUSTED_DATA_END)
+  ) {
+    violations.push("a text field contains a reserved delimiter");
   }
-  if (EMAIL_REGEX.test(value)) {
-    violations.push(`${fieldPath} contains an email address pattern`);
+  if (UK_POSTCODE_REGEX.test(visible)) {
+    violations.push("a text field contains a UK postcode pattern");
   }
-  if (PHONE_REGEX.test(value)) {
-    violations.push(`${fieldPath} contains a telephone number pattern`);
+  if (EMAIL_REGEX.test(visible)) {
+    violations.push("a text field contains an email address pattern");
   }
-  if (SALUTATION_NAME_REGEX.test(value)) {
-    violations.push(`${fieldPath} contains a personal salutation/name pattern`);
+  if (PHONE_REGEX.test(visible) || hasLongNumericIdentifier(visible)) {
+    violations.push("a text field contains a telephone number pattern");
   }
-  if (STREET_ADDRESS_REGEX.test(value)) {
-    violations.push(`${fieldPath} contains a street address pattern`);
+  if (PARTIAL_PLACEHOLDER_IDENTIFIER.test(visible)) {
+    violations.push("a text field contains a partial identifier beside a placeholder");
+  }
+  if (SALUTATION_NAME_REGEX.test(visible)) {
+    violations.push("a text field contains a personal salutation pattern");
+  }
+  if (STREET_ADDRESS_REGEX.test(visible)) {
+    violations.push("a text field contains a street address pattern");
   }
   if (
-    LABELED_ACCOUNT_REF_REGEX.test(value) ||
-    ALPHANUMERIC_REF_TOKEN_REGEX.test(value)
+    LABELED_ACCOUNT_REF_REGEX.test(visible) ||
+    ALPHANUMERIC_REF_TOKEN_REGEX.test(visible)
   ) {
-    violations.push(`${fieldPath} contains an unredacted account/reference token`);
+    violations.push("a text field contains an account reference pattern");
   }
 
   if (options?.forbiddenIdentifiers) {
-    const lowerVal = value.toLowerCase();
     for (const rawId of options.forbiddenIdentifiers) {
-      const cleanId = rawId.trim();
-      if (cleanId.length >= 3 && lowerVal.includes(cleanId.toLowerCase())) {
-        violations.push(
-          `${fieldPath} contains forbidden local identifier (${cleanId.slice(0, 2)}***)`
-        );
+      if (identifierLeaks(value, rawId)) {
+        violations.push("a text field contains a forbidden local identifier");
+        break;
       }
     }
   }
 
   if (options?.rawNoticeText) {
     const normalizedRaw = options.rawNoticeText.replace(/\s+/g, " ").trim();
-    const normalizedVal = value.replace(/\s+/g, " ").trim();
+    const normalizedVal = visible.replace(/\s+/g, " ").trim();
     if (
       normalizedRaw.length >= 80 &&
       normalizedVal.length >= Math.min(normalizedRaw.length, 240) &&
       normalizedRaw.includes(normalizedVal)
     ) {
-      violations.push(
-        `${fieldPath} appears to embed raw multi-paragraph notice text`
-      );
+      violations.push("a text field appears to embed raw notice text");
     }
   }
+}
+
+function rejectUnsafeKey(key: string, violations: string[]): boolean {
+  if (FORBIDDEN_KEYS.has(key)) {
+    violations.push("payload contains a forbidden key");
+    return true;
+  }
+  return false;
+}
+
+function assertArrayOwnProperties(value: unknown[], violations: string[]): boolean {
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Array.prototype) {
+    violations.push("payload contains a non-plain array");
+    return false;
+  }
+  for (const name of Object.getOwnPropertyNames(value)) {
+    if (name === "length") {
+      continue;
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, name);
+    if (!descriptor?.enumerable) {
+      violations.push("payload has a non-enumerable property");
+      return false;
+    }
+    if (!/^\d+$/.test(name)) {
+      violations.push("payload has an extra enumerable property");
+      return false;
+    }
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.prototype.hasOwnProperty.call(value, index)) {
+      violations.push("payload contains an empty array slot");
+      return false;
+    }
+  }
+  return true;
+}
+
+function assertObjectOwnProperties(value: Record<string, unknown>, violations: string[]): boolean {
+  for (const name of Object.getOwnPropertyNames(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, name);
+    if (!descriptor?.enumerable) {
+      violations.push("payload has a non-enumerable property");
+      return false;
+    }
+    rejectUnsafeKey(name, violations);
+  }
+  return !violations.some((item) => item === "payload contains a forbidden key" || item === "payload has a non-enumerable property");
+}
+
+function readIsoDate(value: unknown, violations: string[]): string | null | undefined {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== "string" || !ISO_DATE.test(value) || !parseCalendarDate(value)) {
+    violations.push("a date field must be an ISO calendar date or null");
+    return undefined;
+  }
+  return value;
+}
+
+function readMonthOrDate(value: unknown, violations: string[]): string | undefined {
+  if (typeof value !== "string") {
+    violations.push("a billing window field is not a calendar value");
+    return undefined;
+  }
+  if (ISO_DATE.test(value)) {
+    return parseCalendarDate(value) ? value : undefined;
+  }
+  const month = ISO_MONTH.exec(value);
+  if (!month) {
+    violations.push("a billing window field is not a calendar value");
+    return undefined;
+  }
+  const monthNumber = Number(month[2]);
+  if (monthNumber < 1 || monthNumber > 12) {
+    violations.push("a billing window field is not a calendar value");
+    return undefined;
+  }
+  return value;
+}
+
+function windowSortKey(value: string): string {
+  return value.length === 7 ? `${value}-00` : value;
+}
+
+function noteNonJson(value: unknown, violations: string[]): boolean {
+  const valueType = typeof value;
+  if (
+    valueType === "undefined" ||
+    valueType === "function" ||
+    valueType === "symbol" ||
+    valueType === "bigint"
+  ) {
+    violations.push("payload contains a value that is not a JSON value");
+    return false;
+  }
+  return true;
+}
+
+function readAmount(value: unknown, violations: string[]): number | undefined {
+  if (!noteNonJson(value, violations)) {
+    return undefined;
+  }
+  if (typeof value !== "number" || Object.is(value, -0) || !Number.isFinite(value)) {
+    violations.push("payload contains a non-finite JSON number");
+    return undefined;
+  }
+  if (value < 0 || value > CLOUD_PAYLOAD_LIMITS.maxAmountGBP || !hasAtMostTwoDecimalPlaces(value)) {
+    violations.push("amountsGBP is outside the allowed range");
+    return undefined;
+  }
+  return value;
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const nested of Object.values(value)) {
+      deepFreeze(nested);
+    }
+  }
+  return value;
+}
+
+/**
+ * Builds a detached JSON snapshot and validates that snapshot.
+ * The returned payload is frozen. `serialized` is the exact JSON that a send would use.
+ * Violation text does not include caller keys, identifiers, or field values.
+ */
+export function canonicalCloudPayload(
+  input: unknown,
+  options?: CloudPayloadGuardOptions
+): CanonicalCloudPayload {
+  const violations: string[] = [];
+  if (!isPlainObject(input)) {
+    throw new CloudPayloadValidationError(["Payload root must be a plain JSON object"]);
+  }
+  assertObjectOwnProperties(input, violations);
+
+  const allowedRoot = new Set<string>([
+    ...ALLOWED_CLOUD_ROOT_KEYS,
+    ...OPTIONAL_CLOUD_ROOT_KEYS,
+  ]);
+  for (const key of Object.keys(input)) {
+    if (rejectUnsafeKey(key, violations)) {
+      continue;
+    }
+    if (!allowedRoot.has(key)) {
+      violations.push("unexpected key is not on allowlist");
+    }
+  }
+  for (const requiredKey of ALLOWED_CLOUD_ROOT_KEYS) {
+    if (!(requiredKey in input)) {
+      violations.push("missing required allowlisted field");
+    }
+  }
+
+  const schemaVersion = input.schemaVersion;
+  const noticeCategoryValue = input.noticeCategory;
+  const issueDateValue = input.issueDate;
+  const billingPeriodValue = input.billingPeriod;
+  const amountsValue = input.amountsGBP;
+  const deadlinesValue = input.responseDeadlines;
+  const obligationsValue = input.redactedObligations;
+  const responseGoalValue = input.responseGoal;
+  const guidanceValue = input.guidanceIds;
+  const hasCircumstanceFlags = Object.prototype.hasOwnProperty.call(input, "circumstanceFlags");
+  const flagsValue = hasCircumstanceFlags ? input.circumstanceFlags : undefined;
+  if (hasCircumstanceFlags && flagsValue === undefined) {
+    violations.push("payload contains a value that is not a JSON value");
+  }
+
+  if (schemaVersion !== "noticelens.cloud-brief.v1") {
+    violations.push("schemaVersion is not the supported cloud brief schema");
+  }
+
+  let noticeCategory: NoticeCategory | undefined;
+  if (
+    typeof noticeCategoryValue !== "string" ||
+    !(ALLOWED_NOTICE_CATEGORIES as readonly string[]).includes(noticeCategoryValue)
+  ) {
+    violations.push("noticeCategory is not an allowed category");
+  } else {
+    noticeCategory = noticeCategoryValue as NoticeCategory;
+  }
+
+  const issueDate = readIsoDate(issueDateValue, violations);
+
+  let billingPeriod: CloudBillingWindow | null | undefined;
+  if (billingPeriodValue === null) {
+    billingPeriod = null;
+  } else if (!isPlainObject(billingPeriodValue)) {
+    violations.push("billingPeriod is not a billing window or null");
+    billingPeriod = undefined;
+  } else {
+    assertObjectOwnProperties(billingPeriodValue, violations);
+    for (const key of Object.keys(billingPeriodValue)) {
+      if (key !== "start" && key !== "end") {
+        violations.push("unexpected key is not on allowlist");
+      }
+    }
+    if (!("start" in billingPeriodValue) || !("end" in billingPeriodValue)) {
+      violations.push("billingPeriod is missing a window bound");
+    }
+    const start = readMonthOrDate(billingPeriodValue.start, violations);
+    const end = readMonthOrDate(billingPeriodValue.end, violations);
+    if (start && end) {
+      if (windowSortKey(start) > windowSortKey(end)) {
+        violations.push("billingPeriod window is out of order");
+      } else {
+        billingPeriod = { start, end };
+      }
+    }
+  }
+
+  const amountsGBP: number[] = [];
+  if (!Array.isArray(amountsValue)) {
+    violations.push("amountsGBP must be an array");
+  } else if (
+    amountsValue.length > CLOUD_PAYLOAD_LIMITS.maxAmounts ||
+    !assertArrayOwnProperties(amountsValue, violations)
+  ) {
+    if (amountsValue.length > CLOUD_PAYLOAD_LIMITS.maxAmounts) {
+      violations.push("amountsGBP has too many entries");
+    }
+  } else {
+    for (const item of amountsValue) {
+      const amount = readAmount(item, violations);
+      if (amount !== undefined) {
+        amountsGBP.push(amount);
+      }
+    }
+  }
+
+  const responseDeadlines: string[] = [];
+  if (!Array.isArray(deadlinesValue)) {
+    violations.push("responseDeadlines must be an array");
+  } else if (
+    deadlinesValue.length > CLOUD_PAYLOAD_LIMITS.maxDeadlines ||
+    !assertArrayOwnProperties(deadlinesValue, violations)
+  ) {
+    if (deadlinesValue.length > CLOUD_PAYLOAD_LIMITS.maxDeadlines) {
+      violations.push("responseDeadlines has too many entries");
+    }
+  } else {
+    const seen = new Set<string>();
+    for (const item of deadlinesValue) {
+      const iso = readIsoDate(item, violations);
+      if (iso === undefined || iso === null) {
+        if (iso === null) {
+          violations.push("a date field must be an ISO calendar date or null");
+        }
+        continue;
+      }
+      if (seen.has(iso)) {
+        violations.push("responseDeadlines duplicates a date");
+      }
+      seen.add(iso);
+      responseDeadlines.push(iso);
+    }
+  }
+
+  let responseGoal: ResponseGoal | undefined;
+  if (
+    typeof responseGoalValue !== "string" ||
+    !(ALLOWED_RESPONSE_GOALS as readonly string[]).includes(responseGoalValue)
+  ) {
+    violations.push("responseGoal is not an allowed goal");
+  } else {
+    responseGoal = responseGoalValue as ResponseGoal;
+  }
+
+  const guidanceIds: GuidanceId[] = [];
+  if (!Array.isArray(guidanceValue)) {
+    violations.push("guidanceIds must be an array");
+  } else if (
+    guidanceValue.length > CLOUD_PAYLOAD_LIMITS.maxGuidanceIds ||
+    !assertArrayOwnProperties(guidanceValue, violations)
+  ) {
+    if (guidanceValue.length > CLOUD_PAYLOAD_LIMITS.maxGuidanceIds) {
+      violations.push("guidanceIds has too many entries");
+    }
+  } else {
+    const allowedForCategory = noticeCategory
+      ? new Set<string>(GUIDANCE_IDS_BY_CATEGORY[noticeCategory])
+      : null;
+    const seen = new Set<string>();
+    for (const gid of guidanceValue) {
+      if (
+        typeof gid !== "string" ||
+        !(ALLOWED_GUIDANCE_IDS as readonly string[]).includes(gid) ||
+        (allowedForCategory !== null && !allowedForCategory.has(gid))
+      ) {
+        violations.push("guidanceIds contains an id that is not allowed for this notice category");
+        continue;
+      }
+      if (seen.has(gid)) {
+        violations.push("guidanceIds duplicates an allowed id");
+      }
+      seen.add(gid);
+      guidanceIds.push(gid as GuidanceId);
+    }
+  }
+
+  const redactedObligations: CloudBoundRedactedObligation[] = [];
+  if (
+    !Array.isArray(obligationsValue) ||
+    obligationsValue.length < 1 ||
+    obligationsValue.length > CLOUD_PAYLOAD_LIMITS.maxObligations
+  ) {
+    violations.push("redactedObligations must be a bounded array");
+  } else if (assertArrayOwnProperties(obligationsValue, violations)) {
+    for (const item of obligationsValue) {
+      if (!isPlainObject(item)) {
+        violations.push("an obligation must be a plain object");
+        continue;
+      }
+      assertObjectOwnProperties(item, violations);
+      const allowedObligation = new Set<string>(ALLOWED_CLOUD_OBLIGATION_KEYS);
+      for (const key of Object.keys(item)) {
+        if (!allowedObligation.has(key)) {
+          violations.push("unexpected key is not on allowlist");
+        }
+      }
+      for (const requiredKey of ALLOWED_CLOUD_OBLIGATION_KEYS) {
+        if (!(requiredKey in item)) {
+          violations.push("an obligation is missing a required field");
+        }
+      }
+      const actionValue = item.actionSummary;
+      const dueValue = item.dueDate;
+      const clauseValue = item.redactedClause;
+      if (
+        !noteNonJson(actionValue, violations) ||
+        !noteNonJson(dueValue, violations) ||
+        !noteNonJson(clauseValue, violations)
+      ) {
+        continue;
+      }
+      let actionSummary: ActionSummaryId | undefined;
+      if (
+        typeof actionValue !== "string" ||
+        !(ALLOWED_ACTION_SUMMARIES as readonly string[]).includes(actionValue)
+      ) {
+        violations.push("actionSummary is not an allowed action id");
+      } else {
+        actionSummary = actionValue as ActionSummaryId;
+      }
+      const dueDate = readIsoDate(dueValue, violations);
+      let redactedClause: string | undefined;
+      if (
+        typeof clauseValue !== "string" ||
+        clauseValue.trim().length < CLOUD_PAYLOAD_LIMITS.minRedactedClauseLength ||
+        clauseValue.length > CLOUD_PAYLOAD_LIMITS.maxRedactedClauseLength
+      ) {
+        violations.push("redactedClause length is outside bounds");
+      } else {
+        inspectStringForPiiOrLeakage(clauseValue, options, violations);
+        redactedClause = clauseValue;
+      }
+      if (actionSummary && dueDate !== undefined && redactedClause) {
+        redactedObligations.push({ actionSummary, dueDate, redactedClause });
+      }
+    }
+  }
+
+  let circumstanceFlags: CircumstanceFlag[] | undefined;
+  if (flagsValue !== undefined) {
+    const flags = flagsValue;
+    if (!Array.isArray(flags) || flags.length > CLOUD_PAYLOAD_LIMITS.maxCircumstanceFlags) {
+      violations.push("circumstanceFlags must be a bounded array");
+    } else if (assertArrayOwnProperties(flags, violations)) {
+      const seen = new Set<string>();
+      const collected: CircumstanceFlag[] = [];
+      for (const flag of flags) {
+        if (
+          typeof flag !== "string" ||
+          !(ALLOWED_CIRCUMSTANCE_FLAGS as readonly string[]).includes(flag)
+        ) {
+          violations.push("circumstanceFlags contains an unknown circumstance flag");
+          continue;
+        }
+        if (seen.has(flag)) {
+          violations.push("circumstanceFlags duplicates an allowed id");
+        }
+        seen.add(flag);
+        collected.push(flag as CircumstanceFlag);
+      }
+      if (collected.length > 0) {
+        circumstanceFlags = collected;
+      }
+    }
+  }
+
+  if (
+    violations.length > 0 ||
+    !noticeCategory ||
+    issueDate === undefined ||
+    billingPeriod === undefined ||
+    !responseGoal ||
+    redactedObligations.length !== (Array.isArray(obligationsValue) ? obligationsValue.length : -1)
+  ) {
+    throw new CloudPayloadValidationError(
+      violations.length > 0 ? violations : ["Cloud-bound payload did not match the allowlist"]
+    );
+  }
+
+  const canonical: CloudBoundStructuralPayload = {
+    schemaVersion: "noticelens.cloud-brief.v1",
+    noticeCategory,
+    issueDate,
+    billingPeriod,
+    amountsGBP,
+    responseDeadlines,
+    redactedObligations,
+    responseGoal,
+    guidanceIds,
+  };
+  if (circumstanceFlags) {
+    canonical.circumstanceFlags = circumstanceFlags;
+  }
+
+  const serialized = JSON.stringify(canonical);
+  if (serialized.length > CLOUD_PAYLOAD_LIMITS.maxTotalSerializedLength) {
+    throw new CloudPayloadValidationError(["serialized payload exceeds the length cap"]);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(serialized);
+  } catch {
+    throw new CloudPayloadValidationError(["payload did not round-trip through JSON"]);
+  }
+  if (JSON.stringify(parsed) !== serialized) {
+    throw new CloudPayloadValidationError(["payload did not round-trip through JSON"]);
+  }
+
+  return {
+    payload: deepFreeze(parsed as CloudBoundStructuralPayload),
+    serialized,
+  };
 }
 
 export function validateCloudBoundPayload(
   input: unknown,
   options?: CloudPayloadGuardOptions
 ): CloudBoundStructuralPayload {
-  const violations: string[] = [];
+  return canonicalCloudPayload(input, options).payload;
+}
 
-  if (!isPlainObject(input)) {
-    throw new CloudPayloadValidationError([
-      "Payload root must be a plain JSON object",
-    ]);
-  }
-
-  const allowedRootSet = new Set<string>(ALLOWED_CLOUD_ROOT_KEYS);
-  for (const key of Object.keys(input)) {
-    if (!allowedRootSet.has(key)) {
-      violations.push(`Unexpected root key "${key}" is not on the allowlist`);
-    }
-  }
-  for (const requiredKey of ALLOWED_CLOUD_ROOT_KEYS) {
-    if (!(requiredKey in input)) {
-      violations.push(`Missing required allowlisted root key "${requiredKey}"`);
-    }
-  }
-
-  if (input.schemaVersion !== "noticelens.cloud-brief.v1") {
-    violations.push(
-      'schemaVersion must equal "noticelens.cloud-brief.v1"'
-    );
-  }
-
-  if (
-    typeof input.noticeCategory !== "string" ||
-    !(ALLOWED_NOTICE_CATEGORIES as readonly string[]).includes(
-      input.noticeCategory
-    )
-  ) {
-    violations.push("noticeCategory is not an allowed NoticeCategory enum");
-  }
-
-  if (
-    typeof input.issueDate !== "string" ||
-    input.issueDate.trim().length < 1 ||
-    input.issueDate.length > CLOUD_PAYLOAD_LIMITS.maxDateLength
-  ) {
-    violations.push(
-      `issueDate must be a non-empty string <= ${CLOUD_PAYLOAD_LIMITS.maxDateLength} chars`
-    );
-  } else {
-    inspectStringForPiiOrLeakage("issueDate", input.issueDate, options, violations);
-  }
-
-  if (
-    typeof input.billingPeriod !== "string" ||
-    input.billingPeriod.trim().length < 1 ||
-    input.billingPeriod.length > CLOUD_PAYLOAD_LIMITS.maxBillingPeriodLength
-  ) {
-    violations.push(
-      `billingPeriod must be a non-empty string <= ${CLOUD_PAYLOAD_LIMITS.maxBillingPeriodLength} chars`
-    );
-  } else {
-    inspectStringForPiiOrLeakage(
-      "billingPeriod",
-      input.billingPeriod,
-      options,
-      violations
-    );
-  }
-
-  if (
-    typeof input.amountGBP !== "number" ||
-    !Number.isFinite(input.amountGBP) ||
-    input.amountGBP < 0 ||
-    input.amountGBP > CLOUD_PAYLOAD_LIMITS.maxAmountGBP
-  ) {
-    violations.push(
-      `amountGBP must be a finite number between 0 and ${CLOUD_PAYLOAD_LIMITS.maxAmountGBP}`
-    );
-  }
-
-  if (
-    typeof input.responseDeadline !== "string" ||
-    input.responseDeadline.trim().length < 1 ||
-    input.responseDeadline.length > CLOUD_PAYLOAD_LIMITS.maxDateLength
-  ) {
-    violations.push(
-      `responseDeadline must be a non-empty string <= ${CLOUD_PAYLOAD_LIMITS.maxDateLength} chars`
-    );
-  } else {
-    inspectStringForPiiOrLeakage(
-      "responseDeadline",
-      input.responseDeadline,
-      options,
-      violations
-    );
-  }
-
-  if (
-    typeof input.responseGoal !== "string" ||
-    !(ALLOWED_RESPONSE_GOALS as readonly string[]).includes(input.responseGoal)
-  ) {
-    violations.push("responseGoal is not an allowed ResponseGoal enum");
-  }
-
-  if (
-    !Array.isArray(input.guidanceIds) ||
-    input.guidanceIds.length < 1 ||
-    input.guidanceIds.length > CLOUD_PAYLOAD_LIMITS.maxGuidanceIds
-  ) {
-    violations.push(
-      `guidanceIds must be an array of 1..${CLOUD_PAYLOAD_LIMITS.maxGuidanceIds} items`
-    );
-  } else {
-    input.guidanceIds.forEach((gid, idx) => {
-      if (
-        typeof gid !== "string" ||
-        !(ALLOWED_GUIDANCE_IDS as readonly string[]).includes(gid)
-      ) {
-        violations.push(`guidanceIds[${idx}] is not an allowed GuidanceId`);
-      }
-    });
-  }
-
-  const allowedObligationKeySet = new Set<string>(ALLOWED_CLOUD_OBLIGATION_KEYS);
-  if (
-    !Array.isArray(input.redactedObligations) ||
-    input.redactedObligations.length < 1 ||
-    input.redactedObligations.length > CLOUD_PAYLOAD_LIMITS.maxObligations
-  ) {
-    violations.push(
-      `redactedObligations must be an array of 1..${CLOUD_PAYLOAD_LIMITS.maxObligations} items`
-    );
-  } else {
-    input.redactedObligations.forEach((item, idx) => {
-      const pathPrefix = `redactedObligations[${idx}]`;
-      if (!isPlainObject(item)) {
-        violations.push(`${pathPrefix} must be a plain object`);
-        return;
-      }
-      for (const k of Object.keys(item)) {
-        if (!allowedObligationKeySet.has(k)) {
-          violations.push(
-            `${pathPrefix} contains unexpected key "${k}" not on allowlist`
-          );
-        }
-      }
-      for (const reqKey of ALLOWED_CLOUD_OBLIGATION_KEYS) {
-        if (!(reqKey in item)) {
-          violations.push(`${pathPrefix} is missing required key "${reqKey}"`);
-        }
-      }
-
-      if (
-        typeof item.actionSummary !== "string" ||
-        item.actionSummary.trim().length < 1 ||
-        item.actionSummary.length > CLOUD_PAYLOAD_LIMITS.maxActionSummaryLength
-      ) {
-        violations.push(
-          `${pathPrefix}.actionSummary must be 1..${CLOUD_PAYLOAD_LIMITS.maxActionSummaryLength} chars`
-        );
-      } else {
-        inspectStringForPiiOrLeakage(
-          `${pathPrefix}.actionSummary`,
-          item.actionSummary,
-          options,
-          violations
-        );
-      }
-
-      if (item.dueDate !== null) {
-        if (
-          typeof item.dueDate !== "string" ||
-          item.dueDate.trim().length < 1 ||
-          item.dueDate.length > CLOUD_PAYLOAD_LIMITS.maxDateLength
-        ) {
-          violations.push(
-            `${pathPrefix}.dueDate must be null or 1..${CLOUD_PAYLOAD_LIMITS.maxDateLength} chars`
-          );
-        } else {
-          inspectStringForPiiOrLeakage(
-            `${pathPrefix}.dueDate`,
-            item.dueDate,
-            options,
-            violations
-          );
-        }
-      }
-
-      if (
-        typeof item.redactedClause !== "string" ||
-        item.redactedClause.trim().length <
-          CLOUD_PAYLOAD_LIMITS.minRedactedClauseLength ||
-        item.redactedClause.length >
-          CLOUD_PAYLOAD_LIMITS.maxRedactedClauseLength
-      ) {
-        violations.push(
-          `${pathPrefix}.redactedClause must be ${CLOUD_PAYLOAD_LIMITS.minRedactedClauseLength}..${CLOUD_PAYLOAD_LIMITS.maxRedactedClauseLength} chars`
-        );
-      } else {
-        inspectStringForPiiOrLeakage(
-          `${pathPrefix}.redactedClause`,
-          item.redactedClause,
-          options,
-          violations
-        );
-      }
-    });
-  }
-
-  const serialized = JSON.stringify(input);
-  if (serialized.length > CLOUD_PAYLOAD_LIMITS.maxTotalSerializedLength) {
-    violations.push(
-      `Serialized payload length (${serialized.length}) exceeds cap (${CLOUD_PAYLOAD_LIMITS.maxTotalSerializedLength})`
-    );
-  }
-
-  if (violations.length > 0) {
-    throw new CloudPayloadValidationError(violations);
-  }
-
-  return input as unknown as CloudBoundStructuralPayload;
+/**
+ * Re-checks the payload the user is about to send.
+ * The result is a frozen snapshot, not the object the caller still holds.
+ */
+export function revalidateFinalCloudPayload(
+  editedPayload: unknown,
+  options?: CloudPayloadGuardOptions
+): CloudBoundStructuralPayload {
+  return canonicalCloudPayload(editedPayload, options).payload;
 }

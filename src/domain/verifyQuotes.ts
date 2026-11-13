@@ -1,6 +1,7 @@
 import type {
   QuoteVerificationResult,
   RawNoticeExtraction,
+  UnverifiedQuoteReason,
   VerifiedNoticeExtraction,
 } from "./types";
 
@@ -10,6 +11,27 @@ interface NormalizedTextMap {
   normalized: string;
   normToOrigStart: number[];
   normToOrigEnd: number[];
+}
+
+function unverified(reason: UnverifiedQuoteReason): QuoteVerificationResult {
+  return {
+    verified: false,
+    matchMode: "unverified",
+    startOffset: null,
+    endOffset: null,
+    matchedSubstring: null,
+    unverifiedReason: reason,
+  };
+}
+
+function isSkippableInvisible(ch: string): boolean {
+  return (
+    ch === "\u200B" ||
+    ch === "\u200C" ||
+    ch === "\u200D" ||
+    ch === "\uFEFF" ||
+    ch === "\u00AD"
+  );
 }
 
 function normalizeChar(ch: string): string {
@@ -33,6 +55,10 @@ function buildNormalizedMap(input: string): NormalizedTextMap {
   let i = 0;
   while (i < input.length) {
     const ch = input[i]!;
+    if (isSkippableInvisible(ch)) {
+      i += 1;
+      continue;
+    }
     if (/\s/.test(ch)) {
       const wsStart = i;
       while (i < input.length && /\s/.test(input[i]!)) {
@@ -81,21 +107,16 @@ export function verifyQuoteInSource(
   sourceText: string,
   quote: string
 ): QuoteVerificationResult {
-  const unverified: QuoteVerificationResult = {
-    verified: false,
-    matchMode: "unverified",
-    startOffset: null,
-    endOffset: null,
-    matchedSubstring: null,
-  };
-
-  if (!sourceText || !quote) {
-    return unverified;
+  if (!quote || quote.trim().length === 0) {
+    return unverified("empty");
+  }
+  if (!sourceText) {
+    return unverified("not_in_source");
   }
 
   const cleanedQuote = stripSurroundingQuotationMarks(quote);
   if (cleanedQuote.replace(/\s+/g, "").length < MIN_VERIFIABLE_QUOTE_LENGTH) {
-    return unverified;
+    return unverified("too_short");
   }
 
   const exactDirectIndex = sourceText.indexOf(quote);
@@ -110,6 +131,7 @@ export function verifyQuoteInSource(
       startOffset: exactDirectIndex,
       endOffset,
       matchedSubstring: sourceText.slice(exactDirectIndex, endOffset),
+      unverifiedReason: null,
     };
   }
 
@@ -122,6 +144,7 @@ export function verifyQuoteInSource(
       startOffset: exactTrimmedIndex,
       endOffset,
       matchedSubstring: sourceText.slice(exactTrimmedIndex, endOffset),
+      unverifiedReason: null,
     };
   }
 
@@ -129,12 +152,12 @@ export function verifyQuoteInSource(
   const quoteMap = buildNormalizedMap(cleanedQuote);
 
   if (quoteMap.normalized.length < MIN_VERIFIABLE_QUOTE_LENGTH) {
-    return unverified;
+    return unverified("too_short");
   }
 
   const normMatchIndex = sourceMap.normalized.indexOf(quoteMap.normalized);
   if (normMatchIndex === -1) {
-    return unverified;
+    return unverified("not_in_source");
   }
 
   const normEndIndex = normMatchIndex + quoteMap.normalized.length - 1;
@@ -142,7 +165,7 @@ export function verifyQuoteInSource(
   const endOffset = sourceMap.normToOrigEnd[normEndIndex];
 
   if (startOffset === undefined || endOffset === undefined) {
-    return unverified;
+    return unverified("not_in_source");
   }
 
   return {
@@ -151,7 +174,29 @@ export function verifyQuoteInSource(
     startOffset,
     endOffset,
     matchedSubstring: sourceText.slice(startOffset, endOffset),
+    unverifiedReason: null,
   };
+}
+
+export interface FlaggedQuote {
+  quote: string;
+  verification: QuoteVerificationResult;
+  flagged: boolean;
+}
+
+/** Returns one result per quote, including unmatched and fabricated quotes. */
+export function verifyQuotesAgainstSource(
+  sourceText: string,
+  quotes: readonly string[]
+): FlaggedQuote[] {
+  return quotes.map((quote) => {
+    const verification = verifyQuoteInSource(sourceText, quote);
+    return {
+      quote,
+      verification,
+      flagged: verification.verified === false,
+    };
+  });
 }
 
 export function attachQuoteVerification(

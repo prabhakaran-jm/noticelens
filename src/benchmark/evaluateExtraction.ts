@@ -49,6 +49,7 @@ export function evaluateExtraction(
   );
 
   const amountExact =
+    rawExtraction.amountGBP !== null &&
     Number.isFinite(rawExtraction.amountGBP) &&
     Math.abs(rawExtraction.amountGBP - fixture.expected.amountGBP) < 0.01;
 
