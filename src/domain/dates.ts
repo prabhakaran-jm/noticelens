@@ -389,6 +389,7 @@ interface MonthPoint {
   year: number;
   month: number;
   day: number;
+  explicitDay: boolean;
 }
 
 function extractMonthPoints(billingPeriod: string): MonthPoint[] {
@@ -401,11 +402,12 @@ function extractMonthPoints(billingPeriod: string): MonthPoint[] {
   for (const match of billingPeriod.matchAll(explicit)) {
     const month = MONTH_INDEX[match[2]!.toLowerCase()];
     const year = Number(match[3]);
-    const day = match[1] ? Number(match[1]) : 1;
+    const explicitDay = Boolean(match[1]);
+    const day = explicitDay ? Number(match[1]) : 1;
     if (!month || !isValidYmd(year, month, day) || match.index === undefined) {
       continue;
     }
-    points.push({ year, month, day });
+    points.push({ year, month, day, explicitDay });
     consumed.add(match.index);
   }
 
@@ -428,7 +430,7 @@ function extractMonthPoints(billingPeriod: string): MonthPoint[] {
     }
     const already = points.some((point) => point.year === year && point.month === month);
     if (!already) {
-      points.push({ year, month, day: 1 });
+      points.push({ year, month, day: 1, explicitDay: false });
     }
   }
   return points;
@@ -478,6 +480,56 @@ export function assessBillingPeriodGap(
     earliestIso: earliest.iso,
     issueIso: issue.iso,
   };
+}
+
+function billingPointToken(point: MonthPoint): string {
+  if (point.explicitDay) {
+    return toIso(point.year, point.month, point.day);
+  }
+  return `${String(point.year).padStart(4, "0")}-${String(point.month).padStart(2, "0")}`;
+}
+
+/**
+ * Reads a billing window without inventing a day.
+ * "January and June 2025" becomes month precision. A phrase with no
+ * readable month or date becomes null rather than a free-text field.
+ */
+export function parseBillingWindow(
+  billingPeriod: string | null | undefined
+): { start: string; end: string } | null {
+  if (
+    billingPeriod === null ||
+    billingPeriod === undefined ||
+    billingPeriod.trim().length === 0 ||
+    /^not stated$/i.test(billingPeriod.trim())
+  ) {
+    return null;
+  }
+  const points = extractMonthPoints(billingPeriod);
+  for (const match of billingPeriod.matchAll(/\b(\d{4}-\d{2}-\d{2})\b/g)) {
+    const parsed = parseCalendarDate(match[1] ?? "");
+    if (!parsed) {
+      continue;
+    }
+    points.push({
+      year: parsed.year,
+      month: parsed.month,
+      day: parsed.day,
+      explicitDay: true,
+    });
+  }
+  if (points.length === 0) {
+    return null;
+  }
+  const ordered = [...points].sort((a, b) =>
+    a.year === b.year ? (a.month === b.month ? a.day - b.day : a.month - b.month) : a.year - b.year
+  );
+  const start = ordered[0];
+  const end = ordered[ordered.length - 1];
+  if (!start || !end) {
+    return null;
+  }
+  return { start: billingPointToken(start), end: billingPointToken(end) };
 }
 
 export function assessIssueDate(

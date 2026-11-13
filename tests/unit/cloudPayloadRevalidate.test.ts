@@ -33,8 +33,8 @@ describe("revalidateFinalCloudPayload — final payload after user edits", () =>
       ],
       redactedObligations: [
         {
-          actionSummary: "Ask for a calculation breakdown",
-          dueDate: "25 November 2026",
+          actionSummary: "request_review",
+          dueDate: "2026-11-25",
           redactedClause: "Please contact the billing team about the stated balance.",
         },
       ],
@@ -53,8 +53,8 @@ describe("revalidateFinalCloudPayload — final payload after user edits", () =>
           ...M0_SMOKE_TEST_CLOUD_PAYLOAD,
           redactedObligations: [
             {
-              actionSummary: "Discuss the account",
-              dueDate: "25 November 2026",
+              actionSummary: "contact_sender",
+              dueDate: "2026-11-25",
               redactedClause: "Please review account Sarah Example before the deadline.",
             },
           ],
@@ -69,7 +69,13 @@ describe("revalidateFinalCloudPayload — final payload after user edits", () =>
       revalidateFinalCloudPayload(
         {
           ...M0_SMOKE_TEST_CLOUD_PAYLOAD,
-          billingPeriod: "January to June 2025 RG0\u200B0AA",
+          redactedObligations: [
+            {
+              actionSummary: "review_stated_obligation",
+              dueDate: "2026-11-25",
+              redactedClause: "Please review supply area RG0\u200B0AA before the deadline.",
+            },
+          ],
         },
         guard
       )
@@ -82,7 +88,7 @@ describe("revalidateFinalCloudPayload — final payload after user edits", () =>
         ...M0_SMOKE_TEST_CLOUD_PAYLOAD,
         rawNoticeText: "should never leave the browser",
       })
-    ).toThrow(/not on the allowlist/);
+    ).toThrow(/not on allowlist/);
 
     expect(() =>
       revalidateFinalCloudPayload({
@@ -101,7 +107,7 @@ describe("revalidateFinalCloudPayload — final payload after user edits", () =>
     expect(() =>
       revalidateFinalCloudPayload({
         ...M0_SMOKE_TEST_CLOUD_PAYLOAD,
-        amountGBP: Number.NaN,
+        amountsGBP: [Number.NaN],
       })
     ).toThrow(/finite JSON number|amountGBP/);
 

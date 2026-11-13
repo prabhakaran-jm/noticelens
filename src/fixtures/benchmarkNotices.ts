@@ -195,20 +195,20 @@ export const BENCHMARK_NOTICE_FIXTURES: readonly BenchmarkNoticeFixture[] = [
 export const M0_SMOKE_TEST_CLOUD_PAYLOAD: CloudBoundStructuralPayload = {
   schemaVersion: "noticelens.cloud-brief.v1",
   noticeCategory: "utility_electricity",
-  issueDate: "18 November 2026",
-  billingPeriod: "January to June 2025",
-  amountGBP: 1280,
-  responseDeadline: "25 November 2026",
+  issueDate: "2026-11-18",
+  billingPeriod: { start: "2025-01", end: "2025-06" },
+  amountsGBP: [1280],
+  responseDeadlines: ["2026-11-25"],
   redactedObligations: [
     {
-      actionSummary: "Pay £1,280 or contact billing team to discuss the electricity account",
-      dueDate: "25 November 2026",
+      actionSummary: "pay_or_contact",
+      dueDate: "2026-11-25",
       redactedClause:
         "Please pay the balance or contact our billing team by 25 November 2026 to discuss your account.",
     },
     {
-      actionSummary: "Provide meter reading records if challenging billing accuracy",
-      dueDate: "25 November 2026",
+      actionSummary: "provide_records",
+      dueDate: "2026-11-25",
       redactedClause:
         "If you believe you have already provided meter readings or there is an error, please provide the relevant records when you contact us.",
     },

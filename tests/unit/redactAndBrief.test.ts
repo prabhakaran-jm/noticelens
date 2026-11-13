@@ -70,9 +70,12 @@ describe("redactAndBuildBrief — local identifiers stay out of the structural b
       expect(result.redactedNoticePreview).not.toContain(token);
     }
     expect(serialized).not.toContain("localIdentifierMap");
-    expect(serialized).toContain("[RECIPIENT_NAME]");
+    expect(serialized).not.toContain("Sarah Example");
+    expect(result.redactedNoticePreview).toContain("[RECIPIENT_NAME]");
     expect(serialized).toContain("[SUPPLY_ADDRESS]");
-    expect(result.structuralBrief.amountGBP).toBe(1280);
+    expect(result.structuralBrief.amountsGBP).toEqual([1280]);
+    expect(result.structuralBrief.redactedObligations[0]?.actionSummary).toBe("pay_or_contact");
+    expect(result.structuralBrief.issueDate).toBe("2026-11-18");
     expect(result.structuralBrief.circumstanceFlags).toEqual([
       "previously_provided_meter_readings",
     ]);
@@ -110,7 +113,7 @@ describe("redactAndBuildBrief — local identifiers stay out of the structural b
     }
   });
 
-  it("fails closed when a known identifier survives in a non-quote field", () => {
+  it("does not copy a free-text action, so an identifier in that action is not sent", () => {
     const result = redactAndBuildBrief({
       rawNoticeText: original.rawText,
       responseGoal: "request_billing_review",
@@ -131,12 +134,16 @@ describe("redactAndBuildBrief — local identifiers stay out of the structural b
       },
     });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
       return;
     }
-    expect(result.reasons.join(" ")).toMatch(/identifier/i);
-    expect("structuralBrief" in result).toBe(false);
+    const serialized = JSON.stringify(result.structuralBrief);
+    expect(serialized).not.toContain("rg00aa");
+    expect(serialized).not.toContain("must not be sent");
+    expect(result.structuralBrief.redactedObligations[0]?.actionSummary).toBe(
+      "review_stated_obligation"
+    );
   });
 
   it("excludes fabricated quotes and refuses to send a brief that has none left", () => {
@@ -218,9 +225,11 @@ describe("redactAndBuildBrief — local identifiers stay out of the structural b
         ],
       },
     });
-    expect(result.ok).toBe(false);
+    expect(result.ok).toBe(true);
     if (!result.ok) {
-      expect(result.reasons.join(" ")).toMatch(/refusing to substitute 0/);
+      return;
     }
+    expect(result.structuralBrief.amountsGBP).toEqual([]);
+    expect(JSON.stringify(result.structuralBrief)).not.toMatch(/"amountsGBP":\[0\]/);
   });
 });

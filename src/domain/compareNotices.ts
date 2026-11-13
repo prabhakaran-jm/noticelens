@@ -1,3 +1,4 @@
+import { distinctAmountValues, findExplicitGbpAmounts } from "./amounts";
 import {
   assessIssueDate,
   classifyDeadline,
@@ -6,6 +7,13 @@ import {
   type ClassifiedDeadline,
   type IssueDateAssessment,
 } from "./dates";
+import {
+  groundBillingPeriod,
+  groundCalendarDate,
+  groundMonetaryAmount,
+  groundObligation,
+  type ClaimSupport,
+} from "./sourceGrounding";
 import type { QuoteVerificationResult } from "./types";
 import { verifyQuoteInSource } from "./verifyQuotes";
 
@@ -22,8 +30,10 @@ export interface ComparableNoticeFacts {
   issueDate: string | null;
   issueDateQuote: string | null;
   amountGBP: number | null;
+  amountsGBP: number[];
   amountQuote: string | null;
   amountConflict: boolean;
+  amountRejected: boolean;
   responseDeadline: string | null;
   responseDeadlines: string[];
   deadlineQuote: string | null;
@@ -38,6 +48,10 @@ interface VerifiedSide<T> {
   value: T | null;
   quote: string | null;
   verification: QuoteVerificationResult | null;
+  /** Substring existence and claim support are separate. */
+  substringExists: boolean;
+  support: ClaimSupport;
+  verifiedForDisplay: T | null;
 }
 
 export interface NoticeComparison {
@@ -81,6 +95,9 @@ export interface NoticeComparison {
     revisedQuote: string | null;
     originalVerification: QuoteVerificationResult | null;
     revisedVerification: QuoteVerificationResult | null;
+    substringExists: boolean;
+    support: ClaimSupport;
+    verifiedForDisplay: string | null;
     originalAssessment: IssueDateAssessment | null;
     revisedAssessment: IssueDateAssessment | null;
     status: ComparisonStatus;
@@ -101,76 +118,41 @@ function lineContaining(text: string, needle: string): string | null {
   return text.slice(start, end).replace(/\r$/, "");
 }
 
-function parseGbp(raw: string): number | null {
-  const normalized = raw.replace(/,/g, "");
-  if (!/^\d+(?:\.\d{1,2})?$/.test(normalized)) {
-    return null;
-  }
-  const value = Number(normalized);
-  return Number.isFinite(value) ? value : null;
-}
-
-function uniqueAmounts(
-  text: string,
-  pattern: RegExp
-): Array<{ value: number; index: number; raw: string }> {
-  const found: Array<{ value: number; index: number; raw: string }> = [];
-  for (const match of text.matchAll(pattern)) {
-    const raw = match[1];
-    if (!raw || match.index === undefined) {
-      continue;
-    }
-    const value = parseGbp(raw);
-    if (value === null) {
-      continue;
-    }
-    found.push({ value, index: match.index, raw: match[0] });
-  }
-  return found;
-}
-
 function extractAmount(text: string): {
   amountGBP: number | null;
+  amountsGBP: number[];
   amountQuote: string | null;
   amountConflict: boolean;
+  amountRejected: boolean;
 } {
-  const preferred = [
-    /balance now requested is £\s*([0-9][0-9,]*(?:\.\d{1,2})?)/gi,
-    /outstanding balance of £\s*([0-9][0-9,]*(?:\.\d{1,2})?)/gi,
-    /totalling £\s*([0-9][0-9,]*(?:\.\d{1,2})?)/gi,
-    /balance of £\s*([0-9][0-9,]*(?:\.\d{1,2})?)/gi,
-    /(?:please pay|pay) £\s*([0-9][0-9,]*(?:\.\d{1,2})?)/gi,
-  ];
-  for (const pattern of preferred) {
-    const matches = uniqueAmounts(text, pattern);
-    if (matches.length === 0) {
-      continue;
-    }
-    const distinct = [...new Set(matches.map((item) => item.value))];
-    if (distinct.length !== 1) {
-      return { amountGBP: null, amountQuote: null, amountConflict: true };
-    }
-    const first = matches[0]!;
+  const found = findExplicitGbpAmounts(text);
+  const distinct = distinctAmountValues(found.amounts);
+  const first = found.amounts[0];
+  if (distinct.length === 1 && first && found.rejected === 0) {
     return {
-      amountGBP: first.value,
+      amountGBP: distinct[0] ?? null,
+      amountsGBP: distinct,
       amountQuote: lineContaining(text, first.raw),
       amountConflict: false,
+      amountRejected: false,
     };
   }
-
-  const any = uniqueAmounts(text, /£\s*([0-9][0-9,]*(?:\.\d{1,2})?)/gi);
-  const distinct = [...new Set(any.map((item) => item.value))];
-  if (distinct.length === 1 && any[0]) {
+  if (distinct.length > 1 || found.rejected > 0) {
     return {
-      amountGBP: any[0].value,
-      amountQuote: lineContaining(text, any[0].raw),
-      amountConflict: false,
+      amountGBP: null,
+      amountsGBP: distinct,
+      amountQuote: first ? lineContaining(text, first.raw) : null,
+      amountConflict: distinct.length > 1,
+      amountRejected: found.rejected > 0,
     };
   }
-  if (distinct.length > 1) {
-    return { amountGBP: null, amountQuote: null, amountConflict: true };
-  }
-  return { amountGBP: null, amountQuote: null, amountConflict: false };
+  return {
+    amountGBP: null,
+    amountsGBP: [],
+    amountQuote: null,
+    amountConflict: false,
+    amountRejected: false,
+  };
 }
 
 function extractDeadlines(text: string): {
@@ -336,6 +318,78 @@ function formatGbp(amount: number): string {
   return `£${body}`;
 }
 
+function supportFields<T>(
+  source: string,
+  value: T | null,
+  quote: string | null,
+  support: ClaimSupport
+): Pick<VerifiedSide<T>, "substringExists" | "support" | "verifiedForDisplay"> {
+  const verification = quote ? verifyQuoteInSource(source, quote) : null;
+  return {
+    substringExists: verification?.verified === true,
+    support,
+    verifiedForDisplay: support === "supports_claim" ? value : null,
+  };
+}
+
+function amountSupport(
+  source: string,
+  amount: number | null,
+  quote: string | null,
+  conflict: boolean,
+  rejected: boolean
+): Pick<VerifiedSide<number>, "substringExists" | "support" | "verifiedForDisplay"> {
+  if (conflict || rejected) {
+    return supportFields(source, null, quote, conflict ? "ambiguous" : "insufficient");
+  }
+  const grounded = groundMonetaryAmount(source, amount, quote);
+  return supportFields(source, grounded.verifiedForDisplay, quote, grounded.support);
+}
+
+function dateSupport(
+  source: string,
+  claimed: string | null,
+  quote: string | null,
+  conflict: boolean
+): Pick<VerifiedSide<string>, "substringExists" | "support" | "verifiedForDisplay"> {
+  if (conflict) {
+    return supportFields(source, null, quote, "ambiguous");
+  }
+  const grounded = groundCalendarDate(source, claimed, quote);
+  return supportFields(
+    source,
+    grounded.support === "supports_claim" ? claimed : null,
+    quote,
+    grounded.support
+  );
+}
+
+function periodSupport(
+  source: string,
+  claimed: string | null,
+  quote: string | null
+): Pick<VerifiedSide<string>, "substringExists" | "support" | "verifiedForDisplay"> {
+  const grounded = groundBillingPeriod(source, claimed, quote);
+  return supportFields(source, grounded.verifiedForDisplay, quote, grounded.support);
+}
+
+function actionSupport(
+  source: string,
+  action: string | null,
+  quote: string | null
+): Pick<VerifiedSide<string>, "substringExists" | "support" | "verifiedForDisplay"> {
+  if (!action || !quote) {
+    return supportFields(source, null, quote, "missing");
+  }
+  const grounded = groundObligation(source, action, quote);
+  return supportFields(
+    source,
+    grounded.support === "supports_claim" ? action : null,
+    quote,
+    grounded.support
+  );
+}
+
 function differenceGBP(original: number | null, revised: number | null): number | null {
   if (original === null || revised === null) {
     return null;
@@ -387,6 +441,13 @@ export function compareNotices(
       value: original.amountConflict ? null : original.amountGBP,
       quote: original.amountQuote,
       verification: verify(original.rawText, original.amountQuote),
+      ...amountSupport(
+        original.rawText,
+        original.amountConflict ? null : original.amountGBP,
+        original.amountQuote,
+        original.amountConflict,
+        original.amountRejected
+      ),
       revised: revised.amountConflict ? null : revised.amountGBP,
       revisedQuote: revised.amountQuote,
       revisedVerification: verify(revised.rawText, revised.amountQuote),
@@ -397,9 +458,15 @@ export function compareNotices(
       status: amountStatus,
     },
     responseDeadline: {
-      value: original.responseDeadline,
+      value: original.deadlineConflict ? null : original.responseDeadline,
       quote: original.deadlineQuote,
       verification: verify(original.rawText, original.deadlineQuote),
+      ...dateSupport(
+        original.rawText,
+        original.deadlineConflict ? null : original.responseDeadline,
+        original.deadlineQuote,
+        original.deadlineConflict
+      ),
       revised: revised.responseDeadline,
       revisedQuote: revised.deadlineQuote,
       revisedVerification: verify(revised.rawText, revised.deadlineQuote),
@@ -428,6 +495,11 @@ export function compareNotices(
       value: periodStated(original.billingPeriod) ? original.billingPeriod : null,
       quote: original.billingPeriodQuote,
       verification: verify(original.rawText, original.billingPeriodQuote),
+      ...periodSupport(
+        original.rawText,
+        periodStated(original.billingPeriod) ? original.billingPeriod : null,
+        original.billingPeriodQuote
+      ),
       revised: periodStated(revised.billingPeriod) ? revised.billingPeriod : null,
       revisedQuote: revised.billingPeriodQuote,
       revisedVerification: verify(revised.rawText, revised.billingPeriodQuote),
@@ -444,6 +516,7 @@ export function compareNotices(
       value: original.statedAction,
       quote: original.actionQuote,
       verification: verify(original.rawText, original.actionQuote),
+      ...actionSupport(original.rawText, original.statedAction, original.actionQuote),
       revised: revised.statedAction,
       revisedQuote: revised.actionQuote,
       revisedVerification: verify(revised.rawText, revised.actionQuote),
@@ -456,6 +529,7 @@ export function compareNotices(
       revisedQuote: revised.issueDateQuote,
       originalVerification: verify(original.rawText, original.issueDateQuote),
       revisedVerification: verify(revised.rawText, revised.issueDateQuote),
+      ...dateSupport(original.rawText, original.issueDate, original.issueDateQuote, false),
       originalAssessment: today ? assessIssueDate(original.issueDate, today) : null,
       revisedAssessment: today ? assessIssueDate(revised.issueDate, today) : null,
       status: textStatus(original.issueDate, revised.issueDate),

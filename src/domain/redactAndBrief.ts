@@ -1,9 +1,22 @@
+import { readAmount } from "./amounts";
 import {
   CloudPayloadValidationError,
   validateCloudBoundPayload,
 } from "./cloudPayloadGuard";
+import { parseBillingWindow, parseCalendarDate } from "./dates";
+import {
+  formatCanonicalPlaceholder,
+  type CanonicalPlaceholderBase,
+} from "./placeholders";
+import {
+  findMonetarySupport,
+  groundBillingPeriod,
+  groundCalendarDate,
+  groundObligation,
+} from "./sourceGrounding";
 import type {
   CircumstanceFlag,
+  CloudBillingWindow,
   CloudBoundStructuralPayload,
   GuidanceId,
   LocalIdentifierEntry,
@@ -12,7 +25,6 @@ import type {
   NoticeCategory,
   ResponseGoal,
 } from "./types";
-import { verifyQuoteInSource } from "./verifyQuotes";
 
 export const REGEX_REDACTION_LIMITATIONS = [
   "Regex redaction does not guarantee that every personal identifier was removed.",
@@ -20,7 +32,7 @@ export const REGEX_REDACTION_LIMITATIONS = [
   "A person must review the structural brief before any cloud request.",
 ] as const;
 
-const PLACEHOLDER_BASE: Record<LocalIdentifierKind, string> = {
+const PLACEHOLDER_BASE: Record<LocalIdentifierKind, CanonicalPlaceholderBase> = {
   recipient_name: "RECIPIENT_NAME",
   account_ref: "ACCOUNT_REF",
   supply_address: "SUPPLY_ADDRESS",
@@ -62,7 +74,10 @@ export interface BriefSource {
   issueDate: string | null;
   billingPeriod: string | null;
   amountGBP: number | null;
+  /** Additional explicit amounts. Missing stays empty rather than becoming 0. */
+  amountsGBP?: readonly number[];
   responseDeadline: string | null;
+  responseDeadlines?: readonly (string | null)[];
   obligations: BriefSourceObligation[];
 }
 
@@ -101,7 +116,7 @@ function emptyMap(): LocalIdentifierMap {
 }
 
 function failure(
-  reasons: string[],
+  reasons: readonly string[],
   map: LocalIdentifierMap,
   excludedUnverifiedQuotes: string[]
 ): RedactAndBriefFailure {
@@ -109,7 +124,7 @@ function failure(
     ok: false,
     declaredComplete: false,
     limitations: REGEX_REDACTION_LIMITATIONS,
-    reasons,
+    reasons: [...reasons],
     localIdentifierMap: map,
     excludedUnverifiedQuotes,
   };
@@ -270,8 +285,9 @@ function createPlaceholderAllocator(): (span: Span) => string {
         : span.kind;
     const count = counts.get(family) ?? 0;
     counts.set(family, count + 1);
-    const base = family === "nino" ? "NINO" : PLACEHOLDER_BASE[span.kind];
-    const placeholder = count === 0 ? `[${base}]` : `[${base}_${count + 1}]`;
+    const base: CanonicalPlaceholderBase =
+      family === "nino" ? "NINO" : PLACEHOLDER_BASE[span.kind];
+    const placeholder = formatCanonicalPlaceholder(base, count);
     span.placeholder = placeholder;
     byRaw.set(span.rawValue.toLowerCase(), placeholder);
     return placeholder;
@@ -320,11 +336,30 @@ function residualPattern(text: string): string | null {
   return null;
 }
 
-function statedOrNot(value: string | null | undefined): string {
+function isoFromText(value: string | null | undefined): string | null {
   if (!value || value.trim().length === 0 || /^not stated$/i.test(value.trim())) {
-    return "not stated";
+    return null;
   }
-  return value.trim();
+  const direct = parseCalendarDate(value.trim());
+  if (direct) {
+    return direct.iso;
+  }
+  const token = value.match(
+    /\b(\d{4}-\d{2}-\d{2}|\d{1,2}\s+[A-Za-z]+\s+\d{4})\b/
+  )?.[1];
+  return token ? parseCalendarDate(token)?.iso ?? null : null;
+}
+
+function groundedIso(
+  source: string,
+  value: string | null | undefined
+): string | null {
+  const iso = isoFromText(value);
+  if (!iso || !value) {
+    return null;
+  }
+  const grounded = groundCalendarDate(source, iso, value);
+  return grounded.support === "supports_claim" ? iso : null;
 }
 
 export function redactAndBuildBrief(input: RedactAndBriefInput): RedactAndBriefResult {
@@ -433,48 +468,79 @@ export function redactAndBuildBrief(input: RedactAndBriefInput): RedactAndBriefR
     );
   }
 
-  if (
-    input.extraction.amountGBP === null ||
-    !Number.isFinite(input.extraction.amountGBP) ||
-    input.extraction.amountGBP < 0
-  ) {
-    return failure(
-      ["Amount is not stated; refusing to substitute 0"],
-      map,
-      excludedUnverifiedQuotes
-    );
+  const requestedAmounts =
+    input.extraction.amountsGBP ??
+    (input.extraction.amountGBP === null ? [] : [input.extraction.amountGBP]);
+  const amountsGBP: number[] = [];
+  for (const candidate of requestedAmounts) {
+    const read = readAmount(candidate);
+    if (read.status === "rejected") {
+      return failure(
+        ["An amount was negative, ambiguous, or not a supported representation"],
+        map,
+        excludedUnverifiedQuotes
+      );
+    }
+    if (read.status !== "value") {
+      continue;
+    }
+    if (amountsGBP.some((existing) => Math.abs(existing - read.value) < 0.001)) {
+      continue;
+    }
+    const support = findMonetarySupport(input.rawNoticeText, read.value);
+    if (support.support === "supports_claim") {
+      amountsGBP.push(read.value);
+    }
   }
 
-  const issueDate = input.extraction.issueDate?.trim() ?? "";
-  if (!issueDate) {
-    return failure(
-      ["Issue date is missing; refusing to invent one"],
-      map,
-      excludedUnverifiedQuotes
+  const issueDate = groundedIso(input.rawNoticeText, input.extraction.issueDate);
+  const responseDeadlines: string[] = [];
+  for (const candidate of [
+    input.extraction.responseDeadline,
+    ...(input.extraction.responseDeadlines ?? []),
+  ]) {
+    const iso = groundedIso(input.rawNoticeText, candidate);
+    if (iso && !responseDeadlines.includes(iso)) {
+      responseDeadlines.push(iso);
+    }
+  }
+
+  let billingPeriod: CloudBillingWindow | null = parseBillingWindow(
+    input.extraction.billingPeriod
+  );
+  if (billingPeriod && input.extraction.billingPeriod) {
+    const periodGrounding = groundBillingPeriod(
+      input.rawNoticeText,
+      input.extraction.billingPeriod,
+      input.extraction.billingPeriod
     );
+    if (periodGrounding.support !== "supports_claim") {
+      billingPeriod = null;
+    }
   }
 
   const clauses: CloudBoundStructuralPayload["redactedObligations"] = [];
   for (const obligation of input.extraction.obligations) {
-    const verification = verifyQuoteInSource(input.rawNoticeText, obligation.sourceQuote);
-    if (!verification.verified) {
+    const grounding = groundObligation(
+      input.rawNoticeText,
+      obligation.action,
+      obligation.sourceQuote
+    );
+    if (grounding.support !== "supports_claim" || !grounding.verifiedForDisplay) {
       excludedUnverifiedQuotes.push(obligation.sourceQuote);
       continue;
     }
     const redactedClause = redact(obligation.sourceQuote).trim();
-    const redactedAction = redact(obligation.action).trim();
-    const actionSummary = redactedAction || "Review the stated obligation";
-    if (actionSummary.length > 160 || redactedClause.length < 4 || redactedClause.length > 220) {
+    if (redactedClause.length < 4 || redactedClause.length > 220) {
       return failure(
         ["A redacted clause is outside the cloud brief length limits"],
         map,
         excludedUnverifiedQuotes
       );
     }
-    const dueDate = obligation.dueDate ? redact(obligation.dueDate).trim() : null;
     clauses.push({
-      actionSummary,
-      dueDate: dueDate && dueDate.length > 0 ? dueDate : null,
+      actionSummary: grounding.verifiedForDisplay,
+      dueDate: groundedIso(input.rawNoticeText, obligation.dueDate),
       redactedClause,
     });
   }
@@ -497,10 +563,10 @@ export function redactAndBuildBrief(input: RedactAndBriefInput): RedactAndBriefR
   const candidate: CloudBoundStructuralPayload = {
     schemaVersion: "noticelens.cloud-brief.v1",
     noticeCategory: input.extraction.noticeCategory,
-    issueDate: redact(issueDate),
-    billingPeriod: redact(statedOrNot(input.extraction.billingPeriod)),
-    amountGBP: input.extraction.amountGBP,
-    responseDeadline: redact(statedOrNot(input.extraction.responseDeadline)),
+    issueDate,
+    billingPeriod,
+    amountsGBP,
+    responseDeadlines,
     redactedObligations: clauses,
     responseGoal: input.responseGoal,
     guidanceIds: [...input.guidanceIds],

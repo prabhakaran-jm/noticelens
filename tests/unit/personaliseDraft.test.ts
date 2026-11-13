@@ -21,16 +21,19 @@ describe("personaliseDraft — cloud template stays separate from the local draf
     { placeholder: "[SUPPLY_ADDRESS]", localValue: "14 Example Road, Reading, RG0 0AA" },
   ];
 
-  it("hydrates UX placeholders and cloud aliases without rewriting the template", () => {
+  it("hydrates canonical placeholders and leaves non-canonical tokens unresolved", () => {
     const state = createReplyDraftState(cloudTemplate, bindings);
     expect(state.cloudTemplate).toBe(cloudTemplate);
     expect(state.localDraft).toContain("Sarah Example");
     expect(state.localDraft).toContain("EXAMPLE-8472");
     expect(state.localDraft).toContain("14 Example Road, Reading, RG0 0AA");
     expect(state.localDraft).not.toContain("[ACCOUNT_REF]");
-    expect(state.localDraft).not.toContain("[ACCOUNT_REFERENCE]");
-    expect(state.localDraft).not.toContain("[PROPERTY_ADDRESS]");
-    expect(state.unresolvedPlaceholders).toContain("[UNKNOWN_TOKEN]");
+    expect(state.localDraft).toContain("[ACCOUNT_REFERENCE]");
+    expect(state.localDraft).toContain("[PROPERTY_ADDRESS]");
+    expect(state.unresolvedPlaceholders).toEqual(
+      expect.arrayContaining(["[ACCOUNT_REFERENCE]", "[PROPERTY_ADDRESS]", "[UNKNOWN_TOKEN]"])
+    );
+    expect(state.copyOrDownloadBlocked).toBe(true);
     expect(showPlaceholderTemplate(state)).toBe(cloudTemplate);
     expect(showPersonalisedDraft(state)).toContain("Dear Sarah Example");
   });
@@ -54,6 +57,7 @@ describe("personaliseDraft — cloud template stays separate from the local draf
     ]);
     expect(applied.personalised).toBe("Hello [ACCOUNT_REF]");
     expect(applied.personalised).not.toContain("EXAMPLE-8472");
+    expect(applied.unresolvedPlaceholders).toContain("[ACCOUNT_REF]");
   });
 
   it("leaves an empty binding unresolved and reports raw identifiers already in the template", () => {

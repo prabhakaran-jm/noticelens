@@ -8,8 +8,8 @@ import {
   M0_SMOKE_TEST_CLOUD_PAYLOAD,
 } from "../../src/fixtures/benchmarkNotices";
 
-describe("validateCloudBoundPayload — strict runtime allowlist & zero-PII guard", () => {
-  it("accepts a clean, schema-conformant structural brief with zero PII", () => {
+describe("validateCloudBoundPayload — strict runtime allowlist", () => {
+  it("accepts a clean structural brief without claiming redaction is complete", () => {
     const validated = validateCloudBoundPayload(M0_SMOKE_TEST_CLOUD_PAYLOAD, {
       rawNoticeText: BENCHMARK_NOTICE_FIXTURES[0]!.rawText,
       forbiddenIdentifiers: BENCHMARK_NOTICE_FIXTURES[0]!.forbiddenPiiTokens,
@@ -73,8 +73,8 @@ describe("validateCloudBoundPayload — strict runtime allowlist & zero-PII guar
             ...M0_SMOKE_TEST_CLOUD_PAYLOAD,
             redactedObligations: [
               {
-                actionSummary: "Review account",
-                dueDate: "25 November 2026",
+                actionSummary: "review_stated_obligation",
+                dueDate: "2026-11-25",
                 redactedClause: sample.clause,
               },
             ],
@@ -91,10 +91,9 @@ describe("validateCloudBoundPayload — strict runtime allowlist & zero-PII guar
           ...M0_SMOKE_TEST_CLOUD_PAYLOAD,
           redactedObligations: [
             {
-              actionSummary: "Discuss statement for Testperson household",
-              dueDate: "30 November 2026",
-              redactedClause:
-                "Please contact our team before the response date.",
+              actionSummary: "contact_sender",
+              dueDate: "2026-11-30",
+              redactedClause: "Please contact Testperson before the response date.",
             },
           ],
         },
@@ -109,9 +108,9 @@ describe("validateCloudBoundPayload — strict runtime allowlist & zero-PII guar
     expect(() =>
       validateCloudBoundPayload({
         ...M0_SMOKE_TEST_CLOUD_PAYLOAD,
-        amountGBP: -10,
+        amountsGBP: [-10],
       })
-    ).toThrow(/amountGBP/);
+    ).toThrow(/amountsGBP/);
 
     expect(() =>
       validateCloudBoundPayload({

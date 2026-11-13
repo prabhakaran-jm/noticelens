@@ -1,3 +1,4 @@
+import { isCanonicalPlaceholder, listPlaceholderTokens } from "./placeholders";
 import type { LocalIdentifierMap } from "./types";
 
 export interface PlaceholderBinding {
@@ -10,44 +11,26 @@ export interface ReplyDraftState {
   localDraft: string;
   unresolvedPlaceholders: string[];
   leakedRawIdentifiers: string[];
+  /** Domain flag only. Copy or Download stays disabled while this is true. */
+  copyOrDownloadBlocked: boolean;
 }
-
-const KNOWN_TOKEN_SOURCE =
-  "\\[(?:RECIPIENT_NAME|ACCOUNT_REF|ACCOUNT_REFERENCE|SUPPLY_ADDRESS|PROPERTY_ADDRESS|EMAIL|PHONE|LOCAL_ID|NINO)(?:_\\d+)?\\]";
 
 function unique(values: readonly string[]): string[] {
   return [...new Set(values)];
 }
 
-function aliasKey(placeholder: string): string[] {
-  const match =
-    /^\[(ACCOUNT_REF|ACCOUNT_REFERENCE|SUPPLY_ADDRESS|PROPERTY_ADDRESS)(_\d+)?\]$/.exec(
-      placeholder
-    );
-  if (!match) {
-    return [];
-  }
-  const suffix = match[2] ?? "";
-  const alt =
-    match[1] === "ACCOUNT_REF" || match[1] === "ACCOUNT_REFERENCE"
-      ? match[1] === "ACCOUNT_REF"
-        ? "ACCOUNT_REFERENCE"
-        : "ACCOUNT_REF"
-      : match[1] === "SUPPLY_ADDRESS"
-        ? "PROPERTY_ADDRESS"
-        : "SUPPLY_ADDRESS";
-  return [`[${alt}${suffix}]`];
-}
-
-export function bindingsFromIdentifierMap(
-  map: LocalIdentifierMap
-): PlaceholderBinding[] {
+export function bindingsFromIdentifierMap(map: LocalIdentifierMap): PlaceholderBinding[] {
   return map.entries.map((entry) => ({
     placeholder: entry.placeholder,
     localValue: entry.rawValue,
   }));
 }
 
+/**
+ * One left-to-right pass. Replacement text is inserted literally and is not scanned.
+ * Unresolved tokens are then read from the result, so a value that still contains
+ * a placeholder blocks Copy or Download.
+ */
 export function applyPlaceholderBindings(
   cloudTemplate: string,
   bindings: readonly PlaceholderBinding[]
@@ -55,45 +38,39 @@ export function applyPlaceholderBindings(
   const table = new Map<string, string>();
   for (const binding of bindings) {
     const key = binding.placeholder.trim();
-    if (!key) {
+    if (!isCanonicalPlaceholder(key) || table.has(key)) {
       continue;
     }
     table.set(key, binding.localValue);
   }
-  for (const [key, value] of [...table.entries()]) {
-    for (const alias of aliasKey(key)) {
-      if (!table.has(alias)) {
-        table.set(alias, value);
-      }
-    }
-  }
 
-  const unresolved: string[] = [];
-  const personalised = cloudTemplate.replace(
-    new RegExp(KNOWN_TOKEN_SOURCE, "g"),
-    (token) => {
-      if (!table.has(token)) {
-        unresolved.push(token);
-        return token;
-      }
-      const value = table.get(token) ?? "";
-      if (value.trim().length === 0) {
-        unresolved.push(token);
-        return token;
-      }
-      return value;
+  let cursor = 0;
+  let personalised = "";
+  while (cursor < cloudTemplate.length) {
+    const start = cloudTemplate.indexOf("[", cursor);
+    if (start < 0) {
+      personalised += cloudTemplate.slice(cursor);
+      break;
     }
-  );
-
-  for (const token of cloudTemplate.match(/\[[A-Z][A-Z0-9_]*\]/g) ?? []) {
-    if (!table.has(token)) {
-      unresolved.push(token);
+    personalised += cloudTemplate.slice(cursor, start);
+    const end = cloudTemplate.indexOf("]", start + 1);
+    if (end < 0) {
+      personalised += cloudTemplate.slice(start);
+      break;
     }
+    const token = cloudTemplate.slice(start, end + 1);
+    const replacement = table.get(token);
+    if (isCanonicalPlaceholder(token) && replacement !== undefined && replacement.trim().length > 0) {
+      personalised += replacement;
+    } else {
+      personalised += token;
+    }
+    cursor = end + 1;
   }
 
   return {
     personalised,
-    unresolvedPlaceholders: unique(unresolved),
+    unresolvedPlaceholders: unique(listPlaceholderTokens(personalised)),
   };
 }
 
@@ -109,6 +86,10 @@ function rawValuesInTemplate(
   );
 }
 
+function blocked(unresolvedPlaceholders: readonly string[]): boolean {
+  return unresolvedPlaceholders.length > 0;
+}
+
 export function createReplyDraftState(
   cloudTemplate: string,
   bindings: readonly PlaceholderBinding[]
@@ -122,21 +103,21 @@ export function createReplyDraftState(
     localDraft: applied.personalised,
     unresolvedPlaceholders: applied.unresolvedPlaceholders,
     leakedRawIdentifiers: rawValuesInTemplate(cloudTemplate, bindings),
+    copyOrDownloadBlocked: blocked(applied.unresolvedPlaceholders),
   };
 }
 
-export function editLocalDraft(
-  state: ReplyDraftState,
-  nextLocalDraft: string
-): ReplyDraftState {
+export function editLocalDraft(state: ReplyDraftState, nextLocalDraft: string): ReplyDraftState {
   if (typeof nextLocalDraft !== "string") {
     throw new TypeError("localDraft must be a string");
   }
+  const unresolvedPlaceholders = unique(listPlaceholderTokens(nextLocalDraft));
   return {
     cloudTemplate: state.cloudTemplate,
     localDraft: nextLocalDraft,
-    unresolvedPlaceholders: state.unresolvedPlaceholders,
+    unresolvedPlaceholders,
     leakedRawIdentifiers: state.leakedRawIdentifiers,
+    copyOrDownloadBlocked: blocked(unresolvedPlaceholders),
   };
 }
 

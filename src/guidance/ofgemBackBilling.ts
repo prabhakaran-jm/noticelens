@@ -110,6 +110,6 @@ export function buildOfgemCloudPromptExcerpt(): string {
     conditions,
     OFGEM_BACK_BILLING_VERBATIM.exceptionsIntro,
     exceptions,
-    "Boundary: explain when the published conditions may apply. Keep placeholders [RECIPIENT_NAME], [ACCOUNT_REF], and [SUPPLY_ADDRESS] verbatim.",
+    "Boundary: explain when the published conditions may apply. Keep placeholders [RECIPIENT_NAME], [ACCOUNT_REF], and [SUPPLY_ADDRESS] verbatim. Do not add other placeholder names.",
   ].join("\n");
 }
