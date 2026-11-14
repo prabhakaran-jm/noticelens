@@ -3,14 +3,14 @@ import originalSample from "../../../examples/energy-backbill-original.txt?raw";
 import revisedSample from "../../../examples/energy-backbill-revised.txt?raw";
 import { runOnDeviceNoticeExtraction } from "../../ai/onDeviceExtractor";
 import { probeChromeLanguageModelAvailability, type ChromeCapabilityReport } from "../../ai/capability";
-import { buildCloudBrief } from "../../adapters/cloudBriefBuilder";
+import { buildClosedCloudInspection } from "../../adapters/closedCloudInspection";
 import { createCloudApprovalSession } from "../../adapters/cloudApprovalSession";
 import {
   privacyApprovalView,
-  recordUserPayloadApproval,
+  recordClosedBriefApproval,
   type UserPayloadApproval,
 } from "../../adapters/privacyApproval";
-import { briefSourceFromGrounded, groundNoticeFacts } from "../../adapters/groundNoticeFacts";
+import { groundNoticeFacts } from "../../adapters/groundNoticeFacts";
 import { compareNoticeTexts } from "../../domain/compareNotices";
 import { isoDateFromClock } from "../../domain/dates";
 import type { InferenceEvidenceReceipt } from "../../domain/evidenceReceipt";
@@ -71,14 +71,12 @@ export function NoticeLensApp() {
   );
   const inspection = useMemo(
     () =>
-      buildCloudBrief({
+      buildClosedCloudInspection({
         rawNoticeText: originalText,
-        source: briefSourceFromGrounded(grounded),
-        edits: {
-          responseGoal,
-          circumstanceFlags: flags,
-          extraKnownIdentifiers: [],
-        },
+        view: grounded,
+        responseGoal,
+        circumstanceFlags: flags,
+        extraKnownIdentifiers: [],
       }),
     [originalText, grounded, responseGoal, flags]
   );
@@ -89,17 +87,21 @@ export function NoticeLensApp() {
         limitations: inspection.limitations,
         approval: userApproval,
         generation: editGeneration,
+        guardOptions: inspection.guardOptions,
       }),
     [inspection, userApproval, editGeneration]
   );
   const session = useMemo(
     () =>
       createCloudApprovalSession({
-        canonical: inspection.canonical,
+        canonical: null,
         violations: inspection.violations,
       }),
     [inspection]
   );
+  const actionLabels = inspection.readableRows
+    .filter((row) => row.label.startsWith("Action label"))
+    .map((row) => row.value);
   const comparison = useMemo(
     () => compareNoticeTexts(originalText, revisedText, { today }),
     [originalText, revisedText, today]
@@ -210,13 +212,14 @@ export function NoticeLensApp() {
         <PrivacyApprovalModal
           open
           view={privacy}
+          actionLabels={actionLabels}
           onClose={() => setPrivacyOpen(false)}
           onApprove={(serialized) => {
             if (inspection.exactSerialized === null) {
               return;
             }
             setUserApproval(
-              recordUserPayloadApproval(
+              recordClosedBriefApproval(
                 serialized,
                 inspection.exactSerialized,
                 editGeneration,

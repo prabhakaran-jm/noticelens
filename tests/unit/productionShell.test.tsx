@@ -54,10 +54,16 @@ describe("production Civic Calm shell", () => {
     fireEvent.click(screen.getByTestId("nav-reply"));
     const send = screen.getByTestId("cloud-send-button");
     expect(send).toBeDisabled();
+    expect(screen.getByTestId("cloud-disabled")).toHaveTextContent(/Cloud sending disabled/i);
     expect(screen.getByTestId("cloud-disabled")).toHaveTextContent(/not connected/i);
     fireEvent.click(send);
     const exact = screen.getByTestId("exact-json").textContent ?? "";
-    expect(exact.startsWith('{"schemaVersion":"noticelens.cloud-brief.v1"')).toBe(true);
+    expect(exact.startsWith('{"schemaVersion":"noticelens.cloud-brief.v2"')).toBe(true);
+    expect(exact).not.toContain("redactedClause");
+    expect(exact).not.toContain("Sarah");
+    expect(screen.getByTestId("structural-validation-warning")).toHaveTextContent(
+      /does not establish that a payment obligation is correct/i
+    );
     expect(exact).not.toContain("\n");
     expect(screen.getByTestId("formatted-json").textContent).toContain("\n");
     expect(screen.getByText(/does not guarantee/i)).toBeInTheDocument();
@@ -116,7 +122,12 @@ describe("production Civic Calm shell", () => {
     expect(send).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Review privacy approval" }));
     const exact = screen.getByTestId("privacy-exact-json").textContent ?? "";
-    expect(exact.startsWith('{"schemaVersion":"noticelens.cloud-brief.v1"')).toBe(true);
+    expect(exact.startsWith('{"schemaVersion":"noticelens.cloud-brief.v2"')).toBe(true);
+    expect(exact).not.toContain("redactedClause");
+    expect(screen.getByTestId("privacy-structural-warning")).toHaveTextContent(
+      /does not establish that a payment obligation is correct/i
+    );
+    expect(screen.getByTestId("privacy-action-labels")).toHaveTextContent("Label, not a quotation");
     fireEvent.click(screen.getByRole("checkbox", { name: "I have reviewed this exact payload" }));
     fireEvent.click(screen.getByTestId("privacy-approve"));
     expect(screen.getByTestId("privacy-approved")).toBeInTheDocument();

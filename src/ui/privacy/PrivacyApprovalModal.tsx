@@ -3,6 +3,7 @@ import {
   CLOUD_SUBMISSION_BLOCKED_REASON,
 } from "../../adapters/cloudApprovalSession";
 import type { PrivacyApprovalView } from "../../adapters/privacyApproval";
+import { STRUCTURAL_VALIDATION_DOES_NOT_ESTABLISH_PAYMENT_CORRECTNESS } from "../../domain/closedCloudBrief";
 
 /**
  * Shows the exact canonical payload for a person to approve.
@@ -11,6 +12,7 @@ import type { PrivacyApprovalView } from "../../adapters/privacyApproval";
 export function PrivacyApprovalModal(props: {
   open: boolean;
   view: PrivacyApprovalView;
+  actionLabels?: readonly string[];
   onApprove: (serialized: string) => void;
   onClose: () => void;
 }) {
@@ -36,8 +38,21 @@ export function PrivacyApprovalModal(props: {
           approval, including if the text is changed back. Cloud drafting stays off.
         </p>
         <p className="banner block" role="status">
-          {CLOUD_SUBMISSION_BLOCKED_REASON}
+          Cloud sending disabled. {CLOUD_SUBMISSION_BLOCKED_REASON}
         </p>
+        <p role="note" data-testid="privacy-structural-warning">
+          {STRUCTURAL_VALIDATION_DOES_NOT_ESTABLISH_PAYMENT_CORRECTNESS}
+        </p>
+        {props.actionLabels && props.actionLabels.length > 0 ? (
+          <>
+            <p>These are fixed labels, not quotations from the notice.</p>
+            <ul data-testid="privacy-action-labels">
+              {props.actionLabels.map((label) => (
+                <li key={label}>{label}</li>
+              ))}
+            </ul>
+          </>
+        ) : null}
         <ul>
           {props.view.limitations.map((item) => (
             <li key={item}>{item}</li>

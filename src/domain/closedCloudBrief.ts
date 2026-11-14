@@ -18,6 +18,13 @@ import {
 /** Closed brief. No notice prose, placeholders, or identifier map. */
 export const CLOSED_CLOUD_BRIEF_SCHEMA_VERSION = "noticelens.cloud-brief.v2" as const;
 
+/**
+ * A schema-valid brief is not evidence that a payment figure or obligation is correct.
+ * R5-3 remains open. Do not present this sentence as a clearance for cloud submission.
+ */
+export const STRUCTURAL_VALIDATION_DOES_NOT_ESTABLISH_PAYMENT_CORRECTNESS =
+  "Structural validation does not establish that a payment obligation is correct.";
+
 export const CLOSED_CLOUD_BRIEF_ROOT_KEYS = [
   "schemaVersion",
   "noticeCategory",
@@ -251,6 +258,182 @@ function fail(violations: string[]): never {
   );
 }
 
+function readStableData(
+  target: object,
+  key: string,
+  violations: string[]
+): { ok: true; value: unknown } | { ok: false } {
+  let first: PropertyDescriptor | undefined;
+  let second: PropertyDescriptor | undefined;
+  try {
+    first = Object.getOwnPropertyDescriptor(target, key);
+    second = Object.getOwnPropertyDescriptor(target, key);
+  } catch {
+    violations.push("payload property cannot be read safely");
+    return { ok: false };
+  }
+  if (!first || !second) {
+    violations.push("payload contains an empty array slot");
+    return { ok: false };
+  }
+  if (
+    first.get ||
+    first.set ||
+    second.get ||
+    second.set ||
+    !("value" in first) ||
+    !("value" in second)
+  ) {
+    violations.push("a payload property must be an own data property");
+    return { ok: false };
+  }
+  if (!Object.is(first.value, second.value)) {
+    violations.push("payload property changed between reads");
+    return { ok: false };
+  }
+  return { ok: true, value: first.value };
+}
+
+function noteInheritedProperties(value: object, violations: string[]): void {
+  const watched = [
+    ...CLOSED_CLOUD_BRIEF_ROOT_KEYS,
+    ...CLOSED_CLOUD_BRIEF_OPTIONAL_KEYS,
+    ...CLOSED_CLOUD_OBLIGATION_KEYS,
+    "start",
+    "end",
+  ];
+  for (const key of watched) {
+    let own = false;
+    let inherited = false;
+    try {
+      own = Object.prototype.hasOwnProperty.call(value, key);
+      inherited = !own && key in value;
+    } catch {
+      violations.push("payload property cannot be read safely");
+      return;
+    }
+    if (inherited) {
+      violations.push("an inherited property is not accepted");
+    }
+  }
+}
+
+function snapshotArray(value: unknown[], violations: string[], depth: number): unknown[] | undefined {
+  let lengthDesc: PropertyDescriptor | undefined;
+  let lengthAgain: PropertyDescriptor | undefined;
+  try {
+    lengthDesc = Object.getOwnPropertyDescriptor(value, "length");
+    lengthAgain = Object.getOwnPropertyDescriptor(value, "length");
+  } catch {
+    violations.push("payload property cannot be read safely");
+    return undefined;
+  }
+  if (
+    !lengthDesc ||
+    !lengthAgain ||
+    lengthDesc.get ||
+    lengthDesc.set ||
+    lengthAgain.get ||
+    lengthAgain.set ||
+    !("value" in lengthDesc) ||
+    !("value" in lengthAgain) ||
+    !Object.is(lengthDesc.value, lengthAgain.value) ||
+    typeof lengthDesc.value !== "number" ||
+    !Number.isInteger(lengthDesc.value)
+  ) {
+    violations.push("a payload property must be an own data property");
+    return undefined;
+  }
+  if (lengthDesc.value > 32) {
+    violations.push("payload has too many entries");
+    return undefined;
+  }
+  const copy: unknown[] = [];
+  for (let index = 0; index < lengthDesc.value; index += 1) {
+    const read = readStableData(value, String(index), violations);
+    if (!read.ok) {
+      return undefined;
+    }
+    copy.push(snapshotJson(read.value, violations, depth + 1));
+  }
+  return copy;
+}
+
+function snapshotObject(
+  value: object,
+  violations: string[],
+  depth: number
+): Record<string, unknown> | undefined {
+  noteInheritedProperties(value, violations);
+  let names: string[];
+  let again: string[];
+  try {
+    names = Object.getOwnPropertyNames(value);
+    again = Object.getOwnPropertyNames(value);
+  } catch {
+    violations.push("payload property cannot be read safely");
+    return undefined;
+  }
+  if (names.length !== again.length || names.some((name, index) => name !== again[index])) {
+    violations.push("payload property changed between reads");
+    return undefined;
+  }
+  const copy: Record<string, unknown> = {};
+  for (const key of names) {
+    if (key === "redactedClause" || key === "redactedObligations") {
+      violations.push("v1 payload is not accepted at the v2 boundary");
+      continue;
+    }
+    if (FORBIDDEN_KEYS.has(key)) {
+      violations.push("payload contains a forbidden key");
+      continue;
+    }
+    const read = readStableData(value, key, violations);
+    if (!read.ok) {
+      continue;
+    }
+    copy[key] = snapshotJson(read.value, violations, depth + 1);
+  }
+  return copy;
+}
+
+/** One plain copy. Later validation does not read the caller's object again. */
+function snapshotJson(value: unknown, violations: string[], depth: number): unknown {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return value;
+  }
+  if (typeof value !== "object") {
+    violations.push("payload contains a value that is not a JSON value");
+    return undefined;
+  }
+  if (depth > 8) {
+    violations.push("payload is too deep");
+    return undefined;
+  }
+  let prototype: unknown;
+  try {
+    prototype = Object.getPrototypeOf(value);
+  } catch {
+    violations.push("payload property cannot be read safely");
+    return undefined;
+  }
+  if (Array.isArray(value)) {
+    if (prototype !== Array.prototype) {
+      violations.push("payload contains a non-plain array");
+      return undefined;
+    }
+    return snapshotArray(value, violations, depth);
+  }
+  if (prototype !== Object.prototype && prototype !== null) {
+    violations.push("an inherited prototype is not accepted");
+    return undefined;
+  }
+  return snapshotObject(value, violations, depth);
+}
+
 /**
  * Validates and canonicalizes a closed v2 brief.
  * v1 payloads, notice quotations, and unknown properties are rejected.
@@ -258,11 +441,24 @@ function fail(violations: string[]): never {
  * Violation text does not include field values.
  */
 export function canonicalClosedCloudBrief(input: unknown): CanonicalClosedCloudBrief {
+  return canonicalizeClosedCloudBrief(input, false);
+}
+
+function canonicalizeClosedCloudBrief(value: unknown, recheck: boolean): CanonicalClosedCloudBrief {
   const violations: string[] = [];
-  if (!isPlainObject(input)) {
-    fail(["Payload root must be a plain JSON object"]);
+  let source: Record<string, unknown>;
+  if (!recheck) {
+    const snapshot = snapshotJson(value, violations, 0);
+    if (!isPlainObject(snapshot) || violations.length > 0) {
+      fail(violations.length > 0 ? violations : ["Payload root must be a plain JSON object"]);
+    }
+    source = snapshot;
+  } else if (!isPlainObject(value)) {
+    fail(["payload did not round-trip through JSON"]);
+  } else {
+    source = value;
   }
-  if (input.schemaVersion === "noticelens.cloud-brief.v1" || "redactedObligations" in input || "redactedClause" in input) {
+  if (source.schemaVersion === "noticelens.cloud-brief.v1" || "redactedObligations" in source || "redactedClause" in source) {
     violations.push("v1 payload is not accepted at the v2 boundary");
   }
 
@@ -270,7 +466,7 @@ export function canonicalClosedCloudBrief(input: unknown): CanonicalClosedCloudB
     ...CLOSED_CLOUD_BRIEF_ROOT_KEYS,
     ...CLOSED_CLOUD_BRIEF_OPTIONAL_KEYS,
   ]);
-  for (const key of Object.keys(input)) {
+  for (const key of Object.keys(source)) {
     if (rejectUnsafeKey(key, violations)) {
       continue;
     }
@@ -279,35 +475,35 @@ export function canonicalClosedCloudBrief(input: unknown): CanonicalClosedCloudB
     }
   }
   for (const requiredKey of CLOSED_CLOUD_BRIEF_ROOT_KEYS) {
-    if (!(requiredKey in input)) {
+    if (!(requiredKey in source)) {
       violations.push("missing required allowlisted field");
     }
   }
 
-  if (input.schemaVersion !== CLOSED_CLOUD_BRIEF_SCHEMA_VERSION) {
+  if (source.schemaVersion !== CLOSED_CLOUD_BRIEF_SCHEMA_VERSION) {
     violations.push("schemaVersion is not the closed cloud brief schema");
   }
 
   let noticeCategory: NoticeCategory | undefined;
   if (
-    typeof input.noticeCategory !== "string" ||
-    !(ALLOWED_NOTICE_CATEGORIES as readonly string[]).includes(input.noticeCategory)
+    typeof source.noticeCategory !== "string" ||
+    !(ALLOWED_NOTICE_CATEGORIES as readonly string[]).includes(source.noticeCategory)
   ) {
     violations.push("noticeCategory is not an allowed category");
   } else {
-    noticeCategory = input.noticeCategory as NoticeCategory;
+    noticeCategory = source.noticeCategory as NoticeCategory;
   }
 
-  const issueDate = readIsoDate(input.issueDate, violations);
+  const issueDate = readIsoDate(source.issueDate, violations);
 
   let billingPeriod: CloudBillingWindow | null | undefined;
-  if (input.billingPeriod === null) {
+  if (source.billingPeriod === null) {
     billingPeriod = null;
-  } else if (!isPlainObject(input.billingPeriod)) {
+  } else if (!isPlainObject(source.billingPeriod)) {
     violations.push("billingPeriod is not a billing window or null");
     billingPeriod = undefined;
   } else {
-    for (const key of Object.keys(input.billingPeriod)) {
+    for (const key of Object.keys(source.billingPeriod)) {
       if (rejectUnsafeKey(key, violations)) {
         continue;
       }
@@ -315,11 +511,11 @@ export function canonicalClosedCloudBrief(input: unknown): CanonicalClosedCloudB
         violations.push("unexpected key is not on allowlist");
       }
     }
-    if (!("start" in input.billingPeriod) || !("end" in input.billingPeriod)) {
+    if (!("start" in source.billingPeriod) || !("end" in source.billingPeriod)) {
       violations.push("billingPeriod is missing a window bound");
     }
-    const start = readMonthOrDate(input.billingPeriod.start, violations);
-    const end = readMonthOrDate(input.billingPeriod.end, violations);
+    const start = readMonthOrDate(source.billingPeriod.start, violations);
+    const end = readMonthOrDate(source.billingPeriod.end, violations);
     if (start && end) {
       if (windowSortKey(start) > windowSortKey(end)) {
         violations.push("billingPeriod window is out of order");
@@ -330,37 +526,44 @@ export function canonicalClosedCloudBrief(input: unknown): CanonicalClosedCloudB
   }
 
   const amountsGBP: number[] = [];
-  if (!Array.isArray(input.amountsGBP)) {
+  if (!Array.isArray(source.amountsGBP)) {
     violations.push("amountsGBP must be an array");
   } else if (
-    input.amountsGBP.length > CLOSED_CLOUD_BRIEF_LIMITS.maxAmounts ||
-    !assertArrayOwnProperties(input.amountsGBP, violations)
+    source.amountsGBP.length > CLOSED_CLOUD_BRIEF_LIMITS.maxAmounts ||
+    !assertArrayOwnProperties(source.amountsGBP, violations)
   ) {
-    if (input.amountsGBP.length > CLOSED_CLOUD_BRIEF_LIMITS.maxAmounts) {
+    if (source.amountsGBP.length > CLOSED_CLOUD_BRIEF_LIMITS.maxAmounts) {
       violations.push("amountsGBP has too many entries");
     }
   } else {
-    for (const item of input.amountsGBP) {
+    const seenAmounts = new Set<number>();
+    for (const item of source.amountsGBP) {
       const amount = readAmount(item, violations);
-      if (amount !== undefined) {
-        amountsGBP.push(amount);
+      if (amount === undefined) {
+        continue;
       }
+      if (seenAmounts.has(amount)) {
+        violations.push("amountsGBP duplicates an amount");
+      }
+      seenAmounts.add(amount);
+      amountsGBP.push(amount);
     }
+    amountsGBP.sort((left, right) => left - right);
   }
 
   const responseDeadlines: string[] = [];
-  if (!Array.isArray(input.responseDeadlines)) {
+  if (!Array.isArray(source.responseDeadlines)) {
     violations.push("responseDeadlines must be an array");
   } else if (
-    input.responseDeadlines.length > CLOSED_CLOUD_BRIEF_LIMITS.maxDeadlines ||
-    !assertArrayOwnProperties(input.responseDeadlines, violations)
+    source.responseDeadlines.length > CLOSED_CLOUD_BRIEF_LIMITS.maxDeadlines ||
+    !assertArrayOwnProperties(source.responseDeadlines, violations)
   ) {
-    if (input.responseDeadlines.length > CLOSED_CLOUD_BRIEF_LIMITS.maxDeadlines) {
+    if (source.responseDeadlines.length > CLOSED_CLOUD_BRIEF_LIMITS.maxDeadlines) {
       violations.push("responseDeadlines has too many entries");
     }
   } else {
     const seen = new Set<string>();
-    for (const item of input.responseDeadlines) {
+    for (const item of source.responseDeadlines) {
       const iso = readIsoDate(item, violations);
       if (iso === undefined || iso === null) {
         if (iso === null) {
@@ -377,21 +580,22 @@ export function canonicalClosedCloudBrief(input: unknown): CanonicalClosedCloudB
       seen.add(iso);
       responseDeadlines.push(iso);
     }
+    responseDeadlines.sort();
   }
 
   const obligations: ClosedCloudObligation[] = [];
-  if (!Array.isArray(input.obligations)) {
+  if (!Array.isArray(source.obligations)) {
     violations.push("obligations must be an array");
   } else if (
-    input.obligations.length > CLOSED_CLOUD_BRIEF_LIMITS.maxObligations ||
-    !assertArrayOwnProperties(input.obligations, violations)
+    source.obligations.length > CLOSED_CLOUD_BRIEF_LIMITS.maxObligations ||
+    !assertArrayOwnProperties(source.obligations, violations)
   ) {
-    if (input.obligations.length > CLOSED_CLOUD_BRIEF_LIMITS.maxObligations) {
+    if (source.obligations.length > CLOSED_CLOUD_BRIEF_LIMITS.maxObligations) {
       violations.push("obligations has too many entries");
     }
   } else {
     const allowedObligation = new Set<string>(CLOSED_CLOUD_OBLIGATION_KEYS);
-    for (const item of input.obligations) {
+    for (const item of source.obligations) {
       if (!isPlainObject(item)) {
         violations.push("an obligation must be a plain object");
         continue;
@@ -428,26 +632,49 @@ export function canonicalClosedCloudBrief(input: unknown): CanonicalClosedCloudB
         dueDate,
       });
     }
+    const seenObligations = new Set<string>();
+    for (const item of obligations) {
+      const key = `${item.actionSummary}\u0000${item.dueDate ?? ""}`;
+      if (seenObligations.has(key)) {
+        violations.push("obligations duplicates an action");
+      }
+      seenObligations.add(key);
+    }
+    obligations.sort((left, right) => {
+      if (left.actionSummary !== right.actionSummary) {
+        return left.actionSummary < right.actionSummary ? -1 : 1;
+      }
+      if (left.dueDate === right.dueDate) {
+        return 0;
+      }
+      if (left.dueDate === null) {
+        return -1;
+      }
+      if (right.dueDate === null) {
+        return 1;
+      }
+      return left.dueDate < right.dueDate ? -1 : 1;
+    });
   }
 
   let responseGoal: ResponseGoal | undefined;
   if (
-    typeof input.responseGoal !== "string" ||
-    !(ALLOWED_RESPONSE_GOALS as readonly string[]).includes(input.responseGoal)
+    typeof source.responseGoal !== "string" ||
+    !(ALLOWED_RESPONSE_GOALS as readonly string[]).includes(source.responseGoal)
   ) {
     violations.push("responseGoal is not an allowed goal");
   } else {
-    responseGoal = input.responseGoal as ResponseGoal;
+    responseGoal = source.responseGoal as ResponseGoal;
   }
 
   const guidanceIds: GuidanceId[] = [];
-  if (!Array.isArray(input.guidanceIds)) {
+  if (!Array.isArray(source.guidanceIds)) {
     violations.push("guidanceIds must be an array");
   } else if (
-    input.guidanceIds.length > CLOSED_CLOUD_BRIEF_LIMITS.maxGuidanceIds ||
-    !assertArrayOwnProperties(input.guidanceIds, violations)
+    source.guidanceIds.length > CLOSED_CLOUD_BRIEF_LIMITS.maxGuidanceIds ||
+    !assertArrayOwnProperties(source.guidanceIds, violations)
   ) {
-    if (input.guidanceIds.length > CLOSED_CLOUD_BRIEF_LIMITS.maxGuidanceIds) {
+    if (source.guidanceIds.length > CLOSED_CLOUD_BRIEF_LIMITS.maxGuidanceIds) {
       violations.push("guidanceIds has too many entries");
     }
   } else {
@@ -455,7 +682,7 @@ export function canonicalClosedCloudBrief(input: unknown): CanonicalClosedCloudB
       ? new Set<string>(GUIDANCE_IDS_BY_CATEGORY[noticeCategory])
       : null;
     const seen = new Set<string>();
-    for (const gid of input.guidanceIds) {
+    for (const gid of source.guidanceIds) {
       if (
         typeof gid !== "string" ||
         !(ALLOWED_GUIDANCE_IDS as readonly string[]).includes(gid) ||
@@ -470,12 +697,13 @@ export function canonicalClosedCloudBrief(input: unknown): CanonicalClosedCloudB
       seen.add(gid);
       guidanceIds.push(gid as GuidanceId);
     }
+    guidanceIds.sort();
   }
 
-  const hasFlags = Object.prototype.hasOwnProperty.call(input, "circumstanceFlags");
+  const hasFlags = Object.prototype.hasOwnProperty.call(source, "circumstanceFlags");
   let circumstanceFlags: CircumstanceFlag[] | undefined;
   if (hasFlags) {
-    const flags = input.circumstanceFlags;
+    const flags = source.circumstanceFlags;
     if (!Array.isArray(flags) || flags.length > CLOSED_CLOUD_BRIEF_LIMITS.maxCircumstanceFlags) {
       violations.push("circumstanceFlags must be a bounded array");
     } else if (assertArrayOwnProperties(flags, violations)) {
@@ -495,6 +723,7 @@ export function canonicalClosedCloudBrief(input: unknown): CanonicalClosedCloudB
         seen.add(flag);
         collected.push(flag as CircumstanceFlag);
       }
+      collected.sort();
       circumstanceFlags = collected;
     }
   }
@@ -505,10 +734,10 @@ export function canonicalClosedCloudBrief(input: unknown): CanonicalClosedCloudB
     issueDate === undefined ||
     billingPeriod === undefined ||
     !responseGoal ||
-    !Array.isArray(input.obligations) ||
-    obligations.length !== input.obligations.length ||
-    !Array.isArray(input.guidanceIds) ||
-    guidanceIds.length !== input.guidanceIds.length
+    !Array.isArray(source.obligations) ||
+    obligations.length !== source.obligations.length ||
+    !Array.isArray(source.guidanceIds) ||
+    guidanceIds.length !== source.guidanceIds.length
   ) {
     fail(violations);
   }
@@ -540,6 +769,13 @@ export function canonicalClosedCloudBrief(input: unknown): CanonicalClosedCloudB
   }
   if (JSON.stringify(parsed) !== serialized) {
     fail(["payload did not round-trip through JSON"]);
+  }
+  if (!recheck) {
+    const replayed = canonicalizeClosedCloudBrief(parsed, true);
+    if (replayed.serialized !== serialized) {
+      fail(["payload did not round-trip through JSON"]);
+    }
+    return replayed;
   }
 
   return {
