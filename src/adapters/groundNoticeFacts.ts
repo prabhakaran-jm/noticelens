@@ -18,6 +18,7 @@ import {
 } from "../domain/dates";
 import type { BriefSource, BriefSourceObligation } from "../domain/redactAndBrief";
 import {
+  actionSummaryFromQuote,
   groundBillingPeriod,
   groundCalendarDate,
   groundMonetaryAmount,
@@ -25,10 +26,12 @@ import {
   type ClaimSupport,
 } from "../domain/sourceGrounding";
 import type {
+  ActionSummaryId,
   NoticeCategory,
   QuoteVerificationResult,
   RawNoticeExtraction,
 } from "../domain/types";
+import { actionSummaryLabel } from "./cloudBriefBuilder";
 
 const MONTH =
   "January|February|March|April|May|June|July|August|September|October|November|December";
@@ -75,10 +78,24 @@ export interface GroundedDateView {
 
 export interface GroundedObligationView {
   id: string;
+  /** Free-text action from the model or a local paraphrase. Never the card heading. */
   action: string;
+  /** Deterministic classification of the quotation, not of the free-text action. */
+  actionSummary: ActionSummaryId;
+  /**
+   * True only when every substantive word, amount, and date in `action` is in the quotation.
+   * A word-for-word quote location does not set this.
+   */
+  modelActionSupported: boolean;
   dueDate: string | null;
   sourceQuote: string;
+  /** Quote-level support, including amount and date claims the quotation does not contain. */
   support: ClaimSupport;
+  /**
+   * Status of the deterministic heading. `supports_claim` requires action words in the
+   * quotation. Finding the quotation in the notice is not enough.
+   */
+  headingSupport: ClaimSupport;
   verifiedForDisplay: string | null;
   verification: QuoteVerificationResult | null;
   claimExceedsQuote: boolean;
@@ -327,6 +344,62 @@ function soleDateToken(text: string): string | null {
   return matches[0]?.[1] ?? null;
 }
 
+const ACTION_STOPWORDS = new Set([
+  "the",
+  "and",
+  "for",
+  "you",
+  "your",
+  "our",
+  "this",
+  "that",
+  "with",
+  "about",
+  "from",
+  "have",
+  "has",
+  "been",
+  "will",
+  "are",
+  "was",
+  "were",
+  "not",
+  "but",
+  "please",
+  "must",
+  "may",
+  "can",
+  "into",
+  "onto",
+  "than",
+  "then",
+  "when",
+  "what",
+  "which",
+  "who",
+  "whom",
+  "whose",
+  "where",
+  "while",
+  "after",
+  "before",
+  "their",
+  "they",
+  "them",
+  "his",
+  "her",
+  "its",
+  "any",
+  "all",
+  "each",
+]);
+
+function contentWords(text: string): string[] {
+  return [...text.toLowerCase().matchAll(/\p{L}[\p{L}\p{M}'-]*/gu)]
+    .map((match) => match[0] ?? "")
+    .filter((word) => word.length >= 3 && !ACTION_STOPWORDS.has(word));
+}
+
 function actionClaimsUnsupportedDetail(action: string, quote: string): boolean {
   const actionAmounts = distinctAmountValues(findExplicitGbpAmounts(action).amounts);
   const quoteAmounts = distinctAmountValues(findExplicitGbpAmounts(quote).amounts);
@@ -340,6 +413,37 @@ function actionClaimsUnsupportedDetail(action: string, quote: string): boolean {
   const actionDates = calendarIsoDates(action);
   const quoteDates = calendarIsoDates(quote);
   return actionDates.some((iso) => !quoteDates.includes(iso));
+}
+
+/**
+ * The quotation supports the whole free-text claim only when it contains that claim's
+ * amounts, dates, and content words. A located quotation is not this check.
+ */
+function quoteSupportsEntireAction(action: string, quote: string): boolean {
+  if (/\.{3}|…|\u2026/.test(quote) || actionClaimsUnsupportedDetail(action, quote)) {
+    return false;
+  }
+  const words = contentWords(action);
+  if (words.length === 0) {
+    return false;
+  }
+  const quoted = new Set(contentWords(quote));
+  return words.every((word) => quoted.has(word));
+}
+
+function headingSupportFor(
+  quoteSupport: ClaimSupport,
+  quote: string
+): ClaimSupport {
+  if (quoteSupport !== "supports_claim") {
+    return quoteSupport;
+  }
+  // The fallback summary is chosen when the quotation has no action words.
+  // Locating that quotation must not mark "Review the stated obligation" as verified.
+  if (actionSummaryFromQuote(quote) === "review_stated_obligation") {
+    return "substring_only";
+  }
+  return "supports_claim";
 }
 
 function obligationViews(
@@ -368,6 +472,8 @@ function obligationViews(
     const claimExceedsQuote = actionClaimsUnsupportedDetail(item.action, item.sourceQuote);
     const support =
       claimExceedsQuote && fact.support === "supports_claim" ? "substring_only" : fact.support;
+    const actionSummary = fact.value ?? actionSummaryFromQuote(item.sourceQuote);
+    const headingSupport = headingSupportFor(support, item.sourceQuote);
     const quotedDate = soleDateToken(item.sourceQuote);
     const dueInQuote =
       item.dueDate !== null &&
@@ -375,10 +481,13 @@ function obligationViews(
     return {
       id: `obligation-${index + 1}`,
       action: item.action,
+      actionSummary,
+      modelActionSupported: quoteSupportsEntireAction(item.action, item.sourceQuote),
       dueDate: dueInQuote ? item.dueDate : quotedDate,
       sourceQuote: item.sourceQuote,
       support,
-      verifiedForDisplay: support === "supports_claim" ? fact.value : null,
+      headingSupport,
+      verifiedForDisplay: headingSupport === "supports_claim" ? actionSummary : null,
       verification: fact.verification,
       claimExceedsQuote,
     };
@@ -533,9 +642,9 @@ function briefDate(view: GroundedDateView): string | null {
  */
 export function briefSourceFromGrounded(view: GroundedNoticeViewModel): BriefSource {
   const obligations: BriefSourceObligation[] = view.obligations
-    .filter((item) => item.support === "supports_claim")
+    .filter((item) => item.headingSupport === "supports_claim")
     .map((item) => ({
-      action: item.action,
+      action: actionSummaryLabel(item.actionSummary),
       dueDate: item.dueDate,
       sourceQuote: item.sourceQuote,
     }));

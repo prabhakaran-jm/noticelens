@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { actionSummaryLabel } from "../../adapters/cloudBriefBuilder";
 import {
   claimSupportLabel,
   type GroundedNoticeViewModel,
@@ -47,7 +48,7 @@ function marksFor(
         start: verification.startOffset,
         end: verification.endOffset,
         kind: "quote",
-        label: claimSupportLabel(obligation.support),
+        label: claimSupportLabel(obligation.headingSupport),
       });
     }
   }
@@ -82,7 +83,8 @@ export function ActionPlanScreen(props: {
         <h1 className="screen-title">Action plan</h1>
         <p className="screen-lead">
           A figure is shown as verified only when the quoted passage supports it. An unsupported
-          amount stays “Not stated”.
+          amount stays “Not stated”. Each action heading is the summary those words support.
+          Finding the quotation in the notice does not verify any extra wording.
         </p>
       </header>
       <div className="mobile-pane-switcher" aria-label="Choose a pane">
@@ -153,18 +155,22 @@ export function ActionPlanScreen(props: {
                 <article
                   key={item.id}
                   className={`checklist-card${
-                    item.support === "supports_claim" ? "" : " is-insufficient"
+                    item.headingSupport === "supports_claim" ? "" : " is-insufficient"
                   }`}
+                  data-testid="plan-action-card"
                 >
-                  <h3>{item.action}</h3>
+                  <h3 data-testid="plan-action-heading">{actionSummaryLabel(item.actionSummary)}</h3>
                   <blockquote className="quote-evidence-box">{item.sourceQuote}</blockquote>
                   <div className="checklist-meta-bar">
                     <span
                       className={
-                        item.support === "supports_claim" ? "verify-chip verify-chip-ok" : "verify-chip verify-chip-warn"
+                        item.headingSupport === "supports_claim"
+                          ? "verify-chip verify-chip-ok"
+                          : "verify-chip verify-chip-warn"
                       }
+                      data-testid="plan-action-support"
                     >
-                      {claimSupportLabel(item.support)}
+                      {claimSupportLabel(item.headingSupport)}
                     </span>
                   </div>
                 </article>

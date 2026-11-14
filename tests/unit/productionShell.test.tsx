@@ -1,12 +1,15 @@
 import { readFileSync } from "node:fs";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { groundNoticeFacts } from "../../src/adapters/groundNoticeFacts";
 import { App } from "../../src/App";
 import { compareNoticeTexts } from "../../src/domain/compareNotices";
 import { isoDateFromClock } from "../../src/domain/dates";
 import { InferenceProvenanceError } from "../../src/domain/inferenceProvenance";
-import { receiptForOnDeviceCall } from "../../src/ui/production/onDeviceSession";
 import { normalizeNewlines } from "../../src/domain/textNormalize";
+import type { RawNoticeExtraction } from "../../src/domain/types";
+import { receiptForOnDeviceCall } from "../../src/ui/production/onDeviceSession";
+import { ActionPlanScreen } from "../../src/ui/screens/ActionPlanScreen";
 
 const original = normalizeNewlines(readFileSync("examples/energy-backbill-original.txt", "utf8"));
 const revised = normalizeNewlines(readFileSync("examples/energy-backbill-revised.txt", "utf8"));
@@ -25,6 +28,12 @@ describe("production Civic Calm shell", () => {
     expect(screen.getByTestId("plan-amount")).toHaveTextContent("£1,280");
     expect(screen.getByTestId("plan-period")).toHaveTextContent("January and June 2025");
     expect(screen.getByTestId("plan-reader")).toHaveTextContent("18 November 2026");
+    expect(screen.getByTestId("plan-action-heading")).toHaveTextContent("Pay or contact the sender");
+    expect(screen.getByTestId("plan-action-heading")).not.toHaveTextContent("court hearing");
+    expect(screen.getByTestId("plan-action-support")).toHaveTextContent("Verified in notice");
+    expect(screen.getByTestId("plan-reader").querySelector("mark.quote-mark")?.textContent).toContain(
+      "Please pay the balance or contact our billing team"
+    );
 
     fireEvent.click(screen.getByTestId("nav-compare"));
     const today = isoDateFromClock(new Date(), "Europe/London");
@@ -98,5 +107,103 @@ describe("production Civic Calm shell", () => {
     expect(receipt.inferenceSource).toBe("on_device");
     expect(receipt.latencyMs).toBe(42);
     expect(JSON.stringify(receipt)).not.toContain("must not be stored");
+  });
+
+  it("keeps invented action wording off the verified heading", () => {
+    const payQuote =
+      "Please pay the balance or contact our billing team by 25 November 2026 to discuss your account.";
+    const balanceQuote =
+      "Our records show an outstanding balance of £1,280 for electricity supplied between January and June 2025.";
+    const extraction: RawNoticeExtraction = {
+      noticeCategory: "utility_electricity",
+      issueDate: "18 November 2026",
+      billingPeriod: "January and June 2025",
+      amountGBP: 1280,
+      responseDeadline: "25 November 2026",
+      obligations: [
+        {
+          action: "Attend a court hearing about this debt",
+          dueDate: null,
+          sourceQuote: payQuote,
+        },
+        {
+          action: "Pay £4,400",
+          dueDate: null,
+          sourceQuote: payQuote,
+        },
+        {
+          action: "Contact the sender by 3 January 2027",
+          dueDate: "3 January 2027",
+          sourceQuote: payQuote,
+        },
+        {
+          action: "Pay the balance",
+          dueDate: null,
+          sourceQuote: "Please pay the balance…",
+        },
+        {
+          action: "Attend a court hearing about this debt",
+          dueDate: null,
+          sourceQuote: balanceQuote,
+        },
+      ],
+    };
+    const view = groundNoticeFacts({
+      rawNoticeText: original,
+      today: "2026-11-13",
+      extraction,
+    });
+    render(
+      <ActionPlanScreen
+        view={view}
+        identifiers={[]}
+        responseGoal="request_billing_review"
+        onResponseGoal={() => undefined}
+        flags={[]}
+        onFlags={() => undefined}
+      />
+    );
+    const cards = screen.getAllByTestId("plan-action-card");
+    expect(cards).toHaveLength(5);
+    expect(within(cards[0]!).getByTestId("plan-action-heading")).toHaveTextContent(
+      "Pay or contact the sender"
+    );
+    expect(within(cards[0]!).getByTestId("plan-action-heading")).not.toHaveTextContent(
+      "court hearing"
+    );
+    expect(cards[0]).not.toHaveTextContent("Attend a court hearing");
+    expect(within(cards[0]!).getByTestId("plan-action-support")).toHaveTextContent(
+      "Verified in notice"
+    );
+    expect(within(cards[1]!).getByTestId("plan-action-heading")).toHaveTextContent(
+      "Pay or contact the sender"
+    );
+    expect(cards[1]).not.toHaveTextContent("£4,400");
+    expect(cards[1]).not.toHaveTextContent("Verified in notice");
+    expect(within(cards[2]!).getByTestId("plan-action-heading")).toHaveTextContent(
+      "Pay or contact the sender"
+    );
+    expect(cards[2]).not.toHaveTextContent("3 January 2027");
+    expect(cards[2]).not.toHaveTextContent("Verified in notice");
+    expect(within(cards[3]!).getByTestId("plan-action-heading")).toHaveTextContent(
+      "Pay the stated balance"
+    );
+    expect(within(cards[3]!).getByTestId("plan-action-support")).toHaveTextContent(
+      "Incomplete quote"
+    );
+    expect(cards[3]).not.toHaveTextContent("Verified in notice");
+    expect(within(cards[4]!).getByTestId("plan-action-heading")).toHaveTextContent(
+      "Review the stated obligation"
+    );
+    expect(cards[4]).not.toHaveTextContent("Attend a court hearing");
+    expect(cards[4]).not.toHaveTextContent("Verified in notice");
+    expect(within(cards[4]!).getByTestId("plan-action-support")).toHaveTextContent(
+      "Insufficient evidence"
+    );
+    const highlighted = [...screen.getByTestId("plan-reader").querySelectorAll("mark.quote-mark")]
+      .map((node) => node.textContent ?? "")
+      .join("\n");
+    expect(highlighted).toContain(payQuote);
+    expect(highlighted).toContain(balanceQuote);
   });
 });
