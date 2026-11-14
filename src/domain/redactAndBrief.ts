@@ -6,6 +6,7 @@ import {
   meaningfulNameComponents,
   normalizeDashes,
   replaceNameComponent,
+  replacePersonalName,
 } from "./textNormalize";
 import {
   CloudPayloadValidationError,
@@ -484,7 +485,11 @@ export function redactAndBuildBrief(input: RedactAndBriefInput): RedactAndBriefR
       if (item.wholeWord) {
         return replaceNameComponent(text, item.rawValue, item.placeholder);
       }
-      return replaceAllInsensitive(text, item.rawValue, item.placeholder);
+      return replacePersonalName(
+        replaceAllInsensitive(text, item.rawValue, item.placeholder),
+        item.rawValue,
+        item.placeholder
+      );
     }, value);
   };
 

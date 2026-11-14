@@ -42,12 +42,12 @@ export function InferenceBadge({
 }: InferenceBadgeProps) {
   const resolved = resolveInferenceBadgeState(actualInferenceSource);
 
-  const colors =
+  const tone =
     resolved.status === "verified_on_device"
-      ? { bg: "#dcfce7", border: "#16a34a", fg: "#14532d" }
+      ? "is-on-device"
       : resolved.status === "verified_in_cloud"
-        ? { bg: "#dbeafe", border: "#2563eb", fg: "#1e3a8a" }
-        : { bg: "#fef3c7", border: "#d97706", fg: "#78350f" };
+        ? "is-in-cloud"
+        : "is-unverified";
 
   return (
     <span
@@ -58,19 +58,7 @@ export function InferenceBadge({
       }
       data-inference-status={resolved.status}
       data-raw-inference-source={resolved.rawReportedValue}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: "0.4rem",
-        padding: "0.2rem 0.6rem",
-        borderRadius: "999px",
-        border: `1px solid ${colors.border}`,
-        backgroundColor: colors.bg,
-        color: colors.fg,
-        fontFamily: "monospace",
-        fontSize: "0.82rem",
-        fontWeight: 700,
-      }}
+      className={`inference-badge ${tone}`}
     >
       <span>{resolved.badgeText}</span>
       <span style={{ fontWeight: 400, opacity: 0.85 }}>
