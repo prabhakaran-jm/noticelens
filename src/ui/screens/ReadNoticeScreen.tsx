@@ -42,6 +42,14 @@ export function ReadNoticeScreen(props: {
           fact check as the action plan.
         </p>
       </header>
+      {props.grounded.categoryDecision.needsConfirmation ||
+      props.grounded.categoryDecision.modelIgnored ? (
+        <div className="banner info" data-testid="category-guidance" role="status">
+          {props.grounded.categoryDecision.needsConfirmation
+            ? "The notice does not confirm one category, so specialist guidance was not selected."
+            : "The on-device category did not match the notice text. Guidance follows the notice text."}
+        </div>
+      ) : null}
       {limited ? (
         <div className="banner" data-testid="limited-mode" role="status">
           <strong>Limited Mode.</strong> This browser has not made an on-device language model

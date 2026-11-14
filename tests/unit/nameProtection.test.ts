@@ -225,3 +225,72 @@ describe("N-2 compact and normalised name matching", () => {
     ).not.toContain("sarahexample");
   });
 });
+
+describe("M2A-1 fullwidth and NFD name components", () => {
+  it("Z4 redacts a fullwidth name component and keeps the surrounding offsets", () => {
+    const fullwidth = "Ｅｘａｍｐｌｅ";
+    const text = `Please contact ${fullwidth} before the response date.`;
+    expectRejected(text, "Sarah Example");
+    const redacted = replaceNameComponent(text, "Example", "[RECIPIENT_NAME]");
+    expect(redacted).toBe("Please contact [RECIPIENT_NAME] before the response date.");
+    expect(identifierLeaks(redacted, "Sarah Example")).toBe(false);
+    expect(text.slice(0, "Please contact ".length)).toBe("Please contact ");
+    expect(redacted.startsWith("Please contact ")).toBe(true);
+    expect(redacted.endsWith(" before the response date.")).toBe(true);
+  });
+
+  it("Z8 redacts an NFD name component and the NFC form of the same name", () => {
+    const nfd = "Jose\u0301";
+    const text = `Please contact ${nfd} before the response date.`;
+    expectRejected(text, "José Example");
+    const redacted = replaceNameComponent(text, "José", "[RECIPIENT_NAME]");
+    expect(redacted).toBe("Please contact [RECIPIENT_NAME] before the response date.");
+    expect(redacted).not.toContain("\u0301");
+    expect(identifierLeaks(redacted, "José Example")).toBe(false);
+    expectRejected("Please contact José before the response date.", "Jose\u0301 Example");
+  });
+});
+
+describe("M2A-3 capitalised names and guard agreement", () => {
+  it("protects a capitalised Bill or Energy and leaves the lowercase phrase", () => {
+    expectRejected("Please pay the Bill before the response date.", "Bill Payer");
+    expectAllowed("Please pay the bill before the response date.", "Bill Payer");
+    expectRejected("Please review Energy billing before the response date.", "Alex Energy");
+    expectAllowed("Please review energy billing before the response date.", "Alex Energy");
+    expect(replaceNameComponent("Please review Energy billing today.", "Energy", "[N]")).toBe(
+      "Please review [N] billing today."
+    );
+    expect(replaceNameComponent("Please review energy billing today.", "Energy", "[N]")).toBe(
+      "Please review energy billing today."
+    );
+  });
+
+  it("redacts exactly the names the guard reports", () => {
+    const cases: Array<[string, string]> = [
+      ["Please ask Bill to pay the bill before the response date.", "Bill Payer"],
+      ["Please contact the billing team before the response date.", "Bill Payer"],
+      ["Please ask Energy about the energy supply before the response date.", "Sarah Energy"],
+      ["Please review energy billing before the response date.", "Alex Energy"],
+      ["The annual amount is due before the response date.", "Ann Example"],
+      ["Please contact Ann before the response date.", "Ann Example"],
+      ["There is a problem with the stated balance before the date.", "Rob Sample"],
+      ["Please contact Sar\u200Bah Example before the response date.", "Sarah Example"],
+      ["Please contact Ｅｘａｍｐｌｅ before the response date.", "Sarah Example"],
+    ];
+    for (const [text, name] of cases) {
+      const leaked = identifierLeaks(text, name);
+      let redacted = replacePersonalName(text, name, "[N]");
+      for (const part of name.split(/\s+/)) {
+        if (part.length >= 3) {
+          redacted = replaceNameComponent(redacted, part, "[N]");
+        }
+      }
+      expect(identifierLeaks(redacted, name), text).toBe(false);
+      if (!leaked) {
+        expect(redacted, text).toBe(text);
+      } else {
+        expect(redacted, text).not.toBe(text);
+      }
+    }
+  });
+});

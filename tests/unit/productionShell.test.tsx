@@ -109,6 +109,30 @@ describe("production Civic Calm shell", () => {
     expect(JSON.stringify(receipt)).not.toContain("must not be stored");
   });
 
+  it("records a local privacy approval and clears it when the brief changes", async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByTestId("nav-reply"));
+    const send = screen.getByTestId("cloud-send-button");
+    expect(send).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Review privacy approval" }));
+    const exact = screen.getByTestId("privacy-exact-json").textContent ?? "";
+    expect(exact.startsWith('{"schemaVersion":"noticelens.cloud-brief.v1"')).toBe(true);
+    fireEvent.click(screen.getByRole("checkbox", { name: "I have reviewed this exact payload" }));
+    fireEvent.click(screen.getByTestId("privacy-approve"));
+    expect(screen.getByTestId("privacy-approved")).toBeInTheDocument();
+    expect(screen.getByTestId("cloud-send-button")).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.getByTestId("privacy-current")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("nav-plan"));
+    fireEvent.change(screen.getByLabelText("What you want the reply to ask"), {
+      target: { value: "confirm_payment_plan_options" },
+    });
+    fireEvent.click(screen.getByTestId("nav-reply"));
+    expect(screen.queryByTestId("privacy-current")).not.toBeInTheDocument();
+    expect(screen.getByTestId("cloud-send-button")).toBeDisabled();
+  });
+
   it("keeps invented action wording off the verified heading", () => {
     const payQuote =
       "Please pay the balance or contact our billing team by 25 November 2026 to discuss your account.";

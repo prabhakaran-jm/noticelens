@@ -25,6 +25,7 @@ import {
   groundObligation,
   type ClaimSupport,
 } from "../domain/sourceGrounding";
+import { decideNoticeCategory, type NoticeCategoryDecision } from "../domain/noticeCategory";
 import type {
   ActionSummaryId,
   NoticeCategory,
@@ -104,6 +105,7 @@ export interface GroundedObligationView {
 export interface GroundedNoticeViewModel {
   rawText: string;
   noticeCategory: NoticeCategory;
+  categoryDecision: NoticeCategoryDecision;
   issueDate: GroundedDateView & { assessment: IssueDateAssessment };
   amount: GroundedAmountView;
   billingPeriod: {
@@ -188,23 +190,12 @@ function isDeadlineLine(line: string): boolean {
   return /\b(by|deadline|due|no later than|respond)\b/i.test(line);
 }
 
-function categoryFromText(text: string, extraction?: RawNoticeExtraction | null): NoticeCategory {
-  if (extraction?.noticeCategory) {
-    return extraction.noticeCategory;
-  }
-  if (/\belectricity\b/i.test(text)) {
-    return "utility_electricity";
-  }
-  if (/\bgas\b/i.test(text)) {
-    return "utility_gas";
-  }
-  if (/\bcouncil tax\b/i.test(text)) {
-    return "council_tax";
-  }
-  if (/\bservice charge\b/i.test(text)) {
-    return "housing_service_charge";
-  }
-  return "other_household_notice";
+function categoryDecisionFor(
+  text: string,
+  extraction?: RawNoticeExtraction | null,
+  explicit?: NoticeCategory
+): NoticeCategoryDecision {
+  return decideNoticeCategory(text, explicit ?? extraction?.noticeCategory ?? null);
 }
 
 function isConditionalFee(sentence: string, raw: string): boolean {
@@ -516,12 +507,17 @@ export function groundNoticeFacts(input: {
 }): GroundedNoticeViewModel {
   const rawText = input.rawNoticeText ?? "";
   const comparable = extractComparableFacts(rawText);
-  const noticeCategory =
-    input.noticeCategory ?? categoryFromText(rawText, input.extraction ?? null);
+  const categoryDecision = categoryDecisionFor(
+    rawText,
+    input.extraction ?? null,
+    input.noticeCategory
+  );
+  const noticeCategory = categoryDecision.noticeCategory;
   if (rawText.trim().length === 0) {
     return {
       rawText,
       noticeCategory,
+      categoryDecision,
       issueDate: {
         stated: null,
         iso: null,
@@ -604,6 +600,7 @@ export function groundNoticeFacts(input: {
   return {
     rawText,
     noticeCategory,
+    categoryDecision,
     issueDate: { ...issue, assessment: assessIssueDate(issue.stated, input.today) },
     amount,
     billingPeriod: {

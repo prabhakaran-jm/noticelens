@@ -42,25 +42,25 @@ Bare or unconventional placeholder forms can remain unblocked. Gate: Milestone 2
 
 Claude Opus 5.5 reviewed `2ae6cb8` as merge with documented deferments. The follow-up patch on `feat/m2-production-ui` addresses M2A-2. Live notice-to-cloud drafting stays disabled. These notes do not claim that personal data is guaranteed to have been removed.
 
-### M2A-1 — Medium, mandatory M2B security gate
+### M2A-1 — Medium — fixed for Z4 and Z8
 
-Fullwidth and NFD single-name components can bypass identifier matching. Reproductions Z4 and Z8. Fix Unicode normalisation consistently across redaction, matching, and final cloud validation before enabling live cloud submission.
+Fullwidth and NFD single-name components could bypass identifier matching. Reproductions Z4 and Z8. Milestone 2B-1 uses one NFKC fold for detection, redaction, and the final payload guard, and maps each folded match back to the original span. This is not a claim that every personal identifier is removed.
 
 ### M2A-2 — Medium — fixed for the reviewed case
 
 A model-generated action such as “Attend a court hearing about this debt” was shown as an Action Plan heading with a “Verified in notice” badge when the quotation merely occurred in the notice. The heading is now the deterministic action-summary label. That label is verified only when the quotation contains the action words that select it. An exact quote match alone does not confer a verified status. Unsupported model wording is omitted from the action card. Unsupported amounts, unsupported deadlines, and truncated quotations stay unverified.
 
-### M2A-3 — Low
+### M2A-3 — Low — fixed for the capitalisation cases
 
-Capitalisation-aware name ambiguity and pipeline/guard inconsistency remain.
+A capitalised Bill or Energy is protected even when a billing word follows it. Lowercase phrases such as “the bill”, “billing”, “annual”, “problem”, and “energy billing” stay in place. Redaction and the payload guard use the same match.
 
 ### M2A-4 — Low
 
 Google Fonts requests go to third-party domains. Prefer self-hosting during production hardening.
 
-### M2A-5 — M2B blocker
+### M2A-5 — fixed for model category labels
 
-Model-supplied notice category can select incorrect guidance, including Ofgem guidance for council tax.
+The notice text selects the category. A model label of electricity does not apply Ofgem guidance to a council-tax notice. If the text supports more than one category, or the model names a category the text does not support, guidance stays general and confirmation is required.
 
 ### M2A-6 — Low
 
@@ -84,7 +84,7 @@ The capability probe initially shows Limited Mode. A control is missing its `ari
 
 ## Milestone 2
 
-Milestone 2 live cloud submission of edited or redacted notices stays blocked. N-1 and N-2 are fixed for their previously documented cases. M2A-1 must be fixed before that submission is enabled.
+Milestone 2 live cloud submission of edited or redacted notices stays blocked. N-1, N-2, M2A-1, M2A-3, and M2A-5 are fixed for the cases named above. A local privacy approval can record the exact canonical payload and is cleared by an edit. It does not start a cloud send. M2B-2 still has to connect that approval to one cloud call after an independent security review.
 
 - Ground source facts by role, with evidence for the whole clause rather than a matching fragment. The benchmark still uses the old short-quote verifier.
 - Require an explicit Privacy modal approval that is bound to the canonical cloud payload.

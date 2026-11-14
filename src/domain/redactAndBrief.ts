@@ -1,5 +1,6 @@
 import { readAmount } from "./amounts";
 import {
+  findFoldedOccurrences,
   hasLongNumericIdentifier,
   identifierLeaks,
   isCalendarToken,
@@ -153,25 +154,6 @@ function replaceAllInsensitive(
     return input;
   }
   return input.replace(new RegExp(escapeRegExp(needle), "gi"), () => replacement);
-}
-
-function findAll(haystack: string, needle: string): number[] {
-  const indexes: number[] = [];
-  const foldedHaystack = haystack.toLowerCase();
-  const foldedNeedle = needle.toLowerCase();
-  if (!foldedNeedle) {
-    return indexes;
-  }
-  let from = 0;
-  while (from < haystack.length) {
-    const index = foldedHaystack.indexOf(foldedNeedle, from);
-    if (index < 0) {
-      break;
-    }
-    indexes.push(index);
-    from = index + foldedNeedle.length;
-  }
-  return indexes;
 }
 
 function pushMatch(
@@ -397,8 +379,8 @@ export function redactAndBuildBrief(input: RedactAndBriefInput): RedactAndBriefR
     if (clean.length < 3) {
       continue;
     }
-    const indexes = findAll(input.rawNoticeText, clean);
-    if (indexes.length === 0) {
+    const occurrences = findFoldedOccurrences(input.rawNoticeText, clean);
+    if (occurrences.length === 0) {
       detected.push({
         start: 0,
         end: 0,
@@ -408,12 +390,12 @@ export function redactAndBuildBrief(input: RedactAndBriefInput): RedactAndBriefR
       });
       continue;
     }
-    for (const index of indexes) {
+    for (const occurrence of occurrences) {
       detected.push({
-        start: index,
-        end: index + clean.length,
+        start: occurrence.start,
+        end: occurrence.end,
         kind: "other",
-        rawValue: input.rawNoticeText.slice(index, index + clean.length),
+        rawValue: input.rawNoticeText.slice(occurrence.start, occurrence.end),
         placeholder: "",
       });
     }
