@@ -6,7 +6,6 @@ import { probeChromeLanguageModelAvailability, type ChromeCapabilityReport } fro
 import { buildCloudBrief } from "../../adapters/cloudBriefBuilder";
 import { createCloudApprovalSession } from "../../adapters/cloudApprovalSession";
 import {
-  approvalStillMatches,
   privacyApprovalView,
   recordUserPayloadApproval,
   type UserPayloadApproval,
@@ -46,6 +45,8 @@ export function NoticeLensApp() {
   const [flags, setFlags] = useState<CircumstanceFlag[]>([]);
   const [privacyOpen, setPrivacyOpen] = useState(false);
   const [userApproval, setUserApproval] = useState<UserPayloadApproval | null>(null);
+  const [editGeneration, setEditGeneration] = useState(0);
+  const invalidateApproval = () => setEditGeneration((current) => current + 1);
 
   useEffect(() => {
     let cancelled = false;
@@ -86,9 +87,10 @@ export function NoticeLensApp() {
       privacyApprovalView({
         serialized: inspection.exactSerialized,
         limitations: inspection.limitations,
-        approval: approvalStillMatches(userApproval, inspection.exactSerialized) ? userApproval : null,
+        approval: userApproval,
+        generation: editGeneration,
       }),
-    [inspection, userApproval]
+    [inspection, userApproval, editGeneration]
   );
   const session = useMemo(
     () =>
@@ -131,12 +133,14 @@ export function NoticeLensApp() {
               setExtraction(null);
               setReceipts([]);
               setDeviceMessage(null);
+              invalidateApproval();
             }}
             onLoadSample={() => {
               setOriginalText(ORIGINAL_SAMPLE);
               setExtraction(null);
               setReceipts([]);
               setDeviceMessage(null);
+              invalidateApproval();
             }}
             grounded={grounded}
             capability={capability}
@@ -150,6 +154,7 @@ export function NoticeLensApp() {
                   const receipt = receiptForOnDeviceCall(record);
                   setReceipts((current) => [...current, receipt]);
                   setExtraction(record.output);
+                  invalidateApproval();
                 })
                 .catch((error: unknown) => {
                   setDeviceMessage(
@@ -167,9 +172,15 @@ export function NoticeLensApp() {
             view={grounded}
             identifiers={identifiers}
             responseGoal={responseGoal}
-            onResponseGoal={setResponseGoal}
+            onResponseGoal={(goal) => {
+              setResponseGoal(goal);
+              invalidateApproval();
+            }}
             flags={flags}
-            onFlags={setFlags}
+            onFlags={(next) => {
+              setFlags(next);
+              invalidateApproval();
+            }}
           />
         ) : null}
         {step === "reply" ? (
@@ -201,7 +212,12 @@ export function NoticeLensApp() {
           view={privacy}
           onClose={() => setPrivacyOpen(false)}
           onApprove={(serialized) => {
-            setUserApproval(recordUserPayloadApproval(serialized));
+            if (inspection.exactSerialized === null) {
+              return;
+            }
+            setUserApproval(
+              recordUserPayloadApproval(serialized, inspection.exactSerialized, editGeneration)
+            );
           }}
         />
       ) : null}

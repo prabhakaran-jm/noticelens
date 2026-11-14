@@ -32,7 +32,8 @@ export function PrivacyApprovalModal(props: {
       >
         <h2 id="privacy-approval-title">Approve the exact brief</h2>
         <p>
-          This records the exact JSON below for local review. Cloud drafting stays off.
+          This records the exact JSON below for local review. An edit invalidates this
+          approval, including if the text is changed back. Cloud drafting stays off.
         </p>
         <p className="banner block" role="status">
           {CLOUD_SUBMISSION_BLOCKED_REASON}

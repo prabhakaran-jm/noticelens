@@ -4,6 +4,7 @@ import { runCloudDraftFromApprovedPayload } from "../../src/ai/cloudDrafter";
 import { CloudOutputValidationError, validateCloudDraftOutput } from "../../src/domain/cloudOutputGuard";
 import {
   canonicalCloudPayload,
+  revalidateFinalCloudPayload,
   validateCloudBoundPayload,
 } from "../../src/domain/cloudPayloadGuard";
 import {
@@ -207,6 +208,134 @@ describe("review probes — unicode dashes, name parts, long numbers, delivery, 
     );
     expect(joinedAccount?.rawValue).toBe(joiner);
     expect(joined.redactedNoticePreview).not.toContain("8472");
+  });
+
+  it.each([
+    ["K3 labelled", "Ref SMITH-4471", "SMITH-4471", "Ref [ACCOUNT_REF]"],
+    ["K3 lowercase", "ref smith-90210", "smith-90210", "ref [ACCOUNT_REF]"],
+    ["K3 unicode hyphen", "Ref SMITH\u20114471", "SMITH\u20114471", "Ref [ACCOUNT_REF]"],
+    ["K3 unlabelled", "Keep SMITH/4471 on the file.", "SMITH/4471", "Keep [ACCOUNT_REF] on the file."],
+  ])("%s keeps the whole account token together", (_name, line, token, redactedLine) => {
+    const rawNoticeText = noticeWith([
+      "18 November 2026",
+      "Dear John Smith,",
+      line,
+      "The period Nov-2026 is a calendar label.",
+      "Our records show an outstanding balance of £1,280 for electricity supplied between January and June 2025.",
+      PAY_QUOTE,
+    ]);
+    const result = briefFrom(rawNoticeText, PAY_QUOTE);
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    const account = result.localIdentifierMap.entries.find((entry) => entry.rawValue === token);
+    const start = rawNoticeText.indexOf(token);
+    expect(account?.kind).toBe("account_ref");
+    expect(account?.placeholder).toBe("[ACCOUNT_REF]");
+    expect(account?.startOffset).toBe(start);
+    expect(account?.endOffset).toBe(start + token.length);
+    expect(rawNoticeText.slice(account?.startOffset, account?.endOffset)).toBe(token);
+    expect(result.redactedNoticePreview).toContain(redactedLine);
+    expect(result.redactedNoticePreview).toContain("Nov-2026");
+    expect(result.redactedNoticePreview).not.toContain(token);
+    expect(result.redactedNoticePreview).not.toContain("[RECIPIENT_NAME]-");
+    expect(result.redactedNoticePreview).not.toContain("[RECIPIENT_NAME]/");
+    expect(result.redactedNoticePreview).not.toContain("John Smith");
+    expect(JSON.stringify(result.structuralBrief)).not.toContain("4471");
+    expect(JSON.stringify(result.structuralBrief)).not.toContain("90210");
+  });
+
+  it("K5 rejects a digit tail beside any canonical placeholder", () => {
+    const clauses = [
+      "The saved reference is [RECIPIENT_NAME]-8472 today.",
+      "The saved reference is [ACCOUNT_REF]-8472 today.",
+      "The saved reference is [EMAIL]/100 today.",
+      "The saved reference is [SUPPLY_ADDRESS]4471 today.",
+      "The saved reference is [PHONE]-0207 today.",
+      "The saved reference is [NINO]-123 today.",
+      "The saved reference is [LOCAL_ID]-9 today.",
+    ];
+    for (const redactedClause of clauses) {
+      expect(() => revalidateFinalCloudPayload(clausePayload(redactedClause))).toThrow(
+        /partial identifier/
+      );
+    }
+
+    const rawNoticeText = noticeWith([
+      "18 November 2026",
+      "Dear John Smith,",
+      "Ref SMITH-4471",
+      "Our records show an outstanding balance of £1,280 for electricity supplied between January and June 2025.",
+      PAY_QUOTE,
+    ]);
+    const result = briefFrom(rawNoticeText, PAY_QUOTE);
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    const edited = {
+      ...result.structuralBrief,
+      redactedObligations: [
+        {
+          ...result.structuralBrief.redactedObligations[0]!,
+          redactedClause: "The saved reference is [RECIPIENT_NAME]-8472 today.",
+        },
+      ],
+    };
+    expect(() =>
+      revalidateFinalCloudPayload(edited, {
+        forbiddenIdentifiers: result.localIdentifierMap.entries.map((entry) => entry.rawValue),
+      })
+    ).toThrow(/partial identifier/);
+    const reintroduced = {
+      ...edited,
+      redactedObligations: [
+        {
+          ...edited.redactedObligations[0]!,
+          redactedClause: "The saved reference is SMITH-4471 today.",
+        },
+      ],
+    };
+    expect(() =>
+      revalidateFinalCloudPayload(reintroduced, {
+        forbiddenIdentifiers: result.localIdentifierMap.entries.map((entry) => entry.rawValue),
+      })
+    ).toThrow(/account reference|forbidden local identifier/);
+  });
+
+  it.each([
+    ["Z6d soft hyphen", "\u00AD"],
+    ["Z6d zero width", "\u200B"],
+    ["Z6d word joiner", "\u2060"],
+  ])("%s redacts the complete salutation and the guard rejects it", (_name, mark) => {
+    const disguised = `Sar${mark}ah Exam${mark}ple`;
+    const rawNoticeText = noticeWith([
+      "18 November 2026",
+      `Dear ${disguised},`,
+      "Our records show an outstanding balance of £1,280 for electricity supplied between January and June 2025.",
+      PAY_QUOTE,
+    ]);
+    const result = briefFrom(rawNoticeText, PAY_QUOTE);
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    const name = result.localIdentifierMap.entries.find((entry) => entry.rawValue === disguised);
+    const start = rawNoticeText.indexOf(disguised);
+    expect(name?.kind).toBe("recipient_name");
+    expect(name?.startOffset).toBe(start);
+    expect(name?.endOffset).toBe(start + disguised.length);
+    expect(rawNoticeText.slice(name?.startOffset, name?.endOffset)).toBe(disguised);
+    expect(result.redactedNoticePreview).not.toContain(disguised);
+    expect(result.redactedNoticePreview).not.toContain("Sarah");
+    expect(result.redactedNoticePreview).not.toContain(mark);
+    expect(() =>
+      validateCloudBoundPayload(
+        clausePayload(`Please contact ${disguised} before the response date.`),
+        { forbiddenIdentifiers: ["Sarah Example", disguised] }
+      )
+    ).toThrow(/forbidden local identifier|personal salutation/);
   });
 
   it.each([

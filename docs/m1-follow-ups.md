@@ -1,6 +1,6 @@
 # NoticeLens follow-ups after Milestone 1
 
-This note is not a product screen. Milestone 1 stays on the deterministic domain core and the security fixes already on `feat/m1-deterministic-domain-core`. N-1 and N-2 are fixed for the reproductions named below, and M2A-2 is fixed in the Milestone 2A follow-up. M2B-1a is fixed for the soft-hyphen reproduction Z6. The other items remain outstanding.
+This note is not a product screen. Milestone 1 stays on the deterministic domain core and the security fixes already on `feat/m1-deterministic-domain-core`. N-1 and N-2 are fixed for the reproductions named below, and M2A-2 is fixed in the Milestone 2A follow-up. M2B-1a is fixed for the soft-hyphen reproduction Z6. M2B-2A fixes K3/K5, the tested Z6d salutation variants, the named obligation-role cases, and the local approval lifecycle. Live cloud submission stays closed. The other items remain outstanding.
 
 Independent review of `5f2f9d0` is **merge with documented deferments**. O10 nested placeholders and the name-component substring false positives are verified fixed. `npm test` passed 83/83, and typecheck and build passed. The additional regressions below are not reachable through the shipped UI. Recording them is not a claim that personal data is guaranteed to be removed. Pattern checks do not prove that.
 
@@ -90,48 +90,52 @@ Review of `857d792` on `feat/m2b-secure-cloud-flow`. Live notice-to-cloud submis
 
 A known name such as Sarah Example stayed in the notice, and the final cloud guard accepted it, when U+00AD sat inside one component (`Sar` + U+00AD + `ah`). The shared fold treated that soft hyphen as a Unicode dash and turned it into `-`, so the component no longer matched. Detection, redaction, and the final payload guard now use one fold that removes U+00AD with the other format characters and keeps the original source offsets. Real hyphens in account references and surnames stay hyphens. This is not a claim that every personal identifier is removed.
 
-### Z6d — Salutation detector can miss a soft-hyphen name — remaining limitation
+### Z6d — Soft-hyphen salutation — fixed for the tested variants
 
-`Dear Sar\u00ADah Exam\u00ADple` can miss the complete name in the salutation detector, so those components are not captured from the greeting and can escape. This remains a privacy limitation. It is a mandatory consideration before real cloud submission. The account-reference fix does not rewrite salutation detection.
+`Dear Sar\u00ADah Exam\u00ADple` is now detected as the complete original identifier, including the format characters, and redacted locally. The same path covers U+200B and U+2060 inside the salutation. Original character offsets are kept. The final cloud guard rejects those disguised forms. This is not a claim that every Unicode name variant is removed.
 
-### M2B-1b — Hard gate before cloud send or a product demonstration
+### K3/K5 — Partial account-reference leakage — fixed for the tested patterns
 
-Cancelled, withdrawn, negated, and historical-payment claims can still appear as Verified. Do not enable the M2B-2 cloud-send path, and do not record a product demonstration, until this is closed.
+A name component is no longer split out of a letter token that continues with a separator and digits. `Ref SMITH-4471` for recipient John Smith becomes `Ref [ACCOUNT_REF]`, not `Ref [RECIPIENT_NAME]-4471`. Labelled and unlabelled forms are covered, including a lowercase reference and a Unicode hyphen, and a slash-joined token. A final cloud clause that still contains `[RECIPIENT_NAME]-8472`, or the same digit tail beside any other canonical placeholder, is rejected. Edited clauses are revalidated. Month labels such as `Nov-2026` are not treated as account references. Surrounding prose and original source offsets stay in place. This is not a claim that every identifier is removed.
 
-### M2B-1c — Approval can revive after an edit is reverted
+### Soft-hyphen alphanumeric false positives — remaining limitation
 
-A stored approval is still the same string comparison. Editing the payload and then restoring the same canonical bytes makes that approval match again. Cloud activation requires the approval to be invalidated immediately on any edit, and the approval must be usable only once.
+A format character that joins letters to three or more digits is still treated as an account token. That catches hidden references such as `EXAMPLE` + U+00AD + `8472`. It can also flag ordinary text that is not an account reference, for example a word, a soft hyphen, and a number. That false positive remains. It is not solved by a special case for one reference string.
 
-### M2B-1d — Approval is not checked against the current canonical payload
+### M2B-1b — Obligation role grounding — fixed for the named cases
 
-`recordUserPayloadApproval` currently checks only that the string has the canonical prefix and contains no newlines. Before cloud activation it must be validated against the current canonical payload.
+A £1,280 demand that the quotation says has been cancelled, a payment request the quotation says has been withdrawn, and “You do not need to pay the balance or contact…” are not Verified and do not enter the cloud-bound brief as established payment instructions. A historical payment of £1,280 already received is not shown as an outstanding balance. A truncated quotation stays incomplete. A quotation that both asks for payment and cancels that demand fails closed as ambiguous. “May be withdrawn”, “if payment is not received”, and “if you do not pay” are not treated as those blocking roles, so a genuine payable balance and a conditional fee stay supported. Quotation existence alone is not semantic support.
+
+### M2B-1c — Approval invalidated on edit — fixed for the local lifecycle
+
+Any relevant edit increments an approval generation immediately. Restoring the previous text does not restore the previous approval. Approval is recorded only from the deliberate review action. Each approval id is single-use: the future send function consumes it and still refuses to call the cloud. A stale callback recorded under an older generation does not match the current generation. The production screen does not call `CloudPayloadApproval.begin`.
+
+### M2B-1d — Approval checked against the current canonical payload — fixed for the local record
+
+`recordUserPayloadApproval` now requires the exact current canonical serialization and runs `canonicalCloudPayload` on it. Unknown keys, malformed placeholders, and clauses that fail the payload guard are rejected. This record still cannot send.
 
 ### M2B-1e — Ambiguous categories still need a decision
 
 An ambiguous-category notice needs an explicit confirmation, or the product must stay on safe general guidance. A model label alone is not that confirmation.
 
-A local privacy approval can record the exact canonical JSON. That record does not start a cloud send. It is not yet cleared by every edit: restoring the previous payload makes the stored string match again.
+A local privacy approval records the exact canonical JSON for the current edit generation. An edit invalidates it, including when the text is changed back. That record does not start a cloud send. `CLOUD_SUBMISSION_ENABLED` stays false.
 
 ## Milestone 2
 
-Milestone 2 live cloud submission of edited or redacted notices stays blocked. N-1, N-2, M2A-1, M2A-3, M2A-5, and M2B-1a are fixed for the cases named above. A local privacy approval records the exact canonical payload and does not start a cloud send. It is not yet invalidated by every edit. M2B-2 still has to connect a one-time approval to one cloud call after an independent security review. M2B-1b is a hard gate before that path is enabled or a product demonstration is recorded.
+Milestone 2 live cloud submission of edited or redacted notices stays blocked. N-1, N-2, M2A-1, M2A-3, M2A-5, M2B-1a, K3/K5, the tested Z6d variants, and the named M2B-1b obligation cases are fixed for the cases named above. A local privacy approval records the exact canonical payload, is invalidated by a later edit, and does not start a cloud send. M2B-2 still has to connect a one-time approval to one cloud call after an independent security review. Do not enable that path, and do not record a product demonstration, until the remaining items below are closed.
 
-These stay assigned to M2B-2 and are not part of this correction:
+These stay tracked and are not implemented in M2B-2A:
 
-- Role grounding and truncated quotations.
-- Nonstandard placeholders.
+- N-5 nonstandard placeholders, and export restrictions while a placeholder is unresolved or malformed.
 - On-device inference timeout.
-- Cloud response legal-language and invented-identifier validation.
+- Category confirmation for ambiguous notices (M2B-1e).
+- Cloud-output legal-language and invented-identifier checks.
 - Real Chrome request-body inspection before a public demo.
-- Content Security Policy and the dependency audit.
 - Google Fonts third-party requests.
-- SpikeHarness removal or isolation before a public demo.
-
-- Ground source facts by role, with evidence for the whole clause rather than a matching fragment. The benchmark still uses the old short-quote verifier.
-- Require an explicit Privacy modal approval that is bound to the canonical cloud payload.
-- Stop the legacy Milestone 0 spike from displaying facts that are not supported by the source.
-- Block Copy and Download in the user interface while any placeholder is unresolved or malformed. The domain flag exists; the screens do not enforce it yet.
-- Integrate the four approved screens for real, in place of the spike harness.
+- Content Security Policy and the dependency audit.
+- Demo-mode removal of the legacy SpikeHarness.
+- Soft-hyphen alphanumeric false positives, where a format character joins letters to digits that are not an account reference.
+- The benchmark still uses the old short-quote verifier. Role grounding above covers the named obligation cases only.
 
 ## Milestone 4
 
@@ -148,7 +152,7 @@ These items are not implemented here:
 - Residual PII detection limitations, including unusual names, addresses, and Unicode homoglyphs.
 - Production test-injection seam review and restriction.
 - Dead raw-embed guard.
-- Source role grounding and truncated evidence.
+- Source role grounding beyond the cancelled, withdrawn, negated, historical, and truncated cases named under M2B-1b.
 - Cloud output legal-conclusion validation.
 - False positives in grouped number detection.
 - Bracketed instructional text versus supported placeholder tokens.

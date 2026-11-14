@@ -5,6 +5,7 @@ import {
   groundNoticeFacts,
 } from "../../src/adapters/groundNoticeFacts";
 import { redactAndBuildBrief } from "../../src/domain/redactAndBrief";
+import { groundMonetaryAmount, groundObligation } from "../../src/domain/sourceGrounding";
 import type { RawNoticeExtraction } from "../../src/domain/types";
 
 const TODAY = "2026-11-13";
@@ -224,5 +225,117 @@ describe("groundNoticeFacts", () => {
     expect(briefSourceFromGrounded(view).obligations.map((item) => item.action)).not.toContain(
       "Attend a court hearing about this debt"
     );
+  });
+
+  it("does not verify cancelled, withdrawn, negated, historical, or ambiguous obligations", () => {
+    const cancelled = "The demand for £1,280 has been cancelled.";
+    const withdrawn = "The payment request for £640 has been withdrawn.";
+    const negated = "You do not need to pay the balance or contact our billing team.";
+    const historical = "We received your payment of £1,280 on 1 October 2026.";
+    const ambiguous =
+      "Please pay the outstanding balance of £1,280. This demand has been cancelled.";
+    const genuine = "Please pay the outstanding balance of £1,280 by 25 November 2026.";
+    const instalments =
+      "If payment is not received by 30 November 2026, your right to pay by monthly instalments may be withdrawn.";
+    const conditional = "A late payment fee of £40 may apply if you do not pay.";
+
+    for (const quote of [cancelled, withdrawn, negated, historical]) {
+      const fact = groundObligation(quote, "Pay the stated balance", quote);
+      expect(fact.verification?.verified).toBe(true);
+      expect(fact.support).not.toBe("supports_claim");
+      expect(fact.verifiedForDisplay).toBeNull();
+      expect(groundMonetaryAmount(quote, 1280, quote).verifiedForDisplay).toBeNull();
+    }
+    expect(groundMonetaryAmount(withdrawn, 640, withdrawn).support).toBe("substring_only");
+    expect(groundObligation(ambiguous, "Pay now", ambiguous).support).toBe("ambiguous");
+    expect(groundObligation(ambiguous, "Pay now", ambiguous).verifiedForDisplay).toBeNull();
+    expect(groundObligation(genuine, "Pay the outstanding balance", "Please pay the outstanding balance of £1,280...").support).toBe(
+      "incomplete"
+    );
+    expect(groundObligation(genuine, "Pay the outstanding balance", genuine).support).toBe(
+      "supports_claim"
+    );
+    expect(groundObligation(genuine, "Pay the outstanding balance", genuine).verifiedForDisplay).toBe(
+      "pay_stated_balance"
+    );
+    expect(groundObligation(instalments, "Review the instalment right", instalments).support).toBe(
+      "supports_claim"
+    );
+    expect(groundMonetaryAmount(conditional, 40, conditional).support).toBe("supports_claim");
+    expect(groundMonetaryAmount("The balance of £1,280 is not due.", 1280, "The balance of £1,280 is not due.").support).toBe(
+      "substring_only"
+    );
+
+    const mixed = [
+      "Outstanding balance of £520.",
+      historical,
+      "Please pay the outstanding balance of £520 by 25 November 2026.",
+    ].join("\n");
+    const mixedView = groundNoticeFacts({ rawNoticeText: mixed, today: TODAY });
+    expect(mixedView.amount.verifiedForDisplay).toBe(520);
+    expect(mixedView.amount.amountsGBP).not.toContain(1280);
+
+    const extraction: RawNoticeExtraction = {
+      noticeCategory: "utility_electricity",
+      issueDate: "not stated",
+      billingPeriod: "not stated",
+      amountGBP: 1280,
+      responseDeadline: "not stated",
+      obligations: [
+        { action: "Pay £1,280", dueDate: null, sourceQuote: cancelled },
+        { action: "Pay the outstanding balance", dueDate: "25 November 2026", sourceQuote: genuine },
+      ],
+    };
+    const grounded = groundNoticeFacts({
+      rawNoticeText: [cancelled, genuine].join("\n"),
+      today: TODAY,
+      extraction,
+    });
+    expect(grounded.obligations[0]?.headingSupport).not.toBe("supports_claim");
+    expect(grounded.obligations[0]?.verifiedForDisplay).toBeNull();
+    expect(grounded.obligations[1]?.headingSupport).toBe("supports_claim");
+    const source = briefSourceFromGrounded(grounded);
+    expect(source.obligations.map((item) => item.sourceQuote)).toEqual([genuine]);
+    expect(source.obligations.map((item) => item.sourceQuote)).not.toContain(cancelled);
+
+    const onlyCancelled = redactAndBuildBrief({
+      rawNoticeText: cancelled,
+      responseGoal: "request_billing_review",
+      guidanceIds: ["ofgem-backbilling-12m-v1"],
+      extraction: {
+        noticeCategory: "utility_electricity",
+        issueDate: "not stated",
+        billingPeriod: "not stated",
+        amountGBP: 1280,
+        responseDeadline: "not stated",
+        obligations: [{ action: "Pay £1,280", dueDate: null, sourceQuote: cancelled }],
+      },
+    });
+    expect(onlyCancelled.ok).toBe(false);
+
+    const kept = redactAndBuildBrief({
+      rawNoticeText: [cancelled, genuine].join("\n"),
+      responseGoal: "request_billing_review",
+      guidanceIds: ["ofgem-backbilling-12m-v1"],
+      extraction: {
+        noticeCategory: "utility_electricity",
+        issueDate: "18 November 2026",
+        billingPeriod: "not stated",
+        amountGBP: 1280,
+        responseDeadline: "25 November 2026",
+        obligations: [
+          { action: "Pay £1,280", dueDate: null, sourceQuote: cancelled },
+          { action: "Pay the outstanding balance", dueDate: "25 November 2026", sourceQuote: genuine },
+        ],
+      },
+    });
+    expect(kept.ok).toBe(true);
+    if (kept.ok) {
+      expect(kept.excludedUnverifiedQuotes).toContain(cancelled);
+      expect(kept.structuralBrief.redactedObligations).toHaveLength(1);
+      expect(kept.structuralBrief.redactedObligations[0]?.redactedClause).toContain("Please pay");
+      expect(kept.structuralBrief.redactedObligations[0]?.redactedClause).not.toContain("cancelled");
+      expect(kept.structuralBrief.amountsGBP).toEqual([1280]);
+    }
   });
 });

@@ -100,6 +100,44 @@ export function mapProjectedSpan(
   return { start: originStart, end: originEnd };
 }
 
+const MONTH_NAMES = new Set([
+  "jan",
+  "january",
+  "feb",
+  "february",
+  "mar",
+  "march",
+  "apr",
+  "april",
+  "may",
+  "jun",
+  "june",
+  "jul",
+  "july",
+  "aug",
+  "august",
+  "sep",
+  "sept",
+  "september",
+  "oct",
+  "october",
+  "nov",
+  "november",
+  "dec",
+  "december",
+]);
+
+function isMonthName(value: string): boolean {
+  return MONTH_NAMES.has(value.toLowerCase());
+}
+
+/** A name component must not be split out of LETTERS + separator + digits. */
+function followedByAccountTail(text: string, end: number): boolean {
+  return /^(?:[\p{Cf}\u2010\u2011\u2012\u2013\u2014\u2015\u2212\uFE58\uFE63\uFF0D\u2043/-])+\d/u.test(
+    text.slice(end)
+  );
+}
+
 /** A letter-digit token whose original span hid a format character inside it. */
 export function containsFormatJoinedAccountToken(value: string): boolean {
   const projected = projectIdentifierPattern(value);
@@ -113,6 +151,26 @@ export function containsFormatJoinedAccountToken(value: string): boolean {
     if (/\p{Cf}/u.test(value.slice(origin.start, origin.end))) {
       return true;
     }
+  }
+  return false;
+}
+
+/**
+ * Hyphenated letter-digit tokens are account references in any case.
+ * A month name such as Nov-2026 is not. Format characters that join the
+ * letters to the digits count as the same token.
+ */
+export function containsAlphanumericAccountReference(value: string): boolean {
+  if (containsFormatJoinedAccountToken(value)) {
+    return true;
+  }
+  const projected = projectIdentifierPattern(value);
+  const pattern = /\b([A-Za-z]{2,12})([-/])(\d{3,12})\b/g;
+  for (const match of projected.text.matchAll(pattern)) {
+    if (match[2] === "-" && isMonthName(match[1] ?? "")) {
+      continue;
+    }
+    return true;
   }
   return false;
 }
@@ -314,6 +372,9 @@ function componentSpans(text: string, component: string): OriginalSpan[] {
     if (
       isDomainUseAt(text, folded, foldedStart, foldedStart + match[0].length, span.start, span.end, component)
     ) {
+      continue;
+    }
+    if (followedByAccountTail(text, span.end)) {
       continue;
     }
     spans.push(span);

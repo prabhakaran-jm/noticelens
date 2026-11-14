@@ -29,6 +29,15 @@ export function isCanonicalPlaceholder(token: string): boolean {
   return CANONICAL_PLACEHOLDER_EXACT.test(token);
 }
 
+/** Digits still attached to a canonical placeholder are an incomplete identifier. */
+export function hasPartialPlaceholderIdentifier(text: string): boolean {
+  const pattern = new RegExp(
+    `\\[(?:${BASE_PATTERN})(?:_[1-9]\\d*)?\\](?!\\s+[A-Za-z])\\s*[-/]?\\s*\\d`,
+    "i"
+  );
+  return pattern.test(text);
+}
+
 function isOpener(ch: string): boolean {
   return ch === "[" || ch === "{" || ch === "［";
 }
