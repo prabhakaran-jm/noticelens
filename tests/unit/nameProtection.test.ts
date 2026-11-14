@@ -201,6 +201,38 @@ describe("N-2 compact and normalised name matching", () => {
     );
   });
 
+  it("Z6 rejects a soft hyphen inside one name component", () => {
+    const inside = "Please contact Sar\u00ADah before the response date.";
+    expect(inside).toContain("\u00AD");
+    expectRejected(inside, "Sarah Example");
+    const redacted = replaceNameComponent(inside, "Sarah", "[RECIPIENT_NAME]");
+    expect(redacted).toBe("Please contact [RECIPIENT_NAME] before the response date.");
+    expect(redacted).not.toContain("\u00AD");
+    expect(identifierLeaks(redacted, "Sarah Example")).toBe(false);
+
+    const spaced = "Please contact Sar\u00AD ah Example before the response date.";
+    expectRejected(spaced, "Sarah Example");
+    const spacedRedacted = replacePersonalName(spaced, "Sarah Example", "[RECIPIENT_NAME]");
+    expect(spacedRedacted).toBe(
+      "Please contact [RECIPIENT_NAME] before the response date."
+    );
+    expect(spacedRedacted).not.toContain("\u00AD");
+    expect(identifierLeaks(spacedRedacted, "Sarah Example")).toBe(false);
+  });
+
+  it("keeps real hyphens in account references and surnames", () => {
+    expectRejected("Account reference EXAMPLE-8472 is printed today.", "EXAMPLE-8472");
+    expectRejected("Account reference EXAMPLE\u20118472 is printed today.", "EXAMPLE-8472");
+    const surname = "Please contact Mary-Jane Example before the response date.";
+    expectRejected(surname, "Mary-Jane Example");
+    const redacted = replaceNameComponent(surname, "Mary-Jane", "[RECIPIENT_NAME]");
+    expect(redacted).toBe("Please contact [RECIPIENT_NAME] Example before the response date.");
+    expectAllowed(
+      "Please contact Smith-Jones before the response date.",
+      "Sarah Example"
+    );
+  });
+
   it("redacts zero-width and letter-spaced copies when the name is known", () => {
     const quote =
       "Please contact Sar\u200Bah Example and S a r a h E x a m p l e before 25 November 2026.";

@@ -1,10 +1,12 @@
 /**
  * Shared text folding for identifier detection, redaction, and cloud checks.
- * Dash replacement is one code unit to one ASCII hyphen, so match offsets stay aligned.
+ * A real dash becomes one ASCII hyphen, so match offsets stay aligned.
+ * U+00AD is a format character, not a hyphen, and is removed with other
+ * format characters. The surrounding letters keep their original offsets.
  */
 
 const UNICODE_DASH =
-  /[\u00AD\u2010\u2011\u2012\u2013\u2014\u2015\u2212\uFE58\uFE63\uFF0D\u2043]/g;
+  /[\u2010\u2011\u2012\u2013\u2014\u2015\u2212\uFE58\uFE63\uFF0D\u2043]/g;
 
 const NAME_PARTICLES = new Set([
   "of",
@@ -44,9 +46,9 @@ export interface IdentifierFold {
 
 /**
  * One fold for detection, redaction, and the final payload guard.
- * Dashes stay one code unit. Format characters are removed. NFKC and lower case
- * run on each grapheme so fullwidth and NFD forms meet, and every folded unit
- * still points at the original span.
+ * Real dashes stay one code unit. Format characters, including the soft hyphen,
+ * are removed. NFKC and lower case run on each grapheme so fullwidth and NFD
+ * forms meet, and every folded unit still points at the original span.
  */
 export function foldIdentifierText(value: string): IdentifierFold {
   const startAt: number[] = [];

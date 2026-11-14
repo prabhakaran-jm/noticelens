@@ -1,6 +1,6 @@
 # NoticeLens follow-ups after Milestone 1
 
-This note is not a product screen. Milestone 1 stays on the deterministic domain core and the security fixes already on `feat/m1-deterministic-domain-core`. N-1 and N-2 are fixed for the reproductions named below, and M2A-2 is fixed in the Milestone 2A follow-up. The other items remain outstanding.
+This note is not a product screen. Milestone 1 stays on the deterministic domain core and the security fixes already on `feat/m1-deterministic-domain-core`. N-1 and N-2 are fixed for the reproductions named below, and M2A-2 is fixed in the Milestone 2A follow-up. M2B-1a is fixed for the soft-hyphen reproduction Z6. The other items remain outstanding.
 
 Independent review of `5f2f9d0` is **merge with documented deferments**. O10 nested placeholders and the name-component substring false positives are verified fixed. `npm test` passed 83/83, and typecheck and build passed. The additional regressions below are not reachable through the shipped UI. Recording them is not a claim that personal data is guaranteed to be removed. Pattern checks do not prove that.
 
@@ -35,7 +35,7 @@ Bare or unconventional placeholder forms can remain unblocked. Gate: Milestone 2
 - Cloud-output invented-identifier detection still requires strengthening.
 - The benchmark still relies on the old short-quote verifier.
 - Real-Chrome request-body inspection is mandatory before the public demo.
-- N-1 and N-2 are fixed for the reproductions named above. M2A-1 is the remaining Unicode matching gate before live cloud submission.
+- N-1 and N-2 are fixed for the reproductions named above. Z4 and Z8 are recorded under M2A-1. The soft-hyphen case Z6 is recorded under M2B-1a. Live cloud submission stays closed.
 - No statement in this repository may claim that personal data is guaranteed to have been removed.
 
 ## Milestone 2A review
@@ -82,9 +82,46 @@ The capability probe initially shows Limited Mode. A control is missing its `ari
 - The original Milestone 0 `SpikeHarness` remains in the repository. It is not mounted by `App` and is not the production route.
 - The Ofgem prompt uses the three canonical primary placeholders `[RECIPIENT_NAME]`, `[ACCOUNT_REF]`, and `[SUPPLY_ADDRESS]`. Review support for the other canonical bases and indexed placeholders during M2B.
 
+## Milestone 2B-1 review
+
+Review of `857d792` on `feat/m2b-secure-cloud-flow`. Live notice-to-cloud submission stays disabled. These notes do not claim that personal data is guaranteed to have been removed.
+
+### M2B-1a — Soft-hyphen privacy regression — fixed for Z6
+
+A known name such as Sarah Example stayed in the notice, and the final cloud guard accepted it, when U+00AD sat inside one component (`Sar` + U+00AD + `ah`). The shared fold treated that soft hyphen as a Unicode dash and turned it into `-`, so the component no longer matched. Detection, redaction, and the final payload guard now use one fold that removes U+00AD with the other format characters and keeps the original source offsets. Real hyphens in account references and surnames stay hyphens. This is not a claim that every personal identifier is removed.
+
+### M2B-1b — Hard gate before cloud send or a product demonstration
+
+Cancelled, withdrawn, negated, and historical-payment claims can still appear as Verified. Do not enable the M2B-2 cloud-send path, and do not record a product demonstration, until this is closed.
+
+### M2B-1c — Approval can revive after an edit is reverted
+
+A stored approval is still the same string comparison. Editing the payload and then restoring the same canonical bytes makes that approval match again. Cloud activation requires the approval to be invalidated immediately on any edit, and the approval must be usable only once.
+
+### M2B-1d — Approval is not checked against the current canonical payload
+
+`recordUserPayloadApproval` currently checks only that the string has the canonical prefix and contains no newlines. Before cloud activation it must be validated against the current canonical payload.
+
+### M2B-1e — Ambiguous categories still need a decision
+
+An ambiguous-category notice needs an explicit confirmation, or the product must stay on safe general guidance. A model label alone is not that confirmation.
+
+A local privacy approval can record the exact canonical JSON. That record does not start a cloud send. It is not yet cleared by every edit: restoring the previous payload makes the stored string match again.
+
 ## Milestone 2
 
-Milestone 2 live cloud submission of edited or redacted notices stays blocked. N-1, N-2, M2A-1, M2A-3, and M2A-5 are fixed for the cases named above. A local privacy approval can record the exact canonical payload and is cleared by an edit. It does not start a cloud send. M2B-2 still has to connect that approval to one cloud call after an independent security review.
+Milestone 2 live cloud submission of edited or redacted notices stays blocked. N-1, N-2, M2A-1, M2A-3, M2A-5, and M2B-1a are fixed for the cases named above. A local privacy approval records the exact canonical payload and does not start a cloud send. It is not yet invalidated by every edit. M2B-2 still has to connect a one-time approval to one cloud call after an independent security review. M2B-1b is a hard gate before that path is enabled or a product demonstration is recorded.
+
+These stay assigned to M2B-2 and are not part of this correction:
+
+- Role grounding and truncated quotations.
+- Nonstandard placeholders.
+- On-device inference timeout.
+- Cloud response legal-language and invented-identifier validation.
+- Real Chrome request-body inspection before a public demo.
+- Content Security Policy and the dependency audit.
+- Google Fonts third-party requests.
+- SpikeHarness removal or isolation before a public demo.
 
 - Ground source facts by role, with evidence for the whole clause rather than a matching fragment. The benchmark still uses the old short-quote verifier.
 - Require an explicit Privacy modal approval that is bound to the canonical cloud payload.

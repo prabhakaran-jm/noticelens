@@ -36,7 +36,11 @@ export function recordUserPayloadApproval(serialized: string): UserPayloadApprov
   };
 }
 
-/** Any edit that changes the canonical bytes drops the approval. */
+/**
+ * True only while the stored string equals the current canonical bytes.
+ * An edit that is later reverted can match again. Recording this does not
+ * invalidate the approval, and it does not check the live canonical payload.
+ */
 export function approvalStillMatches(
   approval: UserPayloadApproval | null,
   serialized: string | null
