@@ -74,6 +74,19 @@ export function ReadNoticeScreen(props: {
           <span className="fact-pill fact-pill-warning">
             {claimSupportLabel(props.grounded.amount.support)}
           </span>
+          {props.grounded.amount.conflict ? (
+            <span className="fact-pill fact-pill-warning" data-testid="read-amount-conflict">
+              No current balance is established.{" "}
+              {props.grounded.amount.amountsGBP.map((value) => formatGbp(value)).join(" and ")} are unverified. An
+              empty amounts list means no supported outstanding balance.
+            </span>
+          ) : null}
+          {props.grounded.amount.conditionalFeesGBP.length > 0 ? (
+            <p className="fact-subnote" data-testid="read-conditional-fee">
+              Conditional fee, not the balance:{" "}
+              {props.grounded.amount.conditionalFeesGBP.map((value) => formatGbp(value)).join(", ")}
+            </p>
+          ) : null}
         </article>
         <article className="fact-tile">
           <span className="fact-label">Notice date</span>

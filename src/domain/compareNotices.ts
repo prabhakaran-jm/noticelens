@@ -266,8 +266,13 @@ export function extractComparableFacts(rawText: string): ComparableNoticeFacts {
     .split(/\n/)
     .map((line) => line.replace(/\r$/, "").trim())
     .filter((line) => line.length > 0);
+  const pieces = rawText
+    .split(/(?<=[.!?])\s+/)
+    .map((piece) => piece.replace(/\s+/g, " ").trim())
+    .filter((piece) => piece.length > 0);
   const actionLine =
     lines.find((line) => /^please\b/i.test(line)) ??
+    pieces.find((piece) => /^please\b/i.test(piece)) ??
     lines.find((line) => new RegExp(`\\bby\\s+\\d{1,2}\\s+(?:${MONTH})\\s+\\d{4}\\b`, "i").test(line));
   return {
     rawText,

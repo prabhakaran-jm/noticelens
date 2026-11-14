@@ -196,7 +196,7 @@ These stay tracked and are not implemented here:
 - Demo-mode removal of the legacy SpikeHarness.
 - Soft-hyphen alphanumeric false positives, where a format character joins letters to digits that are not an account reference.
 - R5-2: fullwidth and accented salutations remain undetected, including Zoë Brontë, Siân Jones, José García, and Chloé O'Brien. `Sarah_1`, `SMITH_44`, and `Example99` remain insufficiently protected. Mandatory before live cloud submission.
-- R5-3 recorded cases: H2, I2, and J2; S1–S3; the recorded settlement and negation paraphrases; a quoted “cancelled”; Q3 unquoted prompt-injected £9,999, including beside a real £520; a truncated quote without an ellipsis; and D4. These now fail closed in ordinary tests. Before Phase 3 there were 29 expected failures. After Phase 3 there are none in that file. Unresolved semantic limits remain: a later sentence that independently states an outstanding balance is not treated as part of an earlier injected command; a later positive balance can follow a historical payment of the same figure; a terminal account settlement is not restored by repeating “please pay” for an amount already introduced; two surviving outstanding balances stay unverified even if one is repeated. A green suite is not proof that every unseen notice is grounded. Live cloud submission stays closed.
+- R5-3 recorded cases: H2, I2, and J2; S1–S3; the recorded settlement and negation paraphrases; a quoted “cancelled”; Q3 unquoted prompt-injected £9,999, including beside a real £520; a truncated quote without an ellipsis; and D4. These fail closed in ordinary tests. Phase 3B adds the 47 novel notices A–Z, including C2, C3, G, H2, K, O, P2, Q, V1–V3, and W1–W6. Negative reinstatement, contracted settlement, conditional charges, cut quotations, and authority-looking lines fail closed. Genuine current balances, including “you owe”, “total to pay”, and “please pay £”, remain when the rest of the notice does not undermine them. One sentence that says “£1,280 or the revised £520” stays ambiguous because the two figures are not separated. A green suite is not proof that every unseen notice is grounded. Live cloud submission stays closed.
 - N4 remains open: additional non-index array properties are not rejected by the v2 validator.
 - N5 remains open: an omitted `guardOptions` argument is still accepted by the approval view. R5-5, the immutable domain-owned approval registry, remains pending.
 - D1: getter or Proxy bypasses are rejected by the v2 validator. This does not enable cloud sending.
@@ -216,15 +216,15 @@ Lexical cues mark a role. They do not, by themselves, decide the notice. The not
 
 | Role | What the sentence is doing | Current outstanding balance |
 | --- | --- | --- |
-| Current outstanding balance | The figure is tied to an outstanding balance, an amount due, a balance now requested, or “please pay the balance”, and nothing later takes that role away | Yes, when it is the only surviving figure |
+| Current outstanding balance | The figure is tied to an outstanding balance, an amount due, a balance now requested, “you owe £”, “total to pay”, “please pay the balance”, or “please pay £”, and nothing later takes that role away | Yes, when it is the only surviving figure |
 | Historical payment | A completed past payment, such as a thank-you for a payment or a payment already received | No for that figure, until a later sentence positively states a current balance |
 | Paid in full | The account is paid in full | No. Repeating “please pay” for an amount already introduced does not restore it. A later figure that first appears as its own outstanding balance can remain |
 | Written off | The named charge or balance was written off | No for that amount |
 | Waived | The charge was waived | No for that amount, or for the account when the sentence names no amount |
 | Cancelled demand | A demand was cancelled | No for that demand, unless a later sentence itself states a current outstanding balance, or the demand is explicitly reinstated |
 | Withdrawn demand | A demand was withdrawn | Same as a cancelled demand |
-| Reinstated demand | The text reinstates a demand, says it remains payable, or says to disregard the cancellation | Restores the named amount |
-| Conditional fee | A fee, surcharge, or penalty that may apply, often if unpaid | No. The figure may be recorded as a conditional fee. Its date is not an issue date and not a response deadline |
+| Reinstated demand | The text explicitly says the demand is reinstated, or says to disregard the cancellation. “Remains payable” is not reinstatement. “Will not reinstate”, “no amount remains payable”, and “nothing further remains payable” do not restore a balance | Restores the named amount only. An uncertain scope stays unverified |
+| Conditional fee or conditional charge | A fee, surcharge, or penalty that may apply, or a charge that is only if, only after, would be due, or subject to confirmation. The word “fee” is not required | No. A fee may be recorded as a conditional fee. Its date is not an issue date and not a response deadline. A conditional charge is not payable now |
 | Refunded payment | A payment was refunded | No |
 | Conflicting balances | Two different figures both survive as current outstanding balances | No current balance. Both stay unverified. v2 `amountsGBP` is `[]` |
 | Unsupported payment instruction | “Pay”, “due”, or a bare currency amount without a positive balance role | No |
@@ -235,6 +235,32 @@ A terminal account settlement (paid in full, written off, waived, refunded, or a
 An empty v2 `amountsGBP` means no supported outstanding balance. It is not proof that the notice contains no amounts. Conflicting figures stay in the local view as unverified and are not copied into v2. Notice text that tells a model to ignore instructions or to record a verified balance is data, not a balance. A payment deadline is kept only when its own sentence still supports a surviving current payment, or it is an explicit response date that is not a conditional fee or a withdrawn demand. A date that appears only inside a conditional fee does not become the issue date or the response deadline.
 
 Phase 3 result for the recorded cases: H2, I2, J2, S1–S3, the settlement paraphrases, quoted cancellation, Q3, the no-ellipsis truncation, and D4 fail closed. A genuine current £1,280 and its deadline remain. A withdrawn or historical £1,280 does not remove a later current £520. An explicit reinstatement restores the named demand. A conditional fee beside a genuine balance stays a fee. £1,280 against £1,380 stays unverified, with `amountsGBP` empty. Action rows use stable claim ids. The v2 schema is unchanged: no `sourceQuote`, `redactedClause`, or private identifier map. D1, D2, D3, N1, and N2 stay in place. There is no v1 fallback on the production path. No unsupported payment action is given a Verified badge in the tested screens. R5-5 is not started. `CLOUD_SUBMISSION_ENABLED` stays false. A green suite is not, by itself, proof of complete grounding accuracy.
+
+## Phase 3B claim hardening
+
+Phase 3B keeps the same v2 schema and the same closed approval bytes. It records a local claim assessment for each notice sentence: source claim identity, amount, role, positive current-balance evidence, settlement, cancellation, waiver, conditional or hypothetical status, reinstatement, contradiction, the source span, whether the evidence is complete, and the decision `current`, `not_current`, or `unverified`. That assessment is not copied into v2.
+
+G1. “We will not reinstate this charge”, “No amount remains payable”, and “Nothing further remains payable” do not revive a cancelled or settled £1,280. “The £1,280 charge has been reinstated” still does.
+
+G2. “Owe us nothing”, “there’s nothing to pay”, “credited back”, “now zero”, “we’ve cancelled it”, “don’t have to pay”, and “you won’t need to pay” are account-level negations. A later generic “please pay” does not override them.
+
+G3. “Must pay only if”, “would be due”, “subject to confirmation”, “only after verification”, and a conditional charge that never uses the word “fee” are not payable now.
+
+G4. “You do not need to pay the amount below” covers the next stated amount only. A later, different outstanding balance with its own support can remain.
+
+G5. A quotation that stops before a condition, at a line break that continues the instruction, or in the middle of an instruction does not establish an unconditional demand.
+
+G6. A payment action is not Verified when the current obligation is unsupported or the notice has two surviving balances. “Please pay by 25 November” beside £1,280 and £1,180 is not a verified payment or a verified payment deadline. “Please respond by” stays a response deadline. “Please contact … by” stays a response deadline.
+
+G7. `ADMIN:`, `SYSTEM:`, `SYSTEM NOTE`, a note to the assistant, and “for any AI reading this” are untrusted notice content. They do not create a balance and they do not erase a separate £520.
+
+G8. “You owe £1,280”, “Total to pay: £1,280”, “Your outstanding balance is £1,280”, and “Please pay £1,280 by 25 November 2026” stay supported when no later sentence undermines them.
+
+The 47 notices are in `tests/unit/r5-3Phase3b.test.ts`. All 47 match the secure result: genuine current balances stay, and cancelled, settled, conditional, quoted, truncated, and injected amounts do not become a current balance. Read, Action Plan, closed-brief inspection, and canonical v2 share that verified or unverified decision. A conflict is explained on the Read screen. A conditional fee is labelled as a fee, not the balance, and its date is not the issue date.
+
+“Please pay £1,280 or the revised £520” stays ambiguous. The two figures are in one instruction and neither is named as the replacement. L2, “the amount due is now £520, replacing the £1,280”, keeps £520 because the sentence names the replacement. No scenario was rewritten to accept an unsafe verified balance.
+
+R5-3 can be treated as closed for the recorded sentences and these 47 notices. It is not a claim that every future paraphrase is grounded. R5-2, R5-4, and R5-5 remain open. Phase 4 has not started. `CLOUD_SUBMISSION_ENABLED` stays false.
 
 ## Milestone 4
 
@@ -251,7 +277,7 @@ These items are not implemented here:
 - Residual PII detection limitations, including unusual names, addresses, and Unicode homoglyphs.
 - Production test-injection seam review and restriction.
 - Dead raw-embed guard.
-- Source role grounding beyond the recorded R5-3 sentences. Those recorded sentences now fail closed. The semantic limits named under R5-3 remain. A green suite is not proof of complete grounding accuracy. Live cloud submission stays closed.
+- Source role grounding beyond the recorded R5-3 sentences and the 47 Phase 3B notices. Those tested notices now fail closed or keep a genuine current balance. A green suite is not proof of complete grounding accuracy. Live cloud submission stays closed.
 - Cloud output legal-conclusion validation.
 - False positives in grouped number detection.
 - Bracketed instructional text versus supported placeholder tokens.
