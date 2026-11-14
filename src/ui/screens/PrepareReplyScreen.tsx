@@ -7,6 +7,8 @@ import {
 export function PrepareReplyScreen(props: {
   inspection: CloudBriefInspection;
   session: CloudApprovalSession;
+  privacyApproved?: boolean;
+  onReviewPrivacy?: () => void;
 }) {
   return (
     <section className="stack" data-testid="screen-reply">
@@ -54,6 +56,12 @@ export function PrepareReplyScreen(props: {
         <pre className="exact-json" data-testid="formatted-json">{props.inspection.formattedInspectionJson ?? "No formatted view is available."}</pre>
       </details>
       <div className="btn-row">
+        <button type="button" className="btn secondary" onClick={props.onReviewPrivacy}>
+          Review privacy approval
+        </button>
+        {props.privacyApproved ? (
+          <p data-testid="privacy-current">The current exact payload has a local approval. Sending stays off.</p>
+        ) : null}
         <button
           type="button"
           className="btn"

@@ -1,10 +1,14 @@
 import { readAmount } from "./amounts";
 import {
+  containsFormatJoinedAccountToken,
+  findFoldedOccurrences,
   hasLongNumericIdentifier,
   identifierLeaks,
   isCalendarToken,
+  mapProjectedSpan,
   meaningfulNameComponents,
   normalizeDashes,
+  projectIdentifierPattern,
   replaceNameComponent,
   replacePersonalName,
 } from "./textNormalize";
@@ -155,25 +159,6 @@ function replaceAllInsensitive(
   return input.replace(new RegExp(escapeRegExp(needle), "gi"), () => replacement);
 }
 
-function findAll(haystack: string, needle: string): number[] {
-  const indexes: number[] = [];
-  const foldedHaystack = haystack.toLowerCase();
-  const foldedNeedle = needle.toLowerCase();
-  if (!foldedNeedle) {
-    return indexes;
-  }
-  let from = 0;
-  while (from < haystack.length) {
-    const index = foldedHaystack.indexOf(foldedNeedle, from);
-    if (index < 0) {
-      break;
-    }
-    indexes.push(index);
-    from = index + foldedNeedle.length;
-  }
-  return indexes;
-}
-
 function pushMatch(
   spans: Span[],
   kind: LocalIdentifierKind,
@@ -208,8 +193,6 @@ function detectSpans(rawNoticeText: string): Span[] {
   const email = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
   const phone =
     /(?:\+44\s?\d{3,4}|\(?0\d{3,4}\)?)\s?\d{3}\s?\d{3,4}\b(?![\s-]*\d)/gi;
-  const account =
-    /\b(?:Account|Tenancy|Customer|Council\s*Tax)\s*(?:reference|ref|number|no\.?)\s*[:#-]?\s*([A-Z0-9][A-Z0-9/-]{2,20})/gi;
   const longNumber = /\d(?:[\s\u00A0-]*\d){7,}/g;
   const salutation = /\bDear\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b/g;
   const nino = /\b[A-CEGHJ-PR-TW-Z]{2}\s?\d{2}\s?\d{2}\s?\d{2}\s?[A-D]\b/gi;
@@ -243,13 +226,20 @@ function detectSpans(rawNoticeText: string): Span[] {
     const kind: LocalIdentifierKind = /^(?:\+|0)/.test(rawValue.trim()) ? "phone" : "other";
     pushMatch(spans, kind, start, rawValue);
   }
-  for (const match of normalized.matchAll(account)) {
+  const projected = projectIdentifierPattern(rawNoticeText);
+  const account =
+    /\b(?:Account|Tenancy|Customer|Council\s*Tax)\s*(?:reference|ref|number|no\.?)\s*[:#-]?\s*([A-Z0-9][A-Z0-9/-]{2,20})/gi;
+  for (const match of projected.text.matchAll(account)) {
     const token = match[1];
     if (!token || match.index === undefined) {
       continue;
     }
-    const start = match.index + match[0].lastIndexOf(token);
-    pushMatch(spans, "account_ref", start, rawNoticeText.slice(start, start + token.length));
+    const tokenStart = match.index + match[0].lastIndexOf(token);
+    const origin = mapProjectedSpan(projected, tokenStart, tokenStart + token.length);
+    if (!origin) {
+      continue;
+    }
+    pushMatch(spans, "account_ref", origin.start, rawNoticeText.slice(origin.start, origin.end));
   }
   for (const match of normalized.matchAll(salutation)) {
     const name = match[1];
@@ -346,7 +336,7 @@ function residualPattern(text: string): string | null {
   ) {
     return "A street address pattern remained in the structural brief";
   }
-  if (/\b[A-Z]{2,12}-\d{3,12}\b/.test(visible)) {
+  if (/\b[A-Z]{2,12}-\d{3,12}\b/.test(visible) || containsFormatJoinedAccountToken(text)) {
     return "An account reference pattern remained in the structural brief";
   }
   return null;
@@ -397,8 +387,8 @@ export function redactAndBuildBrief(input: RedactAndBriefInput): RedactAndBriefR
     if (clean.length < 3) {
       continue;
     }
-    const indexes = findAll(input.rawNoticeText, clean);
-    if (indexes.length === 0) {
+    const occurrences = findFoldedOccurrences(input.rawNoticeText, clean);
+    if (occurrences.length === 0) {
       detected.push({
         start: 0,
         end: 0,
@@ -408,12 +398,12 @@ export function redactAndBuildBrief(input: RedactAndBriefInput): RedactAndBriefR
       });
       continue;
     }
-    for (const index of indexes) {
+    for (const occurrence of occurrences) {
       detected.push({
-        start: index,
-        end: index + clean.length,
+        start: occurrence.start,
+        end: occurrence.end,
         kind: "other",
-        rawValue: input.rawNoticeText.slice(index, index + clean.length),
+        rawValue: input.rawNoticeText.slice(occurrence.start, occurrence.end),
         placeholder: "",
       });
     }

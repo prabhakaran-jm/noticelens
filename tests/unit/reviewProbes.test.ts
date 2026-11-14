@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { acceptCloudCallResult, CloudDeliveryStoppedError } from "../../src/ai/cloudCallDelivery";
 import { runCloudDraftFromApprovedPayload } from "../../src/ai/cloudDrafter";
 import { CloudOutputValidationError, validateCloudDraftOutput } from "../../src/domain/cloudOutputGuard";
-import { validateCloudBoundPayload } from "../../src/domain/cloudPayloadGuard";
+import {
+  canonicalCloudPayload,
+  validateCloudBoundPayload,
+} from "../../src/domain/cloudPayloadGuard";
 import {
   approveCloudPayload,
   resetCloudSendStateForTests,
@@ -98,6 +101,112 @@ describe("review probes — unicode dashes, name parts, long numbers, delivery, 
         { forbiddenIdentifiers: ["EXAMPLE-8472"] }
       )
     ).toThrow(/partial identifier/);
+  });
+
+  it("U3 redacts a format-joined account reference and rejects it if reintroduced", () => {
+    const soft = "\u00AD";
+    const reference = `EXAMPLE${soft}8472`;
+    const quote = `For ${reference} please pay the balance by 25 November 2026.`;
+    const rawNoticeText = noticeWith([
+      "18 November 2026",
+      "Dear Sarah Example,",
+      `Account reference: ${reference}`,
+      "14 Example Road, Reading, RG0 0AA",
+      "Our records show an outstanding balance of £1,280 for electricity supplied between January and June 2025.",
+      quote,
+    ]);
+    const result = redactAndBuildBrief({
+      rawNoticeText,
+      responseGoal: "request_billing_review",
+      guidanceIds: ["ofgem-backbilling-12m-v1"],
+      extraKnownIdentifiers: ["Sarah Example"],
+      extraction: {
+        noticeCategory: "utility_electricity",
+        issueDate: "18 November 2026",
+        billingPeriod: "January and June 2025",
+        amountGBP: 1280,
+        responseDeadline: "25 November 2026",
+        obligations: [
+          {
+            action: "Pay the stated balance",
+            dueDate: "25 November 2026",
+            sourceQuote: quote,
+          },
+        ],
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    const account = result.localIdentifierMap.entries.find((entry) => entry.kind === "account_ref");
+    const start = rawNoticeText.indexOf(reference);
+    expect(account?.rawValue).toBe(reference);
+    expect(account?.placeholder).toBe("[ACCOUNT_REF]");
+    expect(account?.startOffset).toBe(start);
+    expect(account?.endOffset).toBe(start + reference.length);
+    expect(rawNoticeText.slice(account?.startOffset, account?.endOffset)).toBe(reference);
+    expect(result.redactedNoticePreview).toContain("Account reference: [ACCOUNT_REF]");
+    expect(result.redactedNoticePreview).not.toContain("8472");
+    expect(result.redactedNoticePreview).not.toContain(soft);
+    expect(result.structuralBrief.redactedObligations[0]?.redactedClause).toBe(
+      "For [ACCOUNT_REF] please pay the balance by 25 November 2026."
+    );
+
+    const canonical = canonicalCloudPayload(result.structuralBrief, {
+      forbiddenIdentifiers: result.localIdentifierMap.entries.map((entry) => entry.rawValue),
+    });
+    expect(canonical.serialized).not.toContain(reference);
+    expect(canonical.serialized).not.toContain("8472");
+    expect(canonical.serialized).not.toContain("EXAMPLE");
+
+    const edited = {
+      ...result.structuralBrief,
+      redactedObligations: [
+        {
+          ...result.structuralBrief.redactedObligations[0],
+          redactedClause: quote,
+        },
+      ],
+    };
+    expect(() =>
+      canonicalCloudPayload(edited, {
+        forbiddenIdentifiers: result.localIdentifierMap.entries.map((entry) => entry.rawValue),
+      })
+    ).toThrow(/forbidden local identifier|account reference/);
+
+    const joiner = `EXAMPLE\u20608472`;
+    const joinedQuote = `For ${joiner} please pay the balance by 25 November 2026.`;
+    const joinedNotice = rawNoticeText.replaceAll(reference, joiner);
+    const joined = redactAndBuildBrief({
+      rawNoticeText: joinedNotice,
+      responseGoal: "request_billing_review",
+      guidanceIds: ["ofgem-backbilling-12m-v1"],
+      extraKnownIdentifiers: ["Sarah Example"],
+      extraction: {
+        noticeCategory: "utility_electricity",
+        issueDate: "18 November 2026",
+        billingPeriod: "January and June 2025",
+        amountGBP: 1280,
+        responseDeadline: "25 November 2026",
+        obligations: [
+          {
+            action: "Pay the stated balance",
+            dueDate: "25 November 2026",
+            sourceQuote: joinedQuote,
+          },
+        ],
+      },
+    });
+    expect(joined.ok).toBe(true);
+    if (!joined.ok) {
+      return;
+    }
+    const joinedAccount = joined.localIdentifierMap.entries.find(
+      (entry) => entry.kind === "account_ref"
+    );
+    expect(joinedAccount?.rawValue).toBe(joiner);
+    expect(joined.redactedNoticePreview).not.toContain("8472");
   });
 
   it.each([

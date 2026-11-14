@@ -5,6 +5,12 @@ import { runOnDeviceNoticeExtraction } from "../../ai/onDeviceExtractor";
 import { probeChromeLanguageModelAvailability, type ChromeCapabilityReport } from "../../ai/capability";
 import { buildCloudBrief } from "../../adapters/cloudBriefBuilder";
 import { createCloudApprovalSession } from "../../adapters/cloudApprovalSession";
+import {
+  approvalStillMatches,
+  privacyApprovalView,
+  recordUserPayloadApproval,
+  type UserPayloadApproval,
+} from "../../adapters/privacyApproval";
 import { briefSourceFromGrounded, groundNoticeFacts } from "../../adapters/groundNoticeFacts";
 import { compareNoticeTexts } from "../../domain/compareNotices";
 import { isoDateFromClock } from "../../domain/dates";
@@ -19,6 +25,7 @@ import { ActionPlanScreen } from "../screens/ActionPlanScreen";
 import { CompareUpdateScreen } from "../screens/CompareUpdateScreen";
 import { PrepareReplyScreen } from "../screens/PrepareReplyScreen";
 import { ReadNoticeScreen } from "../screens/ReadNoticeScreen";
+import { PrivacyApprovalModal } from "../privacy/PrivacyApprovalModal";
 import { receiptForOnDeviceCall } from "./onDeviceSession";
 
 const ORIGINAL_SAMPLE = normalizeNewlines(originalSample);
@@ -37,6 +44,8 @@ export function NoticeLensApp() {
   const [deviceMessage, setDeviceMessage] = useState<string | null>(null);
   const [responseGoal, setResponseGoal] = useState<ResponseGoal>("request_billing_review");
   const [flags, setFlags] = useState<CircumstanceFlag[]>([]);
+  const [privacyOpen, setPrivacyOpen] = useState(false);
+  const [userApproval, setUserApproval] = useState<UserPayloadApproval | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -71,6 +80,15 @@ export function NoticeLensApp() {
         },
       }),
     [originalText, grounded, responseGoal, flags]
+  );
+  const privacy = useMemo(
+    () =>
+      privacyApprovalView({
+        serialized: inspection.exactSerialized,
+        limitations: inspection.limitations,
+        approval: approvalStillMatches(userApproval, inspection.exactSerialized) ? userApproval : null,
+      }),
+    [inspection, userApproval]
   );
   const session = useMemo(
     () =>
@@ -154,7 +172,14 @@ export function NoticeLensApp() {
             onFlags={setFlags}
           />
         ) : null}
-        {step === "reply" ? <PrepareReplyScreen inspection={inspection} session={session} /> : null}
+        {step === "reply" ? (
+          <PrepareReplyScreen
+            inspection={inspection}
+            session={session}
+            privacyApproved={privacy.matchesCurrentPayload}
+            onReviewPrivacy={() => setPrivacyOpen(true)}
+          />
+        ) : null}
         {step === "compare" ? (
           <CompareUpdateScreen
             originalText={originalText}
@@ -170,6 +195,16 @@ export function NoticeLensApp() {
         receipts={receipts}
         onClose={() => setDrawerOpen(false)}
       />
+      {privacyOpen ? (
+        <PrivacyApprovalModal
+          open
+          view={privacy}
+          onClose={() => setPrivacyOpen(false)}
+          onApprove={(serialized) => {
+            setUserApproval(recordUserPayloadApproval(serialized));
+          }}
+        />
+      ) : null}
     </>
   );
 }

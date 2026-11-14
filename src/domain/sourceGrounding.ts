@@ -95,7 +95,18 @@ export function groundMonetaryAmount(
   if (amounts.length > 1) {
     return grounded(amount, quote, "ambiguous", verification);
   }
+  if (figureContextNegated(quote ?? "")) {
+    return grounded(amount, quote, "substring_only", verification);
+  }
   return grounded(amount, quote, "supports_claim", verification);
+}
+
+function figureContextNegated(quote: string): boolean {
+  return (
+    /\b(?:not|no longer|never)\s+(?:due|owed|payable)\b/i.test(quote) ||
+    /£[\d,]+(?:\.\d+)?\s+is\s+not\b/i.test(quote) ||
+    /\b(?:balance|amount|fee)\s+is\s+not\b/i.test(quote)
+  );
 }
 
 function isoDatesIn(text: string): string[] {
@@ -141,6 +152,9 @@ export function groundCalendarDate(
   }
   if (dates.length > 1) {
     return grounded(claimIso, quote, "ambiguous", verification);
+  }
+  if (figureContextNegated(quote ?? "")) {
+    return grounded(claimIso, quote, "substring_only", verification);
   }
   return grounded(claimIso, quote, "supports_claim", verification);
 }
