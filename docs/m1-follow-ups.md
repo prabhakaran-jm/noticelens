@@ -1,6 +1,6 @@
 # NoticeLens follow-ups after Milestone 1
 
-This note is not a product screen. Milestone 1 stays on the deterministic domain core and the security fixes already on `feat/m1-deterministic-domain-core`. N-1 and N-2 are fixed for the reproductions named below, and M2A-2 is fixed in the Milestone 2A follow-up. M2B-1a is fixed for the soft-hyphen reproduction Z6. M2B-2A records a local approval lifecycle and the K3/K5 cases that were tested, and R5-1 is fixed for the short digit tails named below. Live cloud submission stays closed. Z6d, payment-obligation grounding, and the remaining identifier shapes are not resolved.
+This note is not a product screen. Milestone 1 stays on the deterministic domain core and the security fixes already on `feat/m1-deterministic-domain-core`. N-1 and N-2 are fixed for the reproductions named below, and M2A-2 is fixed in the Milestone 2A follow-up. M2B-1a is fixed for the soft-hyphen reproduction Z6. M2B-2A records a local approval lifecycle and the K3/K5 cases that were tested, and R5-1 is fixed for the short digit tails named below. M2B-2B records the R5-2, R5-3, R5-4, and R5-5 cases named below. Live cloud submission stays closed. These notes do not claim that personal data is guaranteed to have been removed.
 
 Independent review of `5f2f9d0` is **merge with documented deferments**. O10 nested placeholders and the name-component substring false positives are verified fixed. `npm test` passed 83/83, and typecheck and build passed. The additional regressions below are not reachable through the shipped UI. Recording them is not a claim that personal data is guaranteed to be removed. Pattern checks do not prove that.
 
@@ -90,9 +90,9 @@ Review of `857d792` on `feat/m2b-secure-cloud-flow`. Live notice-to-cloud submis
 
 A known name such as Sarah Example stayed in the notice, and the final cloud guard accepted it, when U+00AD sat inside one component (`Sar` + U+00AD + `ah`). The shared fold treated that soft hyphen as a Unicode dash and turned it into `-`, so the component no longer matched. Detection, redaction, and the final payload guard now use one fold that removes U+00AD with the other format characters and keeps the original source offsets. Real hyphens in account references and surnames stay hyphens. This is not a claim that every personal identifier is removed.
 
-### Z6d — Soft-hyphen salutation — not resolved (R5-2)
+### Z6d / R5-2 — Normalised name components — fixed for the tested cases
 
-`Dear Sar\u00ADah Exam\u00ADple` is detected as the complete original identifier, including the format characters, and redacted locally. The same path covers U+200B and U+2060 inside that full salutation. Original character offsets are kept. The final cloud guard rejects those full disguised forms. Standalone `Sarah` and `Example` remain insufficiently protected. This is a mandatory gate before live cloud submission. Do not treat Z6d as resolved.
+`Dear Sar\u00ADah Exam\u00ADple` is still detected as the complete original identifier. Name components are now taken from the normalised identifier, so a format character inside a known name no longer drops `Sarah` or `Example`. The same extraction covers U+200B, U+2060, NFC, NFD, and fullwidth forms of a known name. Plain occurrences elsewhere in the notice are redacted, and an edited clause that reintroduces a protected component is rejected. Original offsets stay in place. Lowercase `bill` and `energy billing` stay in place when the capitalised name is protected. This is not a claim that every personal identifier is removed. Two-letter names remain under N-3.
 
 ### K3/K5 — Partial account-reference leakage — fixed for the tested longer tokens
 
@@ -102,17 +102,17 @@ A known name such as Sarah Example stayed in the notice, and the final cloud gua
 
 `Ref SMITH-44`, `Smith/7`, `Sarah-1`, and `Example-12` were redacted on `b7384fb` and then escaped both redaction and the final guard. The name-component skip ran whenever digits followed a separator, even when no account span had been detected. A name component is now left in place only when that occurrence sits inside a detected account span. These four tokens are redacted to the recipient placeholder plus the unmatched tail, and canonical validation and edited-clause revalidation reject both the raw token and the partial placeholder. Complete account tokens such as `SMITH-4471` are still replaced as one `[ACCOUNT_REF]`.
 
-### R5-4 — Other reference shapes — not resolved
+### R5-4 — Joined references and placeholder tails — fixed for the tested shapes
 
-Joined references such as `SMITH4471`, and separators `_`, `.`, `:`, and `#`, are not fully covered. Partial-placeholder protection is incomplete beyond the hyphen and slash tails already tested. This remains open before live cloud submission.
+`SMITH4471`, `SMITH_4471`, `SMITH.4471`, and the same letter-digit form with `:` or `#`, are detected as one account reference. A fullwidth dot is included. A canonical placeholder does not hide a numeric tail: `[RECIPIENT_NAME]_8472`, `[ACCOUNT_REF].8472`, `[ACCOUNT_REF_2]:8472`, and the same tail on the other canonical bases with `_`, `.`, `:`, `#`, `/`, or `-`, are rejected in an edited clause. `Nov-2026`, `Nov2026`, `balance2026`, and `billing2026` stay prose. A surname glued to a year, such as `SMITH-2026`, can still be treated as an account reference. That is an availability false positive, not a privacy leak. R5-6 remains open.
 
 ### Soft-hyphen alphanumeric false positives — remaining limitation
 
 A format character that joins letters to three or more digits is still treated as an account token. That catches hidden references such as `EXAMPLE` + U+00AD + `8472`. It can also flag ordinary text that is not an account reference, for example a word, a soft hyphen, and a number. That false positive remains. It is not solved by a special case for one reference string.
 
-### M2B-1b — Obligation role grounding — not resolved (R5-3)
+### M2B-1b / R5-3 — Obligation role grounding — fixed for the tested sentences
 
-Payment-obligation grounding remains a hard gate before any cloud submission or product demonstration. The earlier cases cover a demand the quotation says has been cancelled, a payment request the quotation says has been withdrawn, “You do not need to pay the balance or contact…”, one historical payment of £1,280 already received, and a truncated quotation. They do not close the gate. Still required before cloud submission or a demo: “must pay nothing”, “Please ignore our request to pay”, “You do not have to pay”, paid in full, written off, waived, refunded, historical payments already received, and truncated or misleading quotations. Quotation existence alone is not semantic support. Do not treat this gate as resolved.
+A current demand is distinguished from a negated, withdrawn, cancelled, historical, settled, conditional, or quoted statement by the clause around it. “You must pay nothing.”, “Please ignore our request to pay.”, “You do not have to pay.”, “Thank you for your payment of £1,280.”, “This account is paid in full.”, “The balance of £1,280 has been written off.”, “Payment is no longer required.”, “The charge has been waived.”, and “The payment was refunded.” are not verified. A truncated quotation stays incomplete. A quoted or prompt-injected balance is not a current demand. “Please pay £1,280 or the revised £520.” stays ambiguous. A genuine outstanding balance of £1,280, a later outstanding balance of £520 beside a historical £1,280, and a conditional £40 fee beside a current £1,280 stay as they were: the current balance and deadline can be verified, and the conditional fee is not the main balance. The Action Plan, the amount tile, and the cloud brief use that same support. A separate genuine “please pay” sentence remains verified when another sentence says an earlier demand was cancelled. This is clause-role evidence, not general language understanding. An unseen wording can still be wrong. Do not treat that remaining gap as closed.
 
 ### M2B-1c — Approval invalidated on edit — fixed for the local lifecycle
 
@@ -122,9 +122,9 @@ Any relevant edit increments an approval generation immediately. Restoring the p
 
 `recordUserPayloadApproval` requires the exact current canonical serialization and runs `canonicalCloudPayload` on it. Unknown keys, malformed placeholders, and clauses that fail the payload guard are rejected. This record still cannot send.
 
-### R5-5 — Approval revalidation can omit forbidden identifiers
+### R5-5 — Approval uses the same guard options — fixed for the local record
 
-Revalidation of an edited payload does not always receive `forbiddenIdentifiers`. A later cloud-send handoff has to close that before a send can use the stored approval. This checkpoint does not add that handoff.
+Candidate construction, inspection, approval, and the pre-send check now share one `CloudPayloadGuardOptions` value built from the local identifier map and the user-added private identifiers. Approval runs canonical validation itself. It is bound to the exact current serialized payload. The still-disabled send revalidates that snapshot with the stored options and then refuses. A failed revalidation is a generic error, the approval id is consumed, and the error does not echo the identifier. Approval does not take the cloud-send lock. `CLOUD_SUBMISSION_ENABLED` stays false. The live cloud-send function is not connected.
 
 ### R5-6 — Standards-shaped tokens are an availability issue
 
@@ -138,7 +138,7 @@ A local privacy approval records the exact canonical JSON for the current edit g
 
 ## Milestone 2
 
-Milestone 2 live cloud submission of edited or redacted notices stays blocked. N-1, N-2, M2A-1, M2A-3, M2A-5, M2B-1a, the tested K3/K5 tokens, and R5-1 are fixed for the cases named above. Z6d (R5-2), payment-obligation grounding (R5-3), and the remaining reference shapes (R5-4) are not resolved. A local privacy approval records the exact canonical payload, is invalidated by a later edit, and does not start a cloud send. Revalidation still needs the R5-5 forbidden-identifier handoff before that approval can authorise a send. Do not enable cloud submission, and do not record a product demonstration, until the remaining items below are closed.
+Milestone 2 live cloud submission of edited or redacted notices stays blocked. N-1, N-2, M2A-1, M2A-3, M2A-5, M2B-1a, the tested K3/K5 tokens, R5-1, R5-2, R5-3, R5-4, and R5-5 are fixed for the cases named above. A local privacy approval records the exact canonical payload, is invalidated by a later edit, stores the guard options, and does not start a cloud send. The pre-send check revalidates those options and still refuses. Do not enable cloud submission, and do not record a product demonstration, until an independent review closes the remaining items below.
 
 These stay tracked and are not implemented here:
 
@@ -151,12 +151,10 @@ These stay tracked and are not implemented here:
 - Content Security Policy and the dependency audit.
 - Demo-mode removal of the legacy SpikeHarness.
 - Soft-hyphen alphanumeric false positives, where a format character joins letters to digits that are not an account reference.
-- R5-2: Z6d. The full disguised salutation is detected, but standalone Sarah and Example are not sufficiently protected.
-- R5-3: payment-obligation grounding, including “must pay nothing”, “Please ignore our request to pay”, “You do not have to pay”, paid in full, written off, waived, refunded, historical payments already received, and truncated or misleading quotations.
-- R5-4: joined references such as SMITH4471, and separators `_`, `.`, `:`, and `#`. Partial-placeholder protection is incomplete.
-- R5-5: edited-payload revalidation does not always include forbiddenIdentifiers. Close that in the real cloud-send handoff.
-- R5-6: Form-1040, ISO-9001, and Section-123 can be treated as account references. That is an availability issue, not a privacy leak.
+- R5-3 remaining gap: clause-role patterns do not understand every negation, quotation, or contradiction. An unseen wording can still be classified wrongly.
+- R5-6: Form-1040, ISO-9001, and Section-123 can be treated as account references. A surname plus a year, such as SMITH-2026, can too. Those are availability issues, not privacy leaks.
 - The benchmark still uses the old short-quote verifier.
+- Live cloud drafting is not connected. `CLOUD_SUBMISSION_ENABLED` stays false until an independent review says otherwise.
 
 ## Milestone 4
 
@@ -173,7 +171,7 @@ These items are not implemented here:
 - Residual PII detection limitations, including unusual names, addresses, and Unicode homoglyphs.
 - Production test-injection seam review and restriction.
 - Dead raw-embed guard.
-- Source role grounding. R5-3 remains a hard gate and includes “must pay nothing”, “Please ignore our request to pay”, “You do not have to pay”, paid in full, written off, waived, refunded, historical payments already received, and truncated or misleading quotations.
+- Source role grounding beyond the tested R5-3 sentences. Unseen negations, quotations, and contradictions can still be classified wrongly.
 - Cloud output legal-conclusion validation.
 - False positives in grouped number detection.
 - Bracketed instructional text versus supported placeholder tokens.

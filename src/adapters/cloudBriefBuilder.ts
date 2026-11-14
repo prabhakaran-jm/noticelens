@@ -1,8 +1,10 @@
 import {
   canonicalCloudPayload,
+  cloudGuardOptionsFromPrivateIdentifiers,
   CloudPayloadValidationError,
   CLOUD_PAYLOAD_REDACTION_LIMITATION,
   type CanonicalCloudPayload,
+  type CloudPayloadGuardOptions,
 } from "../domain/cloudPayloadGuard";
 import { parseCalendarDate, formatDisplayDate } from "../domain/dates";
 import {
@@ -52,6 +54,8 @@ export interface CloudBriefInspection {
   exactSerialized: string | null;
   /** Pretty JSON for reading. This is not the outbound payload. */
   formattedInspectionJson: string | null;
+  /** Same options used to build, inspect, approve, and revalidate this snapshot. */
+  guardOptions: CloudPayloadGuardOptions;
   limitations: readonly string[];
   declaredComplete: false;
 }
@@ -165,6 +169,13 @@ export function buildCloudBrief(input: {
     circumstanceFlags: input.edits.circumstanceFlags,
     extraKnownIdentifiers: input.edits.extraKnownIdentifiers,
   });
+  const guardOptions = cloudGuardOptionsFromPrivateIdentifiers({
+    rawNoticeText: input.rawNoticeText,
+    localRawValues: redaction.ok
+      ? redaction.localIdentifierMap.entries.map((entry) => entry.rawValue)
+      : [],
+    extraKnownIdentifiers: input.edits.extraKnownIdentifiers,
+  });
   if (!redaction.ok) {
     return {
       redaction,
@@ -173,19 +184,16 @@ export function buildCloudBrief(input: {
       readableRows: [],
       exactSerialized: null,
       formattedInspectionJson: null,
+      guardOptions,
       limitations,
       declaredComplete: false,
     };
   }
-  const forbiddenIdentifiers = [
-    ...redaction.localIdentifierMap.entries.map((entry) => entry.rawValue),
-    ...input.edits.extraKnownIdentifiers,
-  ];
   try {
-    const canonical = canonicalCloudPayload(editedPayload(redaction.structuralBrief, input.edits), {
-      rawNoticeText: input.rawNoticeText,
-      forbiddenIdentifiers,
-    });
+    const canonical = canonicalCloudPayload(
+      editedPayload(redaction.structuralBrief, input.edits),
+      guardOptions
+    );
     return {
       redaction,
       canonical,
@@ -193,6 +201,7 @@ export function buildCloudBrief(input: {
       readableRows: readableRowsFromPayload(canonical.payload),
       exactSerialized: canonical.serialized,
       formattedInspectionJson: JSON.stringify(canonical.payload, null, 2),
+      guardOptions,
       limitations,
       declaredComplete: false,
     };
@@ -205,6 +214,7 @@ export function buildCloudBrief(input: {
         readableRows: readableRowsFromPayload(redaction.structuralBrief),
         exactSerialized: null,
         formattedInspectionJson: null,
+        guardOptions,
         limitations,
         declaredComplete: false,
       };

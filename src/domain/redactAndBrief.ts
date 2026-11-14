@@ -7,6 +7,7 @@ import {
   isCalendarToken,
   mapProjectedSpan,
   meaningfulNameComponents,
+  suspiciousAccountSpans,
   normalizeDashes,
   projectIdentifierPattern,
   replaceNameComponent,
@@ -182,13 +183,6 @@ function digitCount(value: string): number {
   return value.replace(/\D/g, "").length;
 }
 
-const CALENDAR_MONTH =
-  /^(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)$/i;
-
-function isCalendarMonth(value: string): boolean {
-  return CALENDAR_MONTH.test(value);
-}
-
 function pushProjectedToken(
   spans: Span[],
   rawNoticeText: string,
@@ -259,26 +253,8 @@ function detectSpans(rawNoticeText: string): Span[] {
     const tokenStart = match.index + match[0].lastIndexOf(token);
     pushProjectedToken(spans, rawNoticeText, projected, tokenStart, token.length, "account_ref");
   }
-  const unlabelled = /\b([A-Za-z]{2,12})([-/])(\d{3,12})\b/g;
-  for (const match of projected.text.matchAll(unlabelled)) {
-    if (!match[1] || match.index === undefined) {
-      continue;
-    }
-    if (match[2] === "-" && isCalendarMonth(match[1])) {
-      continue;
-    }
-    pushProjectedToken(spans, rawNoticeText, projected, match.index, match[0].length, "account_ref");
-  }
-  const joined = /\b[A-Za-z]{2,12}\d{3,12}\b/g;
-  for (const match of projected.text.matchAll(joined)) {
-    if (match.index === undefined) {
-      continue;
-    }
-    const origin = mapProjectedSpan(projected, match.index, match.index + match[0].length);
-    if (!origin || !/\p{Cf}/u.test(rawNoticeText.slice(origin.start, origin.end))) {
-      continue;
-    }
-    pushMatch(spans, "account_ref", origin.start, rawNoticeText.slice(origin.start, origin.end));
+  for (const token of suspiciousAccountSpans(rawNoticeText)) {
+    pushMatch(spans, "account_ref", token.start, token.raw);
   }
   const salutation = /\bDear\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b/g;
   for (const match of projected.text.matchAll(salutation)) {

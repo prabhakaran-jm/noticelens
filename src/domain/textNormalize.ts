@@ -73,7 +73,7 @@ export function projectIdentifierPattern(value: string): PatternProjection {
       index = next;
       continue;
     }
-    const piece = isRealDash(raw) ? "-" : raw;
+    const piece = isRealDash(raw) ? "-" : projectedSeparator(raw) ?? raw;
     for (let unit = 0; unit < piece.length; unit += 1) {
       text += piece[unit];
       startAt.push(index);
@@ -131,6 +131,115 @@ function isMonthName(value: string): boolean {
   return MONTH_NAMES.has(value.toLowerCase());
 }
 
+function projectedSeparator(raw: string): string | null {
+  switch (raw) {
+    case "\uFF0E":
+    case "\u00B7":
+    case "\u2024":
+    case "\u2027":
+      return ".";
+    case "\uFF1A":
+      return ":";
+    case "\uFF03":
+      return "#";
+    case "\uFF3F":
+      return "_";
+    default:
+      return null;
+  }
+}
+
+const ORDINARY_YEAR_WORDS = new Set([
+  "account",
+  "amount",
+  "annual",
+  "balance",
+  "balances",
+  "bill",
+  "billing",
+  "council",
+  "date",
+  "due",
+  "energy",
+  "fee",
+  "fees",
+  "form",
+  "iso",
+  "notice",
+  "page",
+  "payment",
+  "payments",
+  "period",
+  "record",
+  "records",
+  "section",
+  "supply",
+  "tax",
+  "total",
+  "year",
+]);
+
+function isOrdinaryProseYear(letters: string, digits: string): boolean {
+  if (!/^(?:19|20)\d{2}$/.test(digits)) {
+    return false;
+  }
+  const word = letters.toLowerCase();
+  return isMonthName(word) || ORDINARY_YEAR_WORDS.has(word);
+}
+
+export interface AccountTokenSpan {
+  start: number;
+  end: number;
+  raw: string;
+}
+
+/** Letter-digit references, including joined forms and the supported separators. */
+export function suspiciousAccountSpans(value: string): AccountTokenSpan[] {
+  const projected = projectIdentifierPattern(value);
+  const found: AccountTokenSpan[] = [];
+  const seen = new Set<string>();
+  const push = (start: number, end: number): void => {
+    const origin = mapProjectedSpan(projected, start, end);
+    if (!origin) {
+      return;
+    }
+    const key = `${origin.start}:${origin.end}`;
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    found.push({
+      start: origin.start,
+      end: origin.end,
+      raw: value.slice(origin.start, origin.end),
+    });
+  };
+  const separated = /\b([A-Za-z]{2,12})([-/_.#:])(\d{3,12})\b/g;
+  for (const match of projected.text.matchAll(separated)) {
+    if (!match[1] || match[3] === undefined || match.index === undefined) {
+      continue;
+    }
+    if (match[2] === "-" && isMonthName(match[1])) {
+      continue;
+    }
+    if (isOrdinaryProseYear(match[1], match[3])) {
+      continue;
+    }
+    push(match.index, match.index + match[0].length);
+  }
+  const joined = /\b([A-Za-z]{2,12})(\d{3,12})\b/g;
+  for (const match of projected.text.matchAll(joined)) {
+    if (!match[1] || match[2] === undefined || match.index === undefined) {
+      continue;
+    }
+    if (isOrdinaryProseYear(match[1], match[2])) {
+      continue;
+    }
+    push(match.index, match.index + match[0].length);
+  }
+  return found;
+}
+
 /** A letter-digit token whose original span hid a format character inside it. */
 export function containsFormatJoinedAccountToken(value: string): boolean {
   const projected = projectIdentifierPattern(value);
@@ -154,18 +263,7 @@ export function containsFormatJoinedAccountToken(value: string): boolean {
  * letters to the digits count as the same token.
  */
 export function containsAlphanumericAccountReference(value: string): boolean {
-  if (containsFormatJoinedAccountToken(value)) {
-    return true;
-  }
-  const projected = projectIdentifierPattern(value);
-  const pattern = /\b([A-Za-z]{2,12})([-/])(\d{3,12})\b/g;
-  for (const match of projected.text.matchAll(pattern)) {
-    if (match[2] === "-" && isMonthName(match[1] ?? "")) {
-      continue;
-    }
-    return true;
-  }
-  return false;
+  return containsFormatJoinedAccountToken(value) || suspiciousAccountSpans(value).length > 0;
 }
 
 export interface IdentifierFold {
@@ -244,17 +342,21 @@ export function compactIdentifier(value: string): string {
  */
 const NAME_WORD = /^[\p{L}][\p{L}\p{M}'’\-]*$/u;
 
-export function meaningfulNameComponents(fullName: string): string[] {
-  const trimmed = fullName.trim();
-  if (trimmed.length === 0 || /\d/.test(trimmed)) {
+function normalizedPersonalWords(value: string): string[] {
+  const folded = foldIdentifierText(value.trim()).folded;
+  if (!folded || /\d/.test(folded)) {
     return [];
   }
-  const parts = trimmed.split(/[\s,]+/).filter((part) => part.length > 0);
+  return folded.split(/[\s,]+/).filter((part) => part.length > 0 && part !== "-");
+}
+
+export function meaningfulNameComponents(fullName: string): string[] {
+  const parts = normalizedPersonalWords(fullName);
   if (parts.length < 2) {
     return [];
   }
   return parts.filter((part) => {
-    if (part.length < 3 || NAME_PARTICLES.has(part.toLowerCase())) {
+    if (part.length < 3 || NAME_PARTICLES.has(part)) {
       return false;
     }
     return NAME_WORD.test(part);
@@ -279,7 +381,7 @@ function hasNameCapital(token: string): boolean {
 }
 
 function isPersonalName(value: string): boolean {
-  const parts = value.trim().split(/[\s,]+/).filter((part) => part.length > 0);
+  const parts = normalizedPersonalWords(value);
   return parts.length > 0 && parts.every((part) => NAME_WORD.test(part));
 }
 
@@ -326,7 +428,7 @@ function isDomainUseAt(
 }
 
 function personalNameParts(value: string): string[] {
-  const parts = value.trim().split(/[\s,]+/).filter((part) => part.length > 0);
+  const parts = normalizedPersonalWords(value);
   if (parts.length < 2 || parts.some((part) => !NAME_WORD.test(part))) {
     return [];
   }
@@ -525,12 +627,11 @@ export function identifierLeaks(text: string, rawId: string): boolean {
     return false;
   }
   if (isPersonalName(clean)) {
-    const parts = clean.split(/[\s,]+/).filter((part) => part.length > 0);
     if (personalNameSpans(text, clean).length > 0) {
       return true;
     }
     const components = meaningfulNameComponents(clean);
-    const words = components.length > 0 ? components : parts;
+    const words = components.length > 0 ? components : normalizedPersonalWords(clean);
     return words.some((part) => part.length >= 3 && nameComponentMatches(text, part));
   }
   const prepared = prepareForMatch(text);

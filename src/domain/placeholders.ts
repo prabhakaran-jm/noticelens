@@ -32,7 +32,7 @@ export function isCanonicalPlaceholder(token: string): boolean {
 /** Digits still attached to a canonical placeholder are an incomplete identifier. */
 export function hasPartialPlaceholderIdentifier(text: string): boolean {
   const pattern = new RegExp(
-    `\\[(?:${BASE_PATTERN})(?:_[1-9]\\d*)?\\](?!\\s+[A-Za-z])\\s*[-/]?\\s*\\d`,
+    `\\[(?:${BASE_PATTERN})(?:_[1-9]\\d*)?\\](?!\\s+[A-Za-z])\\s*[-/_.#:]?\\s*\\d`,
     "i"
   );
   return pattern.test(text);

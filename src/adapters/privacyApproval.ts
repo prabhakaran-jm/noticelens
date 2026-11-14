@@ -1,5 +1,9 @@
 import { CLOUD_SUBMISSION_BLOCKED_REASON } from "./cloudApprovalSession";
-import { canonicalCloudPayload, CloudPayloadValidationError } from "../domain/cloudPayloadGuard";
+import {
+  canonicalCloudPayload,
+  CloudPayloadValidationError,
+  type CloudPayloadGuardOptions,
+} from "../domain/cloudPayloadGuard";
 import { CloudSendSafetyError } from "../domain/cloudSendApproval";
 import {
   hasPartialPlaceholderIdentifier,
@@ -17,6 +21,7 @@ export interface UserPayloadApproval {
   readonly id: string;
   readonly generation: number;
   readonly serialized: string;
+  readonly guardOptions: CloudPayloadGuardOptions;
   readonly cloudSendEnabled: false;
 }
 
@@ -70,15 +75,26 @@ function assertPlaceholderIntegrity(payload: unknown): void {
   }
 }
 
+function copyGuardOptions(options: CloudPayloadGuardOptions): CloudPayloadGuardOptions {
+  return {
+    rawNoticeText: options.rawNoticeText,
+    forbiddenIdentifiers: [...(options.forbiddenIdentifiers ?? [])],
+  };
+}
+
 /**
  * Records approval only when the supplied bytes are the current canonical payload.
- * `generation` is the edit generation the person approved. A later edit, including
- * one that restores the same text, uses a newer generation and does not match.
+ * The guard options are the same set used to build that payload. Caller claims that
+ * the payload was already validated are not accepted: this function runs
+ * `canonicalCloudPayload` again. `generation` is the edit generation the person
+ * approved. A later edit, including one that restores the same text, uses a newer
+ * generation and does not match.
  */
 export function recordUserPayloadApproval(
   serialized: string,
   currentCanonicalSerialized: string,
-  generation: number
+  generation: number,
+  options: CloudPayloadGuardOptions
 ): UserPayloadApproval {
   if (!Number.isInteger(generation) || generation < 0) {
     throw new CloudSendSafetyError("Approval generation is not current");
@@ -89,6 +105,7 @@ export function recordUserPayloadApproval(
   if (serialized !== serialized.trim() || serialized.includes("\n") || serialized.includes("\r")) {
     throw new CloudSendSafetyError("Approval must be the exact canonical serialized payload");
   }
+  const guardOptions = copyGuardOptions(options);
   let parsed: unknown;
   try {
     parsed = JSON.parse(serialized);
@@ -97,7 +114,7 @@ export function recordUserPayloadApproval(
   }
   let canonical;
   try {
-    canonical = canonicalCloudPayload(parsed);
+    canonical = canonicalCloudPayload(parsed, guardOptions);
   } catch (error) {
     if (error instanceof CloudPayloadValidationError) {
       throw new CloudSendSafetyError("Approval payload failed canonical validation");
@@ -115,6 +132,7 @@ export function recordUserPayloadApproval(
     id,
     generation,
     serialized: canonical.serialized,
+    guardOptions,
     cloudSendEnabled: false,
   };
 }
@@ -155,13 +173,29 @@ export function privacyApprovalView(input: {
 }
 
 /**
- * Live submission stays closed. The id is consumed before the refusal, so a
- * second call cannot reuse it. This does not call `CloudPayloadApproval.begin`.
+ * Live submission stays closed. The current snapshot is revalidated with the
+ * options stored at approval, then the id is consumed. A failed revalidation
+ * uses a generic error and cannot be retried. This does not call
+ * `CloudPayloadApproval.begin` and does not connect the cloud-send function.
  */
 export function requestApprovedCloudSend(approval: UserPayloadApproval): never {
   if (consumedApprovalIds.has(approval.id)) {
     throw new CloudSendSafetyError("This approval has already been used");
   }
+  let revalidated = false;
+  try {
+    const parsed: unknown = JSON.parse(approval.serialized);
+    const canonical = canonicalCloudPayload(parsed, approval.guardOptions);
+    revalidated = canonical.serialized === approval.serialized;
+  } catch (error) {
+    if (!(error instanceof CloudPayloadValidationError) && !(error instanceof SyntaxError)) {
+      throw error;
+    }
+    revalidated = false;
+  }
   consumedApprovalIds.add(approval.id);
+  if (!revalidated) {
+    throw new CloudSendSafetyError("Approval payload failed canonical validation");
+  }
   throw new CloudSendSafetyError(CLOUD_SUBMISSION_BLOCKED_REASON);
 }
