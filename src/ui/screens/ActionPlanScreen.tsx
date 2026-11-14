@@ -117,8 +117,10 @@ export function ActionPlanScreen(props: {
                 {amount === null ? "Not stated" : formatGbp(amount)}
               </strong>
               {props.view.amount.conflict ? (
-                <span className="fact-pill fact-pill-warning">
-                  Several amounts are stated: {props.view.amount.amountsGBP.map((value) => formatGbp(value)).join(", ")}
+                <span className="fact-pill fact-pill-warning" data-testid="plan-amount-conflict">
+                  No current balance is established.{" "}
+                  {props.view.amount.amountsGBP.map((value) => formatGbp(value)).join(" and ")} are unverified. An
+                  empty amounts list means no supported outstanding balance.
                 </span>
               ) : null}
               {props.view.amount.conditionalFeesGBP.length > 0 ? (
@@ -160,6 +162,7 @@ export function ActionPlanScreen(props: {
                   data-testid="plan-action-card"
                 >
                   <h3 data-testid="plan-action-heading">{actionSummaryLabel(item.actionSummary)}</h3>
+                  <p data-testid="plan-action-claim">{item.id}</p>
                   <blockquote className="quote-evidence-box">{item.sourceQuote}</blockquote>
                   <div className="checklist-meta-bar">
                     <span

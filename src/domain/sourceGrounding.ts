@@ -101,10 +101,28 @@ export function groundMonetaryAmount(
   ) {
     return grounded(amount, quote, "substring_only", verification);
   }
+  if (quoteTruncatesSentence(source, quote ?? "")) {
+    return grounded(amount, quote, "incomplete", verification);
+  }
+  const role = paymentSentenceRole(quote ?? "");
+  if (role === "injected_command") {
+    return grounded(amount, quote, "unverified", verification);
+  }
+  if (role === "ambiguous") {
+    return grounded(amount, quote, "ambiguous", verification);
+  }
+  if (role === "conditional_fee" || role === "current_balance" || role === "reinstated_demand") {
+    return grounded(amount, quote, "supports_claim", verification);
+  }
+  if (role !== "unsupported") {
+    return grounded(amount, quote, "substring_only", verification);
+  }
   const disposition = obligationDisposition(quote ?? "");
   if (disposition) {
     return grounded(amount, quote, disposition, verification);
   }
+  // The figure occurs in this quotation. Whether it is the current balance is
+  // decided from the whole notice, not from the currency token alone.
   return grounded(amount, quote, "supports_claim", verification);
 }
 
@@ -229,6 +247,377 @@ function historicalPayment(quote: string): boolean {
     /\b(?:we|our records)\s+(?:have\s+)?received\s+(?:your\s+)?payment\b/i.test(quote) ||
     /\bpayment\b[^.]{0,48}\b(?:was|were|has been|have been)\s+received\b/i.test(quote)
   );
+}
+
+export type PaymentSentenceRole =
+  | "current_balance"
+  | "historical_payment"
+  | "paid_in_full"
+  | "written_off"
+  | "waived"
+  | "cancelled_demand"
+  | "withdrawn_demand"
+  | "reinstated_demand"
+  | "conditional_fee"
+  | "refunded_payment"
+  | "injected_command"
+  | "settled_or_negated"
+  | "unsupported"
+  | "ambiguous";
+
+const TERMINAL_ACCOUNT_ROLES = new Set<PaymentSentenceRole>([
+  "paid_in_full",
+  "written_off",
+  "waived",
+  "refunded_payment",
+  "settled_or_negated",
+]);
+
+const DEMAND_RETIREMENT_ROLES = new Set<PaymentSentenceRole>([
+  "cancelled_demand",
+  "withdrawn_demand",
+]);
+
+function isInjectedCommand(sentence: string): boolean {
+  if (/\bignore\s+(?:all\s+|any\s+|the\s+)?previous\s+instructions\b/i.test(sentence)) {
+    return true;
+  }
+  if (/\bdisregard\s+(?:the\s+)?(?:notice|text|instructions)\s+above\b/i.test(sentence)) {
+    return true;
+  }
+  if (/\brecord\s+a\s+verified\s+balance\b/i.test(sentence)) {
+    return true;
+  }
+  if (/\btreat\s+£[\d,]+\s+as\s+(?:the\s+)?verified\b/i.test(sentence)) {
+    return true;
+  }
+  if (
+    /\byou\s+are\s+now\b/i.test(sentence) &&
+    /\b(?:admin|model|assistant|instruction|jailbreak)\b/i.test(sentence)
+  ) {
+    return true;
+  }
+  return /(?:^|\s)(?:system|assistant)\s*:/i.test(sentence);
+}
+
+function isConditionalFeeSentence(sentence: string): boolean {
+  return (
+    /\b(?:if|unless|may|might|could)\b/i.test(sentence) &&
+    /\b(?:fee|surcharge|penalty)\b/i.test(sentence)
+  );
+}
+
+function isReinstatement(sentence: string): boolean {
+  if (/\bnothing\s+remains\s+payable\b/i.test(sentence)) {
+    return false;
+  }
+  return (
+    /\breinstat(?:e|ed|ement)\b/i.test(sentence) ||
+    /\bdisregard\s+the\s+cancellation\b/i.test(sentence) ||
+    /\bremains\s+payable\b/i.test(sentence)
+  );
+}
+
+function isStructuralSettlement(sentence: string): boolean {
+  const paymentNoun = /\b(?:balance|amount|charge|payment|debt|sum|account|demand|request)\b/i;
+  const completed =
+    (/\b(?:cleared|discharged|extinguished|settled|paid\s+off|completed)\b/i.test(sentence) &&
+      paymentNoun.test(sentence)) ||
+    /\bsettlement\s+of\b/i.test(sentence);
+  const dutyNegated =
+    /\b(?:need\s+not\s+pay|do\s+not\s+(?:have\s+to|need\s+to)\s+pay|must\s+pay\s+nothing|nothing\s+remains\s+payable|no\s+payment\s+to\s+make|no\s+longer\s+required|pay\s+nothing)\b/i.test(
+      sentence
+    );
+  const disregard =
+    /\b(?:disregard|ignore)\b/i.test(sentence) && /\b(?:balance|demand|request|pay)\b/i.test(sentence);
+  const closed =
+    /\bas\s+closed\b/i.test(sentence) ||
+    (/\bis\s+closed\b/i.test(sentence) && paymentNoun.test(sentence)) ||
+    (/\bnow\s+clear\b/i.test(sentence) && paymentNoun.test(sentence)) ||
+    /\bno\s+balance\s+of\b/i.test(sentence);
+  return completed || dutyNegated || disregard || closed;
+}
+
+function isPositiveCurrentBalance(sentence: string): boolean {
+  if (/\b(?:no|not|never)\s+balance\b/i.test(sentence) || /\bno\s+longer\b/i.test(sentence)) {
+    return false;
+  }
+  return (
+    /\boutstanding\s+balance\b/i.test(sentence) ||
+    /\bamount\s+due\b/i.test(sentence) ||
+    /\bbalance\s+now\s+requested\b/i.test(sentence) ||
+    /\bplease\s+pay\s+the\s+(?:outstanding\s+)?balance\b/i.test(sentence) ||
+    (/\bmust\s+pay\b/i.test(sentence) && !/\bmust\s+pay\s+nothing\b/i.test(sentence)) ||
+    /\bpayment\s+is\s+due\b/i.test(sentence)
+  );
+}
+
+function detectBlockingRole(sentence: string): PaymentSentenceRole | null {
+  if (historicalPayment(sentence)) {
+    return "historical_payment";
+  }
+  if (/\bpaid\s+in\s+full\b/i.test(sentence)) {
+    return "paid_in_full";
+  }
+  if (/\bwritten\s+off\b/i.test(sentence)) {
+    return "written_off";
+  }
+  if (/\bwaiv(?:e|ed|er)\b/i.test(sentence)) {
+    return "waived";
+  }
+  if (/\brefunded\b/i.test(sentence)) {
+    return "refunded_payment";
+  }
+  if (explicitlyCancelled(sentence) || /\bcancel(?:s|led)?\s+the\s+demand\b/i.test(sentence)) {
+    return "cancelled_demand";
+  }
+  if (explicitlyWithdrawn(sentence) || /\bdemand\s+is\s+withdrawn\b/i.test(sentence)) {
+    return "withdrawn_demand";
+  }
+  if (isStructuralSettlement(sentence) || explicitlyNegated(sentence) || settledPayment(sentence)) {
+    return "settled_or_negated";
+  }
+  return null;
+}
+
+export function paymentSentenceRole(sentence: string): PaymentSentenceRole {
+  const text = sentence.trim();
+  if (!text) {
+    return "unsupported";
+  }
+  if (isInjectedCommand(text)) {
+    return "injected_command";
+  }
+  if (isConditionalFeeSentence(text)) {
+    return "conditional_fee";
+  }
+  const blocking = detectBlockingRole(text);
+  const positive = isPositiveCurrentBalance(text);
+  if (positive && blocking) {
+    return "ambiguous";
+  }
+  if (blocking) {
+    return blocking;
+  }
+  if (isReinstatement(text)) {
+    return "reinstated_demand";
+  }
+  if (positive) {
+    return "current_balance";
+  }
+  return "unsupported";
+}
+
+function quoteTruncatesSentence(source: string, quote: string): boolean {
+  const trimmed = quote.trim();
+  if (!trimmed || /\.{3}|…|\u2026/.test(trimmed) || /[.!?]["”']?$/.test(trimmed)) {
+    return false;
+  }
+  const index = source.indexOf(trimmed);
+  if (index < 0) {
+    return false;
+  }
+  const after = source.slice(index + trimmed.length);
+  if (!after.trim() || /^\s*[.!?]/.test(after) || /^\s*\n/.test(after)) {
+    return false;
+  }
+  return true;
+}
+
+function noticeSentences(text: string): string[] {
+  const sentences: string[] = [];
+  for (const line of text.split(/\n/)) {
+    const trimmed = line.replace(/\r$/, "").trim();
+    if (!trimmed) {
+      continue;
+    }
+    for (const part of trimmed.split(/(?<=[.!?])\s+(?=[A-Z"“])/)) {
+      const sentence = part.trim();
+      if (sentence) {
+        sentences.push(sentence);
+      }
+    }
+  }
+  return sentences;
+}
+
+function sameAmount(left: number, right: number): boolean {
+  return Math.abs(left - right) < 0.001;
+}
+
+/**
+ * Figures that survive as the current outstanding balance.
+ * A terminal account settlement is not undone by repeating an amount the
+ * notice had already introduced. A later positive balance after a named
+ * cancellation, or a different later amount, can remain.
+ */
+export function resolvedCurrentBalanceAmounts(text: string): number[] {
+  const sentences = noticeSentences(text);
+  let lastUnscopedTerminal = -1;
+  const introducedAtTerminal = new Set<number>();
+  const lastScopedTerminal = new Map<number, number>();
+  let lastUnscopedRetirement = -1;
+  const lastScopedRetirement = new Map<number, number>();
+  let lastUnscopedHistorical = -1;
+  const lastScopedHistorical = new Map<number, number>();
+  const lastPositive = new Map<number, number>();
+  const lastReinstatement = new Map<number, number>();
+  const seen = new Set<number>();
+
+  sentences.forEach((sentence, index) => {
+    const amounts = amountValuesIn(sentence);
+    for (const amount of amounts) {
+      seen.add(amount);
+    }
+    const role = paymentSentenceRole(sentence);
+    if (
+      role === "injected_command" ||
+      role === "conditional_fee" ||
+      role === "ambiguous" ||
+      role === "unsupported"
+    ) {
+      return;
+    }
+    if (role === "reinstated_demand") {
+      const targets = amounts.length > 0 ? amounts : [...seen];
+      for (const amount of targets) {
+        lastReinstatement.set(amount, index);
+        lastPositive.set(amount, index);
+      }
+      return;
+    }
+    if (role === "historical_payment") {
+      if (amounts.length === 0) {
+        lastUnscopedHistorical = index;
+      } else {
+        for (const amount of amounts) {
+          lastScopedHistorical.set(amount, index);
+        }
+      }
+      return;
+    }
+    if (TERMINAL_ACCOUNT_ROLES.has(role)) {
+      if (amounts.length === 0) {
+        lastUnscopedTerminal = index;
+        for (const amount of seen) {
+          introducedAtTerminal.add(amount);
+        }
+      } else {
+        for (const amount of amounts) {
+          lastScopedTerminal.set(amount, index);
+          introducedAtTerminal.add(amount);
+        }
+      }
+      return;
+    }
+    if (DEMAND_RETIREMENT_ROLES.has(role)) {
+      if (amounts.length === 0) {
+        lastUnscopedRetirement = index;
+      } else {
+        for (const amount of amounts) {
+          lastScopedRetirement.set(amount, index);
+        }
+      }
+      return;
+    }
+    if (role === "current_balance") {
+      for (const amount of amounts) {
+        lastPositive.set(amount, index);
+      }
+    }
+  });
+
+  const current: number[] = [];
+  for (const [amount, positiveAt] of lastPositive) {
+    const reinstatedAt = lastReinstatement.get(amount) ?? -1;
+    const terminalAt = Math.max(lastScopedTerminal.get(amount) ?? -1, lastUnscopedTerminal);
+    const retiredAt = Math.max(lastScopedRetirement.get(amount) ?? -1, lastUnscopedRetirement);
+    const historicalAt = Math.max(lastScopedHistorical.get(amount) ?? -1, lastUnscopedHistorical);
+    if (
+      reinstatedAt >= positiveAt &&
+      reinstatedAt >= terminalAt &&
+      reinstatedAt >= retiredAt &&
+      reinstatedAt >= historicalAt
+    ) {
+      current.push(amount);
+      continue;
+    }
+    if (terminalAt > positiveAt) {
+      continue;
+    }
+    if (
+      terminalAt >= 0 &&
+      terminalAt < positiveAt &&
+      introducedAtTerminal.has(amount) &&
+      reinstatedAt <= terminalAt
+    ) {
+      continue;
+    }
+    if (retiredAt > positiveAt || historicalAt > positiveAt) {
+      continue;
+    }
+    current.push(amount);
+  }
+  current.sort((left, right) => left - right);
+  return current;
+}
+
+export function sentenceSupportsResponseDeadline(
+  sentence: string,
+  resolved: readonly number[]
+): boolean {
+  const role = paymentSentenceRole(sentence);
+  if (
+    role === "conditional_fee" ||
+    role === "injected_command" ||
+    role === "ambiguous" ||
+    role === "historical_payment" ||
+    TERMINAL_ACCOUNT_ROLES.has(role) ||
+    DEMAND_RETIREMENT_ROLES.has(role)
+  ) {
+    return false;
+  }
+  if (role === "current_balance" || role === "reinstated_demand") {
+    if (resolved.length !== 1) {
+      return false;
+    }
+    const amounts = amountValuesIn(sentence);
+    return amounts.length === 0 || amounts.every((amount) => resolved.some((item) => sameAmount(item, amount)));
+  }
+  return /\b(?:by|deadline|due|no later than|respond)\b/i.test(sentence);
+}
+
+export function paymentQuoteUndermined(
+  quote: string,
+  actionSummary: string,
+  resolved: readonly number[]
+): boolean {
+  const payment = actionSummary === "pay_stated_balance" || actionSummary === "pay_or_contact";
+  if (!payment) {
+    return false;
+  }
+  const role = paymentSentenceRole(quote);
+  if (
+    role === "conditional_fee" ||
+    role === "injected_command" ||
+    role === "ambiguous" ||
+    role === "historical_payment" ||
+    TERMINAL_ACCOUNT_ROLES.has(role) ||
+    DEMAND_RETIREMENT_ROLES.has(role)
+  ) {
+    return true;
+  }
+  if (role !== "current_balance" && role !== "reinstated_demand") {
+    return false;
+  }
+  if (resolved.length > 1) {
+    return true;
+  }
+  const amounts = amountValuesIn(quote);
+  if (resolved.length !== 1) {
+    return amounts.length > 0 || role === "current_balance" || role === "reinstated_demand";
+  }
+  return amounts.some((amount) => !resolved.some((item) => sameAmount(item, amount)));
 }
 
 function settledPayment(quote: string): boolean {
@@ -412,11 +801,24 @@ export function groundObligation(
   if (problem) {
     return grounded(summary, quote, problem, verification);
   }
+  if (quoteTruncatesSentence(source, quote)) {
+    return grounded(summary, quote, "incomplete", verification);
+  }
   if (CONTRADICTION.test(action) && !CONTRADICTION.test(quote)) {
     return grounded(summary, quote, "substring_only", verification);
   }
   if (quotedStatementOnly(source, quote)) {
     return grounded("review_stated_obligation", quote, "substring_only", verification);
+  }
+  const role = paymentSentenceRole(quote);
+  if (role === "injected_command") {
+    return grounded(summary, quote, "unverified", verification);
+  }
+  if (role === "ambiguous") {
+    return grounded(summary, quote, "ambiguous", verification);
+  }
+  if (role === "conditional_fee" || (role !== "current_balance" && role !== "reinstated_demand" && role !== "unsupported")) {
+    return grounded(summary, quote, "substring_only", verification);
   }
   const disposition = obligationDisposition(quote);
   if (disposition) {
@@ -437,7 +839,7 @@ export function findMonetarySupport(source: string, value: number): GroundedFact
       continue;
     }
     const amounts = amountValuesIn(line);
-    if (!amounts.some((amount) => Math.abs(amount - value) < 0.001)) {
+    if (!amounts.some((amount) => sameAmount(amount, value))) {
       continue;
     }
     const groundedAmount = groundMonetaryAmount(source, value, line);
