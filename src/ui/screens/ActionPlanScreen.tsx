@@ -173,7 +173,12 @@ export function ActionPlanScreen(props: {
                       }
                       data-testid="plan-action-support"
                     >
-                      {claimSupportLabel(item.headingSupport)}
+                      {item.headingSupport === "supports_claim"
+                        ? "Verified in notice"
+                        : (item.actionSummary === "pay_stated_balance" || item.actionSummary === "pay_or_contact") &&
+                            (item.headingSupport === "substring_only" || item.headingSupport === "unverified")
+                          ? "Needs review"
+                          : claimSupportLabel(item.headingSupport)}
                     </span>
                   </div>
                 </article>

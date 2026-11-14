@@ -83,6 +83,8 @@ describe("production Civic Calm shell", () => {
       },
     });
     expect(screen.getByTestId("read-amount")).toHaveTextContent("Not stated");
+    expect(screen.getByTestId("read-amount-support")).toHaveTextContent("Needs review");
+    expect(screen.getByTestId("read-amount-support")).not.toHaveTextContent("Verified");
     expect(screen.getByTestId("read-amount-conflict")).toHaveTextContent(/no current balance is established/i);
     expect(screen.getByTestId("read-amount-conflict")).toHaveTextContent("£1,280");
     expect(screen.getByTestId("read-amount-conflict")).toHaveTextContent("£1,380");
@@ -113,6 +115,7 @@ describe("production Civic Calm shell", () => {
       },
     });
     expect(screen.getByTestId("read-amount")).toHaveTextContent("£1,280");
+    expect(screen.getByTestId("read-amount-support")).toHaveTextContent("Verified in notice");
     fireEvent.click(screen.getByTestId("nav-plan"));
     expect(screen.getByTestId("plan-amount")).toHaveTextContent("£1,280");
     expect(screen.getByTestId("plan-action-support")).toHaveTextContent("Verified in notice");
@@ -151,6 +154,41 @@ describe("production Civic Calm shell", () => {
     expect(feeJson).not.toContain("40");
     expect(screen.getByTestId("screen-reply")).toHaveTextContent(/not the current balance/i);
     expect(screen.getByTestId("screen-reply")).toHaveTextContent(/unverified/i);
+    expect(screen.getByTestId("cloud-send-button")).toBeDisabled();
+
+    fireEvent.click(screen.getByTestId("nav-read"));
+    fireEvent.change(screen.getByTestId("notice-text"), {
+      target: {
+        value: [
+          "The demand for £1,280 has been cancelled.",
+          "Payment slip",
+          "Amount due: £1,280",
+          "Please pay by 25 November 2026.",
+        ].join("\n"),
+      },
+    });
+    expect(screen.getByTestId("read-amount")).toHaveTextContent("Not stated");
+    expect(screen.getByTestId("read-amount-support")).not.toHaveTextContent("Verified");
+    expect(screen.getByTestId("read-amount")).not.toHaveTextContent("£0");
+    fireEvent.click(screen.getByTestId("nav-plan"));
+    expect(screen.getByTestId("plan-action-support")).not.toHaveTextContent("Verified in notice");
+    fireEvent.click(screen.getByTestId("nav-reply"));
+    const slipJson = screen.getByTestId("exact-json").textContent ?? "";
+    expect(slipJson).toContain('"amountsGBP":[]');
+    expect(slipJson).not.toContain("1280");
+    expect(slipJson).not.toContain("pay_stated_balance");
+    expect(screen.getByTestId("screen-reply")).toHaveTextContent(/no supported outstanding balance/i);
+
+    fireEvent.click(screen.getByTestId("nav-read"));
+    fireEvent.change(screen.getByTestId("notice-text"), {
+      target: { value: "Please make a payment by 25 November 2026." },
+    });
+    expect(screen.getByTestId("read-amount")).toHaveTextContent("Not stated");
+    expect(screen.getByTestId("read-amount-support")).not.toHaveTextContent("Verified");
+    fireEvent.click(screen.getByTestId("nav-reply"));
+    const genericPayJson = screen.getByTestId("exact-json").textContent ?? "";
+    expect(genericPayJson).toContain('"amountsGBP":[]');
+    expect(genericPayJson).not.toContain("pay_stated_balance");
     expect(screen.getByTestId("cloud-send-button")).toBeDisabled();
   });
 
