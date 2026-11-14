@@ -4,6 +4,10 @@ import {
   CloudPayloadValidationError,
   type CloudPayloadGuardOptions,
 } from "../domain/cloudPayloadGuard";
+import {
+  canonicalClosedCloudBrief,
+  ClosedCloudBriefValidationError,
+} from "../domain/closedCloudBrief";
 import { CloudSendSafetyError } from "../domain/cloudSendApproval";
 import {
   hasPartialPlaceholderIdentifier,
@@ -22,6 +26,8 @@ export interface UserPayloadApproval {
   readonly generation: number;
   readonly serialized: string;
   readonly guardOptions: CloudPayloadGuardOptions;
+  /** Sorted identifier list captured with this approval. Not notice prose. */
+  readonly identifierContext: string;
   readonly cloudSendEnabled: false;
 }
 
@@ -82,6 +88,10 @@ function copyGuardOptions(options: CloudPayloadGuardOptions): CloudPayloadGuardO
   };
 }
 
+export function identifierContextKey(options: CloudPayloadGuardOptions | undefined): string {
+  return JSON.stringify([...(options?.forbiddenIdentifiers ?? [])].slice().sort());
+}
+
 /**
  * Records approval only when the supplied bytes are the current canonical payload.
  * The guard options are the same set used to build that payload. Caller claims that
@@ -133,6 +143,59 @@ export function recordUserPayloadApproval(
     generation,
     serialized: canonical.serialized,
     guardOptions,
+    identifierContext: identifierContextKey(guardOptions),
+    cloudSendEnabled: false,
+  };
+}
+
+/**
+ * Records approval of one exact v2 brief. v1 payloads are rejected.
+ * This does not call `CloudPayloadApproval.begin` and does not send.
+ */
+export function recordClosedBriefApproval(
+  serialized: string,
+  currentCanonicalSerialized: string,
+  generation: number,
+  options: CloudPayloadGuardOptions
+): UserPayloadApproval {
+  if (!Number.isInteger(generation) || generation < 0) {
+    throw new CloudSendSafetyError("Approval generation is not current");
+  }
+  if (serialized !== currentCanonicalSerialized) {
+    throw new CloudSendSafetyError("Approval must match the current canonical payload");
+  }
+  if (serialized !== serialized.trim() || serialized.includes("\n") || serialized.includes("\r")) {
+    throw new CloudSendSafetyError("Approval must be the exact canonical serialized payload");
+  }
+  const guardOptions = copyGuardOptions(options);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(serialized);
+  } catch {
+    throw new CloudSendSafetyError("Approval must be the exact canonical serialized payload");
+  }
+  let canonical;
+  try {
+    canonical = canonicalClosedCloudBrief(parsed);
+  } catch (error) {
+    if (error instanceof ClosedCloudBriefValidationError) {
+      throw new CloudSendSafetyError("Approval payload failed canonical validation");
+    }
+    throw error;
+  }
+  if (canonical.serialized !== serialized) {
+    throw new CloudSendSafetyError("Approval must be the exact canonical serialized payload");
+  }
+  assertPlaceholderIntegrity(canonical.payload);
+  const id = `user-approval-${nextApprovalId}`;
+  nextApprovalId += 1;
+  return {
+    kind: "user-canonical-snapshot",
+    id,
+    generation,
+    serialized: canonical.serialized,
+    guardOptions,
+    identifierContext: identifierContextKey(guardOptions),
     cloudSendEnabled: false,
   };
 }
@@ -160,8 +223,13 @@ export function privacyApprovalView(input: {
   limitations: readonly string[];
   approval: UserPayloadApproval | null;
   generation: number;
+  guardOptions?: CloudPayloadGuardOptions;
 }): PrivacyApprovalView {
-  const matches = approvalStillMatches(input.approval, input.serialized, input.generation);
+  const contextMatches =
+    input.guardOptions === undefined ||
+    input.approval?.identifierContext === identifierContextKey(input.guardOptions);
+  const matches =
+    approvalStillMatches(input.approval, input.serialized, input.generation) && contextMatches;
   return {
     serialized: input.serialized,
     limitations: input.limitations,
@@ -189,6 +257,34 @@ export function requestApprovedCloudSend(approval: UserPayloadApproval): never {
     revalidated = canonical.serialized === approval.serialized;
   } catch (error) {
     if (!(error instanceof CloudPayloadValidationError) && !(error instanceof SyntaxError)) {
+      throw error;
+    }
+    revalidated = false;
+  }
+  consumedApprovalIds.add(approval.id);
+  if (!revalidated) {
+    throw new CloudSendSafetyError("Approval payload failed canonical validation");
+  }
+  throw new CloudSendSafetyError(CLOUD_SUBMISSION_BLOCKED_REASON);
+}
+
+/**
+ * Future v2 send entry. Revalidates the approved bytes, consumes the id, and
+ * still refuses to send. It does not call `CloudPayloadApproval.begin`.
+ */
+export function requestClosedBriefSend(approval: UserPayloadApproval): never {
+  if (consumedApprovalIds.has(approval.id)) {
+    throw new CloudSendSafetyError("This approval has already been used");
+  }
+  let revalidated = false;
+  try {
+    const parsed: unknown = JSON.parse(approval.serialized);
+    const canonical = canonicalClosedCloudBrief(parsed);
+    revalidated =
+      canonical.serialized === approval.serialized &&
+      approval.identifierContext === identifierContextKey(approval.guardOptions);
+  } catch (error) {
+    if (!(error instanceof ClosedCloudBriefValidationError) && !(error instanceof SyntaxError)) {
       throw error;
     }
     revalidated = false;

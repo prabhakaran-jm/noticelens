@@ -1,16 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import originalSample from "../../../examples/energy-backbill-original.txt?raw";
 import revisedSample from "../../../examples/energy-backbill-revised.txt?raw";
 import { runOnDeviceNoticeExtraction } from "../../ai/onDeviceExtractor";
 import { probeChromeLanguageModelAvailability, type ChromeCapabilityReport } from "../../ai/capability";
-import { buildCloudBrief } from "../../adapters/cloudBriefBuilder";
+import { buildClosedCloudInspection } from "../../adapters/closedCloudInspection";
 import { createCloudApprovalSession } from "../../adapters/cloudApprovalSession";
 import {
+  identifierContextKey,
   privacyApprovalView,
-  recordUserPayloadApproval,
+  recordClosedBriefApproval,
   type UserPayloadApproval,
 } from "../../adapters/privacyApproval";
-import { briefSourceFromGrounded, groundNoticeFacts } from "../../adapters/groundNoticeFacts";
+import { groundNoticeFacts } from "../../adapters/groundNoticeFacts";
 import { compareNoticeTexts } from "../../domain/compareNotices";
 import { isoDateFromClock } from "../../domain/dates";
 import type { InferenceEvidenceReceipt } from "../../domain/evidenceReceipt";
@@ -46,7 +47,21 @@ export function NoticeLensApp() {
   const [privacyOpen, setPrivacyOpen] = useState(false);
   const [userApproval, setUserApproval] = useState<UserPayloadApproval | null>(null);
   const [editGeneration, setEditGeneration] = useState(0);
-  const invalidateApproval = () => setEditGeneration((current) => current + 1);
+  const noticeTextRef = useRef(originalText);
+  const generationRef = useRef(0);
+  const requestIdRef = useRef(0);
+  const bumpGeneration = () => {
+    generationRef.current += 1;
+    setEditGeneration(generationRef.current);
+  };
+  const replaceNoticeText = (text: string) => {
+    noticeTextRef.current = normalizeNewlines(text);
+    setOriginalText(noticeTextRef.current);
+    setExtraction(null);
+    setReceipts([]);
+    setDeviceMessage(null);
+    bumpGeneration();
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -71,14 +86,12 @@ export function NoticeLensApp() {
   );
   const inspection = useMemo(
     () =>
-      buildCloudBrief({
+      buildClosedCloudInspection({
         rawNoticeText: originalText,
-        source: briefSourceFromGrounded(grounded),
-        edits: {
-          responseGoal,
-          circumstanceFlags: flags,
-          extraKnownIdentifiers: [],
-        },
+        view: grounded,
+        responseGoal,
+        circumstanceFlags: flags,
+        extraKnownIdentifiers: [],
       }),
     [originalText, grounded, responseGoal, flags]
   );
@@ -89,17 +102,21 @@ export function NoticeLensApp() {
         limitations: inspection.limitations,
         approval: userApproval,
         generation: editGeneration,
+        guardOptions: inspection.guardOptions,
       }),
     [inspection, userApproval, editGeneration]
   );
   const session = useMemo(
     () =>
       createCloudApprovalSession({
-        canonical: inspection.canonical,
+        canonical: null,
         violations: inspection.violations,
       }),
     [inspection]
   );
+  const actionLabels = inspection.readableRows
+    .filter((row) => row.label.startsWith("Action label"))
+    .map((row) => row.value);
   const comparison = useMemo(
     () => compareNoticeTexts(originalText, revisedText, { today }),
     [originalText, revisedText, today]
@@ -128,42 +145,51 @@ export function NoticeLensApp() {
         {step === "read" ? (
           <ReadNoticeScreen
             text={originalText}
-            onText={(text) => {
-              setOriginalText(normalizeNewlines(text));
-              setExtraction(null);
-              setReceipts([]);
-              setDeviceMessage(null);
-              invalidateApproval();
-            }}
-            onLoadSample={() => {
-              setOriginalText(ORIGINAL_SAMPLE);
-              setExtraction(null);
-              setReceipts([]);
-              setDeviceMessage(null);
-              invalidateApproval();
-            }}
+            onText={replaceNoticeText}
+            onLoadSample={() => replaceNoticeText(ORIGINAL_SAMPLE)}
             grounded={grounded}
             capability={capability}
             reading={reading}
             deviceMessage={deviceMessage}
             onReadOnDevice={() => {
+              const requestId = requestIdRef.current + 1;
+              requestIdRef.current = requestId;
+              const noticeSnapshot = noticeTextRef.current;
+              const generationAtStart = generationRef.current;
               setReading(true);
               setDeviceMessage(null);
-              void runOnDeviceNoticeExtraction(originalText)
+              const stillCurrent = () =>
+                requestId === requestIdRef.current &&
+                noticeTextRef.current === noticeSnapshot &&
+                generationRef.current === generationAtStart;
+              void runOnDeviceNoticeExtraction(noticeSnapshot)
                 .then((record) => {
+                  if (!stillCurrent()) {
+                    return;
+                  }
                   const receipt = receiptForOnDeviceCall(record);
+                  if (!stillCurrent()) {
+                    return;
+                  }
                   setReceipts((current) => [...current, receipt]);
                   setExtraction(record.output);
-                  invalidateApproval();
+                  bumpGeneration();
                 })
                 .catch((error: unknown) => {
+                  if (!stillCurrent()) {
+                    return;
+                  }
                   setDeviceMessage(
                     error instanceof Error
                       ? error.message
                       : "On-device reading failed before a source was reported."
                   );
                 })
-                .finally(() => setReading(false));
+                .finally(() => {
+                  if (requestId === requestIdRef.current) {
+                    setReading(false);
+                  }
+                });
             }}
           />
         ) : null}
@@ -174,12 +200,12 @@ export function NoticeLensApp() {
             responseGoal={responseGoal}
             onResponseGoal={(goal) => {
               setResponseGoal(goal);
-              invalidateApproval();
+              bumpGeneration();
             }}
             flags={flags}
             onFlags={(next) => {
               setFlags(next);
-              invalidateApproval();
+              bumpGeneration();
             }}
           />
         ) : null}
@@ -210,13 +236,16 @@ export function NoticeLensApp() {
         <PrivacyApprovalModal
           open
           view={privacy}
+          generation={editGeneration}
+          identifierContext={identifierContextKey(inspection.guardOptions)}
+          actionLabels={actionLabels}
           onClose={() => setPrivacyOpen(false)}
           onApprove={(serialized) => {
-            if (inspection.exactSerialized === null) {
+            if (inspection.exactSerialized === null || serialized !== inspection.exactSerialized) {
               return;
             }
             setUserApproval(
-              recordUserPayloadApproval(
+              recordClosedBriefApproval(
                 serialized,
                 inspection.exactSerialized,
                 editGeneration,

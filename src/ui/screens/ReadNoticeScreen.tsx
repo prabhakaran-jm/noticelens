@@ -120,7 +120,7 @@ export function ReadNoticeScreen(props: {
           type="button"
           className="btn"
           data-testid="read-on-device"
-          disabled={!canAttempt || props.reading}
+          disabled={!canAttempt}
           onClick={props.onReadOnDevice}
         >
           {props.reading ? "Reading on this device" : "Read on this device"}

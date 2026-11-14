@@ -1,11 +1,18 @@
-import type { CloudBriefInspection } from "../../adapters/cloudBriefBuilder";
+import type { ReadableInspectionRow } from "../../adapters/cloudBriefBuilder";
 import {
   CLOUD_SUBMISSION_BLOCKED_REASON,
   type CloudApprovalSession,
 } from "../../adapters/cloudApprovalSession";
+import { STRUCTURAL_VALIDATION_DOES_NOT_ESTABLISH_PAYMENT_CORRECTNESS } from "../../domain/closedCloudBrief";
 
 export function PrepareReplyScreen(props: {
-  inspection: CloudBriefInspection;
+  inspection: {
+    limitations: readonly string[];
+    violations: readonly string[];
+    readableRows: readonly ReadableInspectionRow[];
+    exactSerialized: string | null;
+    formattedInspectionJson: string | null;
+  };
   session: CloudApprovalSession;
   privacyApproved?: boolean;
   onReviewPrivacy?: () => void;
@@ -21,8 +28,11 @@ export function PrepareReplyScreen(props: {
         </p>
       </header>
       <div className="banner block" role="status" data-testid="cloud-disabled">
-        {props.session.blockedReason}
+        Cloud sending disabled. {props.session.blockedReason}
       </div>
+      <p className="banner block" role="note" data-testid="structural-validation-warning">
+        {STRUCTURAL_VALIDATION_DOES_NOT_ESTABLISH_PAYMENT_CORRECTNESS}
+      </p>
       <ul>
         {props.inspection.limitations.map((item) => (
           <li key={item}>{item}</li>
