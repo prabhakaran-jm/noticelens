@@ -152,17 +152,18 @@ function lineAt(text: string, index: number): string {
 }
 
 function sentenceAt(text: string, index: number): string {
+  const masked = text.replace(/"[^"]*"|“[^”]*”/g, (match) => match.replace(/[.!?]/g, " "));
   let start = 0;
   for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-    const char = text[cursor];
+    const char = masked[cursor];
     if (char === "\n" || char === "." || char === "!" || char === "?") {
       start = cursor + 1;
       break;
     }
   }
   let end = text.length;
-  for (let cursor = index; cursor < text.length; cursor += 1) {
-    const char = text[cursor];
+  for (let cursor = index; cursor < masked.length; cursor += 1) {
+    const char = masked[cursor];
     if (char === "\n") {
       end = cursor;
       break;
@@ -247,11 +248,15 @@ function isBalanceSentence(sentence: string, raw: string): boolean {
 function classifyAmounts(text: string): ClassifiedAmount[] {
   return findExplicitGbpAmounts(text).amounts.map((amount) => {
     const sentence = sentenceAt(text, amount.index) || lineAt(text, amount.index);
-    const role = isConditionalFee(sentence, amount.raw)
-      ? "conditional_fee"
-      : isBalanceSentence(sentence, amount.raw)
-        ? "balance"
-        : "other";
+    const paymentRole = paymentSentenceRole(sentence);
+    const role =
+      paymentRole === "conditional_fee" || isConditionalFee(sentence, amount.raw)
+        ? "conditional_fee"
+        : isBalanceSentence(sentence, amount.raw) ||
+            paymentRole === "current_balance" ||
+            paymentRole === "reinstated_demand"
+          ? "balance"
+          : "other";
     const fact = groundMonetaryAmount(text, amount.value, sentence);
     return {
       value: amount.value,
@@ -269,6 +274,19 @@ function amountView(classified: ClassifiedAmount[], resolved: readonly number[])
   const conflictCandidates = resolved.length > 1;
   const allowed = new Set(conflictCandidates ? [] : resolved);
   const adjusted = classified.map((item) => {
+    if (
+      item.support === "ambiguous" &&
+      resolved.length === 1 &&
+      Math.abs(item.value - resolved[0]!) < 0.001 &&
+      /\b(?:replac|supersed)/i.test(item.quote)
+    ) {
+      return {
+        ...item,
+        role: "balance" as const,
+        support: "supports_claim" as const,
+        verifiedForDisplay: item.value,
+      };
+    }
     if (item.role === "conditional_fee" || item.support !== "supports_claim") {
       return item;
     }
@@ -630,6 +648,7 @@ export function groundNoticeFacts(input: {
     issue.support === "supports_claim" &&
     !appearsOnlyAsByDate(rawText, comparable.issueDate) &&
     issueRole !== "conditional_fee" &&
+    issueRole !== "conditional_obligation" &&
     issueRole !== "injected_command"
       ? issue
       : {

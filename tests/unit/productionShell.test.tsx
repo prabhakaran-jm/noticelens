@@ -83,6 +83,9 @@ describe("production Civic Calm shell", () => {
       },
     });
     expect(screen.getByTestId("read-amount")).toHaveTextContent("Not stated");
+    expect(screen.getByTestId("read-amount-conflict")).toHaveTextContent(/no current balance is established/i);
+    expect(screen.getByTestId("read-amount-conflict")).toHaveTextContent("£1,280");
+    expect(screen.getByTestId("read-amount-conflict")).toHaveTextContent("£1,380");
     fireEvent.click(screen.getByTestId("nav-plan"));
     expect(screen.getByTestId("plan-amount")).toHaveTextContent("Not stated");
     expect(screen.getByTestId("plan-amount-conflict")).toHaveTextContent(/no current balance is established/i);
@@ -140,6 +143,8 @@ describe("production Civic Calm shell", () => {
       },
     });
     expect(screen.getByTestId("read-amount")).toHaveTextContent("Not stated");
+    expect(screen.getByTestId("read-conditional-fee")).toHaveTextContent("£40");
+    expect(screen.getByTestId("read-conditional-fee")).toHaveTextContent(/not the balance/i);
     fireEvent.click(screen.getByTestId("nav-reply"));
     const feeJson = screen.getByTestId("exact-json").textContent ?? "";
     expect(feeJson).toContain('"amountsGBP":[]');

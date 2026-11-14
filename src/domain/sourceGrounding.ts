@@ -233,8 +233,11 @@ function explicitlyNegated(quote: string): boolean {
   return (
     figureContextNegated(quote) ||
     /\bdo\s+not\s+need\s+to\s+pay\b/i.test(quote) ||
+    /\bdo(?:n'?t|\s+not)\s+(?:have\s+to|need\s+to)\s+pay\b/i.test(quote) ||
+    /\bwon'?t\s+need\s+to\s+pay\b/i.test(quote) ||
+    /\bowe(?:\s+us)?\s+nothing\b/i.test(quote) ||
+    /\bnothing\s+to\s+pay\b/i.test(quote) ||
     /\bdo\s+not\s+need\s+to\s+contact\b/i.test(quote) ||
-    /\bdo\s+not\s+have\s+to\s+pay\b/i.test(quote) ||
     /\bpay\s+nothing\b/i.test(quote)
   );
 }
@@ -259,6 +262,7 @@ export type PaymentSentenceRole =
   | "withdrawn_demand"
   | "reinstated_demand"
   | "conditional_fee"
+  | "conditional_obligation"
   | "refunded_payment"
   | "injected_command"
   | "settled_or_negated"
@@ -297,24 +301,77 @@ function isInjectedCommand(sentence: string): boolean {
   ) {
     return true;
   }
-  return /(?:^|\s)(?:system|assistant)\s*:/i.test(sentence);
+  if (/(?:^|\s)(?:system|admin|assistant)\s*(?:note)?\s*[:\-]/i.test(sentence)) {
+    return true;
+  }
+  if (/\b(?:system|admin)\s+note\b/i.test(sentence)) {
+    return true;
+  }
+  if (/\bnote\s+to\s+the\s+assistant\b/i.test(sentence)) {
+    return true;
+  }
+  return /\bfor\s+any\s+ai\b/i.test(sentence);
 }
 
 function isConditionalFeeSentence(sentence: string): boolean {
-  return (
-    /\b(?:if|unless|may|might|could)\b/i.test(sentence) &&
-    /\b(?:fee|surcharge|penalty)\b/i.test(sentence)
-  );
-}
-
-function isReinstatement(sentence: string): boolean {
-  if (/\bnothing\s+remains\s+payable\b/i.test(sentence)) {
+  if (!/\b(?:fee|surcharge|penalty)\b/i.test(sentence)) {
+    return false;
+  }
+  if (/\bquestions?\b/i.test(sentence) && !/\b(?:may|might|could)\s+(?:apply|be)\b/i.test(sentence)) {
     return false;
   }
   return (
-    /\breinstat(?:e|ed|ement)\b/i.test(sentence) ||
-    /\bdisregard\s+the\s+cancellation\b/i.test(sentence) ||
-    /\bremains\s+payable\b/i.test(sentence)
+    /\b(?:if|unless|may|might|could)\b/i.test(sentence) ||
+    /\bwill\s+be\s+(?:charged|added|applied)\b/i.test(sentence) ||
+    /\b(?:late|administration)\s+(?:payment\s+)?fee\b/i.test(sentence)
+  );
+}
+
+function isConditionalObligation(sentence: string): boolean {
+  if (/\bonly\s+(?:if|after|once|when)\b/i.test(sentence)) {
+    return true;
+  }
+  if (/\bwould\s+be\s+due\b/i.test(sentence)) {
+    return true;
+  }
+  if (/\bsubject\s+to\s+(?:confirmation|verification)\b/i.test(sentence)) {
+    return true;
+  }
+  if (/\bshould\s+the\b/i.test(sentence) && /\b(?:confirmed|due)\b/i.test(sentence)) {
+    return true;
+  }
+  if (
+    /\bif\b/i.test(sentence) &&
+    /\b(?:confirm|confirmed|verification|inspection)\b/i.test(sentence) &&
+    amountValuesIn(sentence).length > 0
+  ) {
+    return true;
+  }
+  return /\bmust\s+pay\b/i.test(sentence) && /\bif\b/i.test(sentence);
+}
+
+function deniesCancellation(sentence: string): boolean {
+  return /\bnot\s+a\s+cancellation\b/i.test(sentence);
+}
+
+function quotedDemandContradiction(sentence: string): boolean {
+  const quotes = sentence.match(/"[^"]*"|“[^”]*”/g) ?? [];
+  return quotes.some((quoted) => {
+    const role = detectBlockingRole(quoted);
+    return role !== null && role !== "historical_payment";
+  });
+}
+
+function isReinstatement(sentence: string): boolean {
+  if (/\b(?:will\s+not|won'?t|never|not)\s+reinstate\b/i.test(sentence)) {
+    return false;
+  }
+  if (/\b(?:no|nothing)(?:\s+\w+){0,3}\s+remains\s+payable\b/i.test(sentence)) {
+    return false;
+  }
+  return (
+    /\b(?:has|have|is|are|was|were)\s+(?:been\s+)?reinstated\b/i.test(sentence) ||
+    /\bdisregard\s+the\s+cancellation\b/i.test(sentence)
   );
 }
 
@@ -325,7 +382,7 @@ function isStructuralSettlement(sentence: string): boolean {
       paymentNoun.test(sentence)) ||
     /\bsettlement\s+of\b/i.test(sentence);
   const dutyNegated =
-    /\b(?:need\s+not\s+pay|do\s+not\s+(?:have\s+to|need\s+to)\s+pay|must\s+pay\s+nothing|nothing\s+remains\s+payable|no\s+payment\s+to\s+make|no\s+longer\s+required|pay\s+nothing)\b/i.test(
+    /\b(?:need\s+not\s+pay|do(?:\s+not|n'?t)\s+(?:have\s+to|need\s+to)\s+pay|won'?t\s+need\s+to\s+pay|will\s+not\s+need\s+to\s+pay|must\s+pay\s+nothing|(?:no|nothing)(?:\s+\w+){0,3}\s+remains\s+payable|no\s+payment\s+to\s+make|nothing\s+to\s+pay|no\s+longer\s+required|pay\s+nothing|owe(?:\s+us)?\s+nothing)\b/i.test(
       sentence
     );
   const disregard =
@@ -334,7 +391,11 @@ function isStructuralSettlement(sentence: string): boolean {
     /\bas\s+closed\b/i.test(sentence) ||
     (/\bis\s+closed\b/i.test(sentence) && paymentNoun.test(sentence)) ||
     (/\bnow\s+clear\b/i.test(sentence) && paymentNoun.test(sentence)) ||
-    /\bno\s+balance\s+of\b/i.test(sentence);
+    /\bno\s+balance\s+of\b/i.test(sentence) ||
+    /\bbalance\s+is\s+now\s+zero\b/i.test(sentence) ||
+    /\bnow\s+zero\b/i.test(sentence) ||
+    /\bcredited\s+back\b/i.test(sentence) ||
+    /\bsent\s+in\s+error\b/i.test(sentence);
   return completed || dutyNegated || disregard || closed;
 }
 
@@ -342,12 +403,21 @@ function isPositiveCurrentBalance(sentence: string): boolean {
   if (/\b(?:no|not|never)\s+balance\b/i.test(sentence) || /\bno\s+longer\b/i.test(sentence)) {
     return false;
   }
+  if (/\bbalance\s+was\b/i.test(sentence) || /\bwas\s+£/i.test(sentence)) {
+    return false;
+  }
+  if (/\bowe(?:\s+us)?\s+nothing\b/i.test(sentence)) {
+    return false;
+  }
   return (
     /\boutstanding\s+balance\b/i.test(sentence) ||
     /\bamount\s+due\b/i.test(sentence) ||
     /\bbalance\s+now\s+requested\b/i.test(sentence) ||
+    /\btotal\s+to\s+pay\b/i.test(sentence) ||
+    /\byou\s+owe\s+£/i.test(sentence) ||
     /\bplease\s+pay\s+the\s+(?:outstanding\s+)?balance\b/i.test(sentence) ||
-    (/\bmust\s+pay\b/i.test(sentence) && !/\bmust\s+pay\s+nothing\b/i.test(sentence)) ||
+    /\bplease\s+pay\s+£/i.test(sentence) ||
+    (/\bmust\s+pay\b/i.test(sentence) && !/\bmust\s+pay\s+nothing\b/i.test(sentence) && !/\bif\b/i.test(sentence)) ||
     /\bpayment\s+is\s+due\b/i.test(sentence)
   );
 }
@@ -368,7 +438,14 @@ function detectBlockingRole(sentence: string): PaymentSentenceRole | null {
   if (/\brefunded\b/i.test(sentence)) {
     return "refunded_payment";
   }
-  if (explicitlyCancelled(sentence) || /\bcancel(?:s|led)?\s+the\s+demand\b/i.test(sentence)) {
+  if (
+    !deniesCancellation(sentence) &&
+    (explicitlyCancelled(sentence) ||
+      /\bcancel(?:s|led|lation)?\s+(?:of\s+)?(?:this|the|that)\s+(?:demand|charge|balance)\b/i.test(sentence) ||
+      /\bwe(?:'ve|\s+have)\s+cancell?ed\s+it\b/i.test(sentence) ||
+      /\bcancell?ed\s+this\s+demand\b/i.test(sentence) ||
+      /\bsupersed(?:e|ed|es)\b/i.test(sentence))
+  ) {
     return "cancelled_demand";
   }
   if (explicitlyWithdrawn(sentence) || /\bdemand\s+is\s+withdrawn\b/i.test(sentence)) {
@@ -388,19 +465,32 @@ export function paymentSentenceRole(sentence: string): PaymentSentenceRole {
   if (isInjectedCommand(text)) {
     return "injected_command";
   }
-  if (isConditionalFeeSentence(text)) {
+  const outside = outsideQuotes(text).replace(/\s+/g, " ").trim();
+  if (!outside) {
+    return "unsupported";
+  }
+  if (isConditionalFeeSentence(outside)) {
     return "conditional_fee";
   }
-  const blocking = detectBlockingRole(text);
-  const positive = isPositiveCurrentBalance(text);
-  if (positive && blocking) {
+  if (isConditionalObligation(outside)) {
+    return "conditional_obligation";
+  }
+  if (/\b(?:will\s+not|won'?t|never|not)\s+reinstate\b/i.test(outside)) {
+    return "settled_or_negated";
+  }
+  if (isReinstatement(outside)) {
+    return "reinstated_demand";
+  }
+  const blockingSource = deniesCancellation(outside)
+    ? outside.replace(/\bcancell(?:ed|ation|ing)?\b/gi, " ")
+    : outside;
+  const blocking = detectBlockingRole(blockingSource);
+  const positive = isPositiveCurrentBalance(outside);
+  if (positive && (blocking || quotedDemandContradiction(text))) {
     return "ambiguous";
   }
   if (blocking) {
     return blocking;
-  }
-  if (isReinstatement(text)) {
-    return "reinstated_demand";
   }
   if (positive) {
     return "current_balance";
@@ -418,24 +508,49 @@ function quoteTruncatesSentence(source: string, quote: string): boolean {
     return false;
   }
   const after = source.slice(index + trimmed.length);
-  if (!after.trim() || /^\s*[.!?]/.test(after) || /^\s*\n/.test(after)) {
+  if (!after.trim() || /^\s*[.!?]/.test(after)) {
     return false;
+  }
+  if (/^\s*\n/.test(after)) {
+    const next = after.replace(/^\s+/, "");
+    return /^(?:only|if|and|or|unless|subject|after|when|but|provided)\b/i.test(next);
   }
   return true;
 }
 
 function noticeSentences(text: string): string[] {
-  const sentences: string[] = [];
-  for (const line of text.split(/\n/)) {
-    const trimmed = line.replace(/\r$/, "").trim();
-    if (!trimmed) {
+  const lines = text
+    .split(/\n/)
+    .map((line) => line.replace(/\r$/, "").trim())
+    .filter((line) => line.length > 0);
+  const merged: string[] = [];
+  for (const line of lines) {
+    const previous = merged[merged.length - 1];
+    if (
+      previous &&
+      !/[.!?]"?$/.test(previous) &&
+      /^(?:only|if|and|or|unless|subject|after|when|but|provided)\b/i.test(line)
+    ) {
+      merged[merged.length - 1] = `${previous} ${line}`;
       continue;
     }
-    for (const part of trimmed.split(/(?<=[.!?])\s+(?=[A-Z"“])/)) {
-      const sentence = part.trim();
+    merged.push(line);
+  }
+  const sentences: string[] = [];
+  for (const line of merged) {
+    const masked = line.replace(/"[^"]*"|“[^”]*”/g, (match) => match.replace(/[.!?]/g, " "));
+    let start = 0;
+    for (const match of masked.matchAll(/(?<=[.!?])\s+(?=[A-Z"“])/g)) {
+      const at = match.index ?? 0;
+      const sentence = line.slice(start, at).trim();
       if (sentence) {
         sentences.push(sentence);
       }
+      start = at + match[0].length;
+    }
+    const tail = line.slice(start).trim();
+    if (tail) {
+      sentences.push(tail);
     }
   }
   return sentences;
@@ -445,11 +560,61 @@ function sameAmount(left: number, right: number): boolean {
   return Math.abs(left - right) < 0.001;
 }
 
+function pointsAtAmountBelow(sentence: string, amounts: readonly number[]): boolean {
+  return amounts.length === 0 && /\b(?:amount|balance|charge|sum)\s+below\b/i.test(sentence);
+}
+
+function replacementSplit(sentence: string): { current: number[]; retired: number[] } | null {
+  const match = /^(.*)\b(replac(?:e|ing|ed)|supersed(?:e|ed|es))\b(.*)$/i.exec(sentence);
+  if (!match) {
+    return null;
+  }
+  const before = amountValuesIn(match[1] ?? "");
+  const after = amountValuesIn(match[3] ?? "");
+  if (before.length === 0 || after.length === 0) {
+    return null;
+  }
+  if (/^replac/i.test(match[2] ?? "")) {
+    return { current: before, retired: after };
+  }
+  return { current: after, retired: before };
+}
+
+export interface PaymentClaimAssessment {
+  id: string;
+  sentenceIndex: number;
+  sentence: string;
+  amount: number | null;
+  role: PaymentSentenceRole;
+  positiveEvidence: boolean;
+  settlement: boolean;
+  cancellation: boolean;
+  waiver: boolean;
+  conditional: boolean;
+  reinstatement: "positive" | "negative" | "none";
+  contradiction: boolean;
+  injected: boolean;
+  sourceSpan: string;
+  evidenceComplete: boolean;
+  decision: "current" | "not_current" | "unverified";
+}
+
+function claimKey(sentenceIndex: number, amount: number | null, role: string): string {
+  const basis = `${sentenceIndex}|${amount ?? ""}|${role}`;
+  let hash = 2166136261;
+  for (let index = 0; index < basis.length; index += 1) {
+    hash ^= basis.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `claim-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
 /**
  * Figures that survive as the current outstanding balance.
  * A terminal account settlement is not undone by repeating an amount the
  * notice had already introduced. A later positive balance after a named
- * cancellation, or a different later amount, can remain.
+ * cancellation, or a different later amount, can remain. A forward
+ * "amount below" negation covers only the next stated amount.
  */
 export function resolvedCurrentBalanceAmounts(text: string): number[] {
   const sentences = noticeSentences(text);
@@ -463,6 +628,7 @@ export function resolvedCurrentBalanceAmounts(text: string): number[] {
   const lastPositive = new Map<number, number>();
   const lastReinstatement = new Map<number, number>();
   const seen = new Set<number>();
+  let forwardBlock = false;
 
   sentences.forEach((sentence, index) => {
     const amounts = amountValuesIn(sentence);
@@ -473,6 +639,7 @@ export function resolvedCurrentBalanceAmounts(text: string): number[] {
     if (
       role === "injected_command" ||
       role === "conditional_fee" ||
+      role === "conditional_obligation" ||
       role === "ambiguous" ||
       role === "unsupported"
     ) {
@@ -497,6 +664,9 @@ export function resolvedCurrentBalanceAmounts(text: string): number[] {
       return;
     }
     if (TERMINAL_ACCOUNT_ROLES.has(role)) {
+      if (pointsAtAmountBelow(sentence, amounts)) {
+        forwardBlock = true;
+      }
       if (amounts.length === 0) {
         lastUnscopedTerminal = index;
         for (const amount of seen) {
@@ -511,6 +681,9 @@ export function resolvedCurrentBalanceAmounts(text: string): number[] {
       return;
     }
     if (DEMAND_RETIREMENT_ROLES.has(role)) {
+      if (pointsAtAmountBelow(sentence, amounts)) {
+        forwardBlock = true;
+      }
       if (amounts.length === 0) {
         lastUnscopedRetirement = index;
       } else {
@@ -521,6 +694,24 @@ export function resolvedCurrentBalanceAmounts(text: string): number[] {
       return;
     }
     if (role === "current_balance") {
+      if (forwardBlock) {
+        forwardBlock = false;
+        for (const amount of amounts) {
+          introducedAtTerminal.add(amount);
+          lastScopedTerminal.set(amount, index);
+        }
+        return;
+      }
+      const replacement = replacementSplit(sentence);
+      if (replacement) {
+        for (const amount of replacement.retired) {
+          lastScopedRetirement.set(amount, index);
+        }
+        for (const amount of replacement.current) {
+          lastPositive.set(amount, index);
+        }
+        return;
+      }
       for (const amount of amounts) {
         lastPositive.set(amount, index);
       }
@@ -562,6 +753,48 @@ export function resolvedCurrentBalanceAmounts(text: string): number[] {
   return current;
 }
 
+export function assessPaymentClaims(text: string): PaymentClaimAssessment[] {
+  const current = resolvedCurrentBalanceAmounts(text);
+  const claims: PaymentClaimAssessment[] = [];
+  noticeSentences(text).forEach((sentence, sentenceIndex) => {
+    const role = paymentSentenceRole(sentence);
+    const amounts = amountValuesIn(sentence);
+    const targets = amounts.length > 0 ? amounts : [null];
+    const outside = outsideQuotes(sentence);
+    for (const amount of targets) {
+      const survived = amount !== null && current.some((item) => sameAmount(item, amount));
+      const decision: PaymentClaimAssessment["decision"] = survived
+        ? "current"
+        : role === "ambiguous" || role === "unsupported"
+          ? "unverified"
+          : "not_current";
+      claims.push({
+        id: claimKey(sentenceIndex, amount, role),
+        sentenceIndex,
+        sentence,
+        amount,
+        role,
+        positiveEvidence: role === "current_balance" || role === "reinstated_demand",
+        settlement: TERMINAL_ACCOUNT_ROLES.has(role),
+        cancellation: role === "cancelled_demand",
+        waiver: role === "waived",
+        conditional: role === "conditional_fee" || role === "conditional_obligation",
+        reinstatement: role === "reinstated_demand"
+          ? "positive"
+          : /\b(?:will\s+not|won'?t|never|not)\s+reinstate\b/i.test(outside)
+            ? "negative"
+            : "none",
+        contradiction: role === "ambiguous" || (role === "current_balance" && !survived && amount !== null),
+        injected: role === "injected_command",
+        sourceSpan: sentence,
+        evidenceComplete: !/\.{3}|…|\u2026/.test(sentence) && /[.!?]["”']?$/.test(sentence.trim()),
+        decision,
+      });
+    }
+  });
+  return claims;
+}
+
 export function sentenceSupportsResponseDeadline(
   sentence: string,
   resolved: readonly number[]
@@ -569,6 +802,7 @@ export function sentenceSupportsResponseDeadline(
   const role = paymentSentenceRole(sentence);
   if (
     role === "conditional_fee" ||
+    role === "conditional_obligation" ||
     role === "injected_command" ||
     role === "ambiguous" ||
     role === "historical_payment" ||
@@ -577,14 +811,16 @@ export function sentenceSupportsResponseDeadline(
   ) {
     return false;
   }
-  if (role === "current_balance" || role === "reinstated_demand") {
+  const paymentLinked =
+    /\bplease\s+pay\b/i.test(sentence) || role === "current_balance" || role === "reinstated_demand";
+  if (paymentLinked) {
     if (resolved.length !== 1) {
       return false;
     }
     const amounts = amountValuesIn(sentence);
     return amounts.length === 0 || amounts.every((amount) => resolved.some((item) => sameAmount(item, amount)));
   }
-  return /\b(?:by|deadline|due|no later than|respond)\b/i.test(sentence);
+  return /\b(?:respond|contact|deadline|no later than)\b/i.test(sentence);
 }
 
 export function paymentQuoteUndermined(
@@ -599,6 +835,7 @@ export function paymentQuoteUndermined(
   const role = paymentSentenceRole(quote);
   if (
     role === "conditional_fee" ||
+    role === "conditional_obligation" ||
     role === "injected_command" ||
     role === "ambiguous" ||
     role === "historical_payment" ||
@@ -607,11 +844,14 @@ export function paymentQuoteUndermined(
   ) {
     return true;
   }
-  if (role !== "current_balance" && role !== "reinstated_demand") {
-    return false;
-  }
   if (resolved.length > 1) {
     return true;
+  }
+  if (resolved.length !== 1 && /\bplease\s+pay\b/i.test(quote)) {
+    return true;
+  }
+  if (role !== "current_balance" && role !== "reinstated_demand") {
+    return false;
   }
   const amounts = amountValuesIn(quote);
   if (resolved.length !== 1) {
