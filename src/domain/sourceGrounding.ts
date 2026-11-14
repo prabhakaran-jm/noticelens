@@ -95,8 +95,9 @@ export function groundMonetaryAmount(
   if (amounts.length > 1) {
     return grounded(amount, quote, "ambiguous", verification);
   }
-  if (figureContextNegated(quote ?? "")) {
-    return grounded(amount, quote, "substring_only", verification);
+  const disposition = obligationDisposition(quote ?? "");
+  if (disposition) {
+    return grounded(amount, quote, disposition, verification);
   }
   return grounded(amount, quote, "supports_claim", verification);
 }
@@ -107,6 +108,80 @@ function figureContextNegated(quote: string): boolean {
     /£[\d,]+(?:\.\d+)?\s+is\s+not\b/i.test(quote) ||
     /\b(?:balance|amount|fee)\s+is\s+not\b/i.test(quote)
   );
+}
+
+function explicitlyCancelled(quote: string): boolean {
+  return (
+    /\b(?:has|have)\s+been\s+cancelled\b/i.test(quote) ||
+    /\b(?:is|was|were|hereby|now)\s+cancelled\b/i.test(quote) ||
+    /\bcancelled\s+(?:demand|notice|balance|payment|debt|request|charge|amount)\b/i.test(quote)
+  );
+}
+
+function explicitlyWithdrawn(quote: string): boolean {
+  if (/\b(?:has|have)\s+been\s+withdrawn\b/i.test(quote)) {
+    return true;
+  }
+  if (/\b(?:is|was|were|hereby)\s+withdrawn\b/i.test(quote)) {
+    return true;
+  }
+  return (
+    /\bpayment\s+request\b[^.]{0,80}\bwithdrawn\b/i.test(quote) &&
+    !/\bmay\s+be\s+withdrawn\b/i.test(quote)
+  );
+}
+
+function explicitlyNegated(quote: string): boolean {
+  return (
+    figureContextNegated(quote) ||
+    /\bdo\s+not\s+need\s+to\s+pay\b/i.test(quote) ||
+    /\bdo\s+not\s+need\s+to\s+contact\b/i.test(quote)
+  );
+}
+
+function historicalPayment(quote: string): boolean {
+  return (
+    /\balready\s+paid\b/i.test(quote) ||
+    /\balready\s+received\b/i.test(quote) ||
+    /\b(?:we|our records)\s+(?:have\s+)?received\s+(?:your\s+)?payment\b/i.test(quote) ||
+    /\bpayment\b[^.]{0,48}\b(?:was|were|has been|have been)\s+received\b/i.test(quote)
+  );
+}
+
+function affirmativePaymentInstruction(quote: string): boolean {
+  return (
+    /\bplease\s+pay\b/i.test(quote) ||
+    /\boutstanding\s+balance\b/i.test(quote) ||
+    /\bamount\s+due\b/i.test(quote) ||
+    /\bbalance\s+now\s+requested\b/i.test(quote) ||
+    /\bmust\s+pay\b/i.test(quote) ||
+    /\bpayment\s+is\s+due\b/i.test(quote)
+  );
+}
+
+/**
+ * A located quotation is not a current payment instruction.
+ * One blocking role stays unusable. A blocking role beside an affirmative
+ * instruction, or two blocking roles, fails closed as ambiguous.
+ * "May be withdrawn" and "if you do not pay" are not blocking roles.
+ */
+function obligationDisposition(quote: string): ClaimSupport | null {
+  const blocking = [
+    explicitlyCancelled(quote),
+    explicitlyWithdrawn(quote),
+    explicitlyNegated(quote),
+    historicalPayment(quote),
+  ].filter(Boolean);
+  if (affirmativePaymentInstruction(quote) && blocking.length > 0) {
+    return "ambiguous";
+  }
+  if (blocking.length > 1) {
+    return "ambiguous";
+  }
+  if (blocking.length === 1) {
+    return "substring_only";
+  }
+  return null;
 }
 
 function isoDatesIn(text: string): string[] {
@@ -153,8 +228,9 @@ export function groundCalendarDate(
   if (dates.length > 1) {
     return grounded(claimIso, quote, "ambiguous", verification);
   }
-  if (figureContextNegated(quote ?? "")) {
-    return grounded(claimIso, quote, "substring_only", verification);
+  const disposition = obligationDisposition(quote ?? "");
+  if (disposition) {
+    return grounded(claimIso, quote, disposition, verification);
   }
   return grounded(claimIso, quote, "supports_claim", verification);
 }
@@ -226,6 +302,10 @@ export function groundObligation(
   }
   if (CONTRADICTION.test(action) && !CONTRADICTION.test(quote)) {
     return grounded(summary, quote, "substring_only", verification);
+  }
+  const disposition = obligationDisposition(quote);
+  if (disposition) {
+    return grounded(summary, quote, disposition, verification);
   }
   const amounts = amountValuesIn(quote);
   if (amounts.length > 1) {

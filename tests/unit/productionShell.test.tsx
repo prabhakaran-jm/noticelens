@@ -131,6 +131,14 @@ describe("production Civic Calm shell", () => {
     fireEvent.click(screen.getByTestId("nav-reply"));
     expect(screen.queryByTestId("privacy-current")).not.toBeInTheDocument();
     expect(screen.getByTestId("cloud-send-button")).toBeDisabled();
+
+    fireEvent.click(screen.getByTestId("nav-plan"));
+    fireEvent.change(screen.getByLabelText("What you want the reply to ask"), {
+      target: { value: "request_billing_review" },
+    });
+    fireEvent.click(screen.getByTestId("nav-reply"));
+    expect(screen.queryByTestId("privacy-current")).not.toBeInTheDocument();
+    expect(screen.getByTestId("cloud-send-button")).toBeDisabled();
   });
 
   it("keeps invented action wording off the verified heading", () => {

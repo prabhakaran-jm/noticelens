@@ -6,6 +6,7 @@ import {
   approvalStillMatches,
   recordUserPayloadApproval,
   requestApprovedCloudSend,
+  resetUserApprovalStateForTests,
 } from "../../src/adapters/privacyApproval";
 import { canonicalCloudPayload } from "../../src/domain/cloudPayloadGuard";
 import {
@@ -116,17 +117,84 @@ describe("source claims stay unverified when the quotation does not support them
 describe("privacy approval is exact, local, and cannot send", () => {
   it("drops the approval when the canonical bytes change and does not take the send lock", () => {
     resetCloudSendStateForTests();
+    resetUserApprovalStateForTests();
     const canonical = canonicalCloudPayload(M0_SMOKE_TEST_CLOUD_PAYLOAD);
-    const approval = recordUserPayloadApproval(canonical.serialized);
+    const approval = recordUserPayloadApproval(canonical.serialized, canonical.serialized, 1);
     expect(CLOUD_SUBMISSION_ENABLED).toBe(false);
     expect(approval.cloudSendEnabled).toBe(false);
-    expect(approvalStillMatches(approval, canonical.serialized)).toBe(true);
-    expect(approvalStillMatches(approval, canonical.serialized.replace("1280", "520"))).toBe(false);
+    expect(approval.generation).toBe(1);
+    expect(approvalStillMatches(approval, canonical.serialized, 1)).toBe(true);
+    expect(approvalStillMatches(approval, canonical.serialized.replace("1280", "520"), 1)).toBe(false);
+    expect(approvalStillMatches(approval, canonical.serialized, 2)).toBe(false);
+    expect(() =>
+      recordUserPayloadApproval(canonical.serialized, canonical.serialized.replace("1280", "520"), 1)
+    ).toThrow(/current canonical payload/);
     expect(() => requestApprovedCloudSend(approval)).toThrow(/not connected/i);
+    expect(approvalStillMatches(approval, canonical.serialized, 1)).toBe(false);
+    expect(() => requestApprovedCloudSend(approval)).toThrow(/already been used/i);
 
     const flight = approveCloudPayload(M0_SMOKE_TEST_CLOUD_PAYLOAD);
     expect(flight.begin()).toBe(canonical.serialized);
     expect(() => flight.begin()).toThrow(/not in an approved state/i);
     flight.cancel();
+  });
+
+  it("rejects unknown keys, malformed placeholders, and PII before an approval exists", () => {
+    resetUserApprovalStateForTests();
+    const canonical = canonicalCloudPayload(M0_SMOKE_TEST_CLOUD_PAYLOAD);
+    const unknown = canonicalCloudPayload(M0_SMOKE_TEST_CLOUD_PAYLOAD).payload as unknown as Record<
+      string,
+      unknown
+    >;
+    const withUnknown = JSON.stringify({ ...unknown, extraNote: "no" });
+    expect(() => recordUserPayloadApproval(withUnknown, withUnknown, 1)).toThrow(
+      /canonical validation/
+    );
+
+    const malformed = {
+      ...canonical.payload,
+      redactedObligations: [
+        {
+          ...canonical.payload.redactedObligations[0],
+          redactedClause: "Please see [NOT_CANONICAL] before you reply.",
+        },
+      ],
+    };
+    const malformedSerialized = JSON.stringify(malformed);
+    expect(() => recordUserPayloadApproval(malformedSerialized, malformedSerialized, 1)).toThrow(
+      /malformed placeholder|canonical validation/
+    );
+
+    const leaking = {
+      ...canonical.payload,
+      redactedObligations: [
+        {
+          ...canonical.payload.redactedObligations[0],
+          redactedClause: "Please write to ada@example.com about the balance.",
+        },
+      ],
+    };
+    const leakingSerialized = JSON.stringify(leaking);
+    expect(() => recordUserPayloadApproval(leakingSerialized, leakingSerialized, 1)).toThrow(
+      /canonical validation/
+    );
+
+    const partial = {
+      ...canonical.payload,
+      redactedObligations: [
+        {
+          ...canonical.payload.redactedObligations[0],
+          redactedClause: "The saved reference is [RECIPIENT_NAME]-8472 today.",
+        },
+      ],
+    };
+    const partialSerialized = JSON.stringify(partial);
+    expect(() => recordUserPayloadApproval(partialSerialized, partialSerialized, 1)).toThrow(
+      /canonical validation|partial identifier/
+    );
+
+    const stale = recordUserPayloadApproval(canonical.serialized, canonical.serialized, 4);
+    expect(approvalStillMatches(stale, canonical.serialized, 5)).toBe(false);
+    expect(CLOUD_SUBMISSION_ENABLED).toBe(false);
   });
 });

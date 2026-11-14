@@ -1,6 +1,6 @@
 import { readAmount } from "./amounts";
 import {
-  containsFormatJoinedAccountToken,
+  containsAlphanumericAccountReference,
   findFoldedOccurrences,
   hasLongNumericIdentifier,
   identifierLeaks,
@@ -19,6 +19,7 @@ import {
 import { parseBillingWindow, parseCalendarDate } from "./dates";
 import {
   formatCanonicalPlaceholder,
+  hasPartialPlaceholderIdentifier,
   type CanonicalPlaceholderBase,
 } from "./placeholders";
 import {
@@ -181,6 +182,28 @@ function digitCount(value: string): number {
   return value.replace(/\D/g, "").length;
 }
 
+const CALENDAR_MONTH =
+  /^(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)$/i;
+
+function isCalendarMonth(value: string): boolean {
+  return CALENDAR_MONTH.test(value);
+}
+
+function pushProjectedToken(
+  spans: Span[],
+  rawNoticeText: string,
+  projected: ReturnType<typeof projectIdentifierPattern>,
+  start: number,
+  length: number,
+  kind: LocalIdentifierKind
+): void {
+  const origin = mapProjectedSpan(projected, start, start + length);
+  if (!origin) {
+    return;
+  }
+  pushMatch(spans, kind, origin.start, rawNoticeText.slice(origin.start, origin.end));
+}
+
 function detectSpans(rawNoticeText: string): Span[] {
   const spans: Span[] = [];
   const normalized = normalizeDashes(rawNoticeText);
@@ -194,7 +217,6 @@ function detectSpans(rawNoticeText: string): Span[] {
   const phone =
     /(?:\+44\s?\d{3,4}|\(?0\d{3,4}\)?)\s?\d{3}\s?\d{3,4}\b(?![\s-]*\d)/gi;
   const longNumber = /\d(?:[\s\u00A0-]*\d){7,}/g;
-  const salutation = /\bDear\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b/g;
   const nino = /\b[A-CEGHJ-PR-TW-Z]{2}\s?\d{2}\s?\d{2}\s?\d{2}\s?[A-D]\b/gi;
 
   for (const match of normalized.matchAll(address)) {
@@ -228,26 +250,44 @@ function detectSpans(rawNoticeText: string): Span[] {
   }
   const projected = projectIdentifierPattern(rawNoticeText);
   const account =
-    /\b(?:Account|Tenancy|Customer|Council\s*Tax)\s*(?:reference|ref|number|no\.?)\s*[:#-]?\s*([A-Z0-9][A-Z0-9/-]{2,20})/gi;
+    /\b(?:Account|Tenancy|Customer|Council\s*Tax)\s*(?:reference|ref|number|no\.?)\s*[:#-]?\s*([A-Z0-9][A-Z0-9/-]{2,20})|\bRef(?:erence)?\s*[:#-]?\s*([A-Za-z]{2,12}-\d{3,12})/gi;
   for (const match of projected.text.matchAll(account)) {
-    const token = match[1];
+    const token = match[1] ?? match[2];
     if (!token || match.index === undefined) {
       continue;
     }
     const tokenStart = match.index + match[0].lastIndexOf(token);
-    const origin = mapProjectedSpan(projected, tokenStart, tokenStart + token.length);
-    if (!origin) {
+    pushProjectedToken(spans, rawNoticeText, projected, tokenStart, token.length, "account_ref");
+  }
+  const unlabelled = /\b([A-Za-z]{2,12})([-/])(\d{3,12})\b/g;
+  for (const match of projected.text.matchAll(unlabelled)) {
+    if (!match[1] || match.index === undefined) {
+      continue;
+    }
+    if (match[2] === "-" && isCalendarMonth(match[1])) {
+      continue;
+    }
+    pushProjectedToken(spans, rawNoticeText, projected, match.index, match[0].length, "account_ref");
+  }
+  const joined = /\b[A-Za-z]{2,12}\d{3,12}\b/g;
+  for (const match of projected.text.matchAll(joined)) {
+    if (match.index === undefined) {
+      continue;
+    }
+    const origin = mapProjectedSpan(projected, match.index, match.index + match[0].length);
+    if (!origin || !/\p{Cf}/u.test(rawNoticeText.slice(origin.start, origin.end))) {
       continue;
     }
     pushMatch(spans, "account_ref", origin.start, rawNoticeText.slice(origin.start, origin.end));
   }
-  for (const match of normalized.matchAll(salutation)) {
+  const salutation = /\bDear\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b/g;
+  for (const match of projected.text.matchAll(salutation)) {
     const name = match[1];
     if (!name || match.index === undefined) {
       continue;
     }
-    const start = match.index + match[0].indexOf(name);
-    pushMatch(spans, "recipient_name", start, rawNoticeText.slice(start, start + name.length));
+    const nameStart = match.index + match[0].indexOf(name);
+    pushProjectedToken(spans, rawNoticeText, projected, nameStart, name.length, "recipient_name");
   }
   for (const match of normalized.matchAll(nino)) {
     const start = match.index ?? -1;
@@ -311,7 +351,7 @@ function leaksKnownIdentifier(text: string, rawValues: readonly string[]): boole
 
 function residualPattern(text: string): string | null {
   const visible = normalizeDashes(text);
-  if (/\[(?:ACCOUNT_REF|PHONE|LOCAL_ID|NINO)(?:_[1-9]\d*)?\](?!\s+[A-Za-z])\s*-?\s*\d/.test(visible)) {
+  if (hasPartialPlaceholderIdentifier(visible)) {
     return "A partial identifier remained beside a placeholder";
   }
   if (hasLongNumericIdentifier(visible)) {
@@ -336,7 +376,7 @@ function residualPattern(text: string): string | null {
   ) {
     return "A street address pattern remained in the structural brief";
   }
-  if (/\b[A-Z]{2,12}-\d{3,12}\b/.test(visible) || containsFormatJoinedAccountToken(text)) {
+  if (containsAlphanumericAccountReference(text)) {
     return "An account reference pattern remained in the structural brief";
   }
   return null;
@@ -469,11 +509,14 @@ export function redactAndBuildBrief(input: RedactAndBriefInput): RedactAndBriefR
   const map: LocalIdentifierMap = { locality: "browser-only", entries };
   const rawValues = replacements.map((item) => item.rawValue);
 
+  const detectedAccountValues = merged.kept
+    .filter((span) => span.kind === "account_ref")
+    .map((span) => span.rawValue);
   const redact = (value: string) => {
     const ordered = [...replacements].sort((a, b) => b.rawValue.length - a.rawValue.length);
     return ordered.reduce((text, item) => {
       if (item.wholeWord) {
-        return replaceNameComponent(text, item.rawValue, item.placeholder);
+        return replaceNameComponent(text, item.rawValue, item.placeholder, detectedAccountValues);
       }
       return replacePersonalName(
         replaceAllInsensitive(text, item.rawValue, item.placeholder),

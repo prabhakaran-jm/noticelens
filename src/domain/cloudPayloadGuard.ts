@@ -1,7 +1,8 @@
 import { hasAtMostTwoDecimalPlaces } from "./amounts";
 import { parseCalendarDate } from "./dates";
+import { hasPartialPlaceholderIdentifier } from "./placeholders";
 import {
-  containsFormatJoinedAccountToken,
+  containsAlphanumericAccountReference,
   hasLongNumericIdentifier,
   identifierLeaks,
   normalizeDashes,
@@ -66,14 +67,12 @@ export const CLOUD_PAYLOAD_REDACTION_LIMITATION =
 const UK_POSTCODE_REGEX = /\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b/i;
 const EMAIL_REGEX = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i;
 const PHONE_REGEX = /(?:\+44\s?\d{3,4}|\(?0\d{3,4}\)?)\s?\d{3}\s?\d{3,4}\b(?![\s-]*\d)/;
-const PARTIAL_PLACEHOLDER_IDENTIFIER =
-  /\[(?:ACCOUNT_REF|PHONE|LOCAL_ID|NINO)(?:_[1-9]\d*)?\](?!\s+[A-Za-z])\s*-?\s*\d/;
 const SALUTATION_NAME_REGEX =
   /\b(?:Dear|Mr|Mrs|Ms|Miss|Dr)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b/;
 const STREET_ADDRESS_REGEX =
   /\b\d{1,4}[A-Z]?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}\s+(?:Road|Street|Lane|Avenue|Close|Drive|Way|Court|Place|Gardens|Crescent|Terrace)\b/;
 const LABELED_ACCOUNT_REF_REGEX =
-  /\b(?:Account|Tenancy|Customer|Council\s*Tax)\s*(?:reference|ref|number|no\.?)\s*[:#-]?\s*[A-Z0-9-]{3,}\b/i;
+  /\b(?:Account|Tenancy|Customer|Council\s*Tax)\s*(?:reference|ref|number|no\.?)\s*[:#-]?\s*[A-Z0-9-]{3,}\b|\bRef(?:erence)?\s*[:#-]?\s*[A-Za-z]{2,12}-\d{3,12}\b/i;
 const ALPHANUMERIC_REF_TOKEN_REGEX = /\b[A-Z]{2,12}-\d{3,12}\b/;
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const ISO_MONTH = /^(\d{4})-(\d{2})$/;
@@ -110,7 +109,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function stripInvisibles(value: string): string {
-  return value.normalize("NFKC").replace(/[\u200B-\u200D\uFEFF\u00AD]/g, "");
+  return value.normalize("NFKC").replace(/\p{Cf}/gu, "");
 }
 
 function inspectStringForPiiOrLeakage(
@@ -134,7 +133,7 @@ function inspectStringForPiiOrLeakage(
   if (PHONE_REGEX.test(visible) || hasLongNumericIdentifier(visible)) {
     violations.push("a text field contains a telephone number pattern");
   }
-  if (PARTIAL_PLACEHOLDER_IDENTIFIER.test(visible)) {
+  if (hasPartialPlaceholderIdentifier(visible)) {
     violations.push("a text field contains a partial identifier beside a placeholder");
   }
   if (SALUTATION_NAME_REGEX.test(visible)) {
@@ -146,7 +145,7 @@ function inspectStringForPiiOrLeakage(
   if (
     LABELED_ACCOUNT_REF_REGEX.test(visible) ||
     ALPHANUMERIC_REF_TOKEN_REGEX.test(visible) ||
-    containsFormatJoinedAccountToken(value)
+    containsAlphanumericAccountReference(value)
   ) {
     violations.push("a text field contains an account reference pattern");
   }

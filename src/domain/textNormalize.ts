@@ -100,6 +100,37 @@ export function mapProjectedSpan(
   return { start: originStart, end: originEnd };
 }
 
+const MONTH_NAMES = new Set([
+  "jan",
+  "january",
+  "feb",
+  "february",
+  "mar",
+  "march",
+  "apr",
+  "april",
+  "may",
+  "jun",
+  "june",
+  "jul",
+  "july",
+  "aug",
+  "august",
+  "sep",
+  "sept",
+  "september",
+  "oct",
+  "october",
+  "nov",
+  "november",
+  "dec",
+  "december",
+]);
+
+function isMonthName(value: string): boolean {
+  return MONTH_NAMES.has(value.toLowerCase());
+}
+
 /** A letter-digit token whose original span hid a format character inside it. */
 export function containsFormatJoinedAccountToken(value: string): boolean {
   const projected = projectIdentifierPattern(value);
@@ -113,6 +144,26 @@ export function containsFormatJoinedAccountToken(value: string): boolean {
     if (/\p{Cf}/u.test(value.slice(origin.start, origin.end))) {
       return true;
     }
+  }
+  return false;
+}
+
+/**
+ * Hyphenated letter-digit tokens are account references in any case.
+ * A month name such as Nov-2026 is not. Format characters that join the
+ * letters to the digits count as the same token.
+ */
+export function containsAlphanumericAccountReference(value: string): boolean {
+  if (containsFormatJoinedAccountToken(value)) {
+    return true;
+  }
+  const projected = projectIdentifierPattern(value);
+  const pattern = /\b([A-Za-z]{2,12})([-/])(\d{3,12})\b/g;
+  for (const match of projected.text.matchAll(pattern)) {
+    if (match[2] === "-" && isMonthName(match[1] ?? "")) {
+      continue;
+    }
+    return true;
   }
   return false;
 }
@@ -294,7 +345,23 @@ function mapFoldedMatch(folded: IdentifierFold, foldedStart: number, foldedEnd: 
   return { start, end };
 }
 
-function componentSpans(text: string, component: string): OriginalSpan[] {
+function spanInsideDetectedAccount(
+  span: OriginalSpan,
+  accountOccurrences: readonly OriginalSpan[]
+): boolean {
+  return accountOccurrences.some(
+    (account) =>
+      span.start >= account.start &&
+      span.end <= account.end &&
+      account.end - account.start > span.end - span.start
+  );
+}
+
+function componentSpans(
+  text: string,
+  component: string,
+  detectedAccountValues: readonly string[] = []
+): OriginalSpan[] {
   const needle = prepareForMatch(component);
   if (!needle) {
     return [];
@@ -303,6 +370,9 @@ function componentSpans(text: string, component: string): OriginalSpan[] {
   const pattern = new RegExp(
     `(?<![\\p{L}\\p{M}\\p{N}_])${escapeRegExp(needle)}(?![\\p{L}\\p{M}\\p{N}_])`,
     "gu"
+  );
+  const accountOccurrences = detectedAccountValues.flatMap((account) =>
+    findFoldedOccurrences(text, account)
   );
   const spans: OriginalSpan[] = [];
   for (const match of folded.folded.matchAll(pattern)) {
@@ -314,6 +384,9 @@ function componentSpans(text: string, component: string): OriginalSpan[] {
     if (
       isDomainUseAt(text, folded, foldedStart, foldedStart + match[0].length, span.start, span.end, component)
     ) {
+      continue;
+    }
+    if (spanInsideDetectedAccount(span, accountOccurrences)) {
       continue;
     }
     spans.push(span);
@@ -414,12 +487,17 @@ export function nameComponentMatches(text: string, component: string): boolean {
 export function replaceNameComponent(
   input: string,
   component: string,
-  replacement: string
+  replacement: string,
+  detectedAccountValues: readonly string[] = []
 ): string {
   if (!component) {
     return input;
   }
-  return replaceSpans(input, componentSpans(input, component), replacement);
+  return replaceSpans(
+    input,
+    componentSpans(input, component, detectedAccountValues),
+    replacement
+  );
 }
 
 /**
