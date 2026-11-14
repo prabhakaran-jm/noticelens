@@ -4,10 +4,11 @@ import { briefSourceFromGrounded, groundNoticeFacts } from "../../src/adapters/g
 import { groundMonetaryAmount, groundObligation } from "../../src/domain/sourceGrounding";
 
 /**
- * R5-3 is not resolved. The 28 unsafe cases below expect the secure outcome
+ * R5-3 is not resolved. The 29 unsafe cases below expect the secure outcome
  * and are marked as expected failures. A passing assertion is not clearance
  * for cloud submission: remove `it.fails` only in a later reviewed change.
  * The 12 "still closed" cases already fail closed and stay ordinary tests.
+ * D4, the conditional late-payment fee, is one of those expected failures.
  */
 const TODAY = "2026-11-13";
 
@@ -105,6 +106,28 @@ describe("R5-3 known-failure matrix", () => {
     expect(groundMonetaryAmount(source, 1280, truncated).verifiedForDisplay).toBeNull();
     expect(groundObligation(source, "Pay the stated balance", truncated).support).not.toBe("supports_claim");
   });
+
+  it.fails(
+    "expected failure D4: a conditional late-payment fee must not become a payment action or a response deadline",
+    () => {
+      const text = "A late payment fee of £40 may apply if you do not pay by 25 November 2026.";
+      const view = groundNoticeFacts({ rawNoticeText: text, today: TODAY });
+      expect(view.amount.verifiedForDisplay).toBeNull();
+      expect(view.amount.conditionalFeesGBP).toEqual([40]);
+      expect(
+        view.obligations.some(
+          (item) => item.actionSummary === "pay_stated_balance" && item.headingSupport === "supports_claim"
+        )
+      ).toBe(false);
+      expect(view.responseDeadlines.verifiedForDisplay).toBeNull();
+      expect(view.responseDeadlines.support).not.toBe("supports_claim");
+      const built = buildClosedCloudBrief({ view, responseGoal: "request_billing_review" });
+      expect(built.payload.amountsGBP).toEqual([]);
+      expect(built.payload.obligations).toEqual([]);
+      expect(built.payload.responseDeadlines).toEqual([]);
+      expect(built.payload.issueDate).toBeNull();
+    }
+  );
 
   it("still closed: a truncated quotation that contains an ellipsis stays incomplete", () => {
     const truncated = "Please pay the outstanding balance of £1,280...";

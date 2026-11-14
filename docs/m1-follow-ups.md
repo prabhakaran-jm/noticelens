@@ -131,7 +131,7 @@ D4. A conditional late-payment fee can become an unsupported verified obligation
 
 R5-3 remains unresolved and blocks any live cloud submission or product demonstration claiming verified payment obligations. Do not claim that payment-role grounding is fully resolved. Do not enable cloud submission while this gate is open. A structurally valid v2 brief is not a verified payment fact.
 
-`tests/unit/r5-3KnownFailures.test.ts` has 40 characterization tests. 28 expect the secure outcome and are marked as expected failures because the current result is still unsafe. 12 assert secure results that already hold. Do not remove `it.fails` from those 28, and do not treat a known unsafe scenario as cleared for cloud submission. Phase 3 has not started.
+`tests/unit/r5-3KnownFailures.test.ts` has 41 characterization tests. 29 expect the secure outcome and are marked as expected failures because the current result is still unsafe. That includes D4, the conditional late-payment fee of £40. 12 assert secure results that already hold. Do not remove `it.fails` from those 29, and do not treat a known unsafe scenario as cleared for cloud submission. Phase 3 has not started.
 
 ### M2B-1c — Approval invalidated on edit — fixed for the local lifecycle
 
@@ -163,7 +163,7 @@ Milestone 2 live cloud submission of edited or redacted notices stays blocked. N
 
 Phase 1 adds a local closed v2 builder for `noticelens.cloud-brief.v2`. Phase 2 connects Prepare Reply and the privacy approval modal to that builder. The exact canonical bytes are shown without reformatting. Action labels stay outside the JSON and are marked as labels, not quotations. An empty `amountsGBP` array is shown as “Not stated”, never £0. Conditional fees and unsupported actions are labelled unverified. v1 payloads are rejected in that production approval path. Production does not use v1 `clauseReplacements`. The screen says cloud sending is disabled. The choice of the closed brief is recorded in `docs/M2_CLOUD_PAYLOAD_ARCHITECTURE_DECISION.md` (option B). `amountsGBP` means verified outstanding balances only when grounding already supports them. An empty array means no such balance was supported. It does not mean £0. Historical payments, cancelled or withdrawn charges, conditional fees, and ambiguous figures are omitted when grounding already withholds them. Issue dates are not copied into response deadlines. Source quotations, the redaction preview, and the identifier map stay local.
 
-This does not resolve R5-3. R5-3 remains unresolved and blocks any live cloud submission or product demonstration claiming verified payment obligations. Structural validation does not establish that a payment obligation is correct. A figure that grounding still marks `supports_claim` can appear in the local v2 object, including separate-sentence settlement, a quoted “cancelled”, an unquoted prompt-injected £9,999, a truncated quote without an ellipsis, the settlement paraphrases in the characterization matrix, and D4 below. Those 28 cases expect the secure outcome and are expected failures. They are not cleared for cloud submission.
+This does not resolve R5-3. R5-3 remains unresolved and blocks any live cloud submission or product demonstration claiming verified payment obligations. Structural validation does not establish that a payment obligation is correct. A figure that grounding still marks `supports_claim` can appear in the local v2 object, including separate-sentence settlement, a quoted “cancelled”, an unquoted prompt-injected £9,999, a truncated quote without an ellipsis, the settlement paraphrases in the characterization matrix, and D4 below. Those 29 cases expect the secure outcome and are expected failures. They are not cleared for cloud submission.
 
 The closed-schema validator now rejects the Phase 2 bypasses below. That does not enable sending, and it does not close R5-3.
 
@@ -171,7 +171,18 @@ The closed-schema validator now rejects the Phase 2 bypasses below. That does no
 - D2. Inherited required properties and `Object.prototype` values are rejected, including on obligations and billing periods. Own prototype-pollution keys are rejected.
 - D3. Duplicate amounts and obligations are rejected. Amounts, deadlines, obligations, guidance ids, and circumstance flags are ordered deterministically. Equivalent payloads produce the same bytes. Array limits remain. Mutating the source array does not change the canonical bytes.
 
-`tests/unit/r5-3KnownFailures.test.ts` has 40 characterization tests. 28 expect the secure outcome and are marked as expected failures. 12 assert secure results that already hold. Phase 3 has not started. Sending stays disabled.
+`tests/unit/r5-3KnownFailures.test.ts` has 41 characterization tests. 29 expect the secure outcome and are marked as expected failures. 12 assert secure results that already hold. Phase 3 has not started. Sending stays disabled.
+
+Reviewed corrections on the Phase 2 inspection branch, tested locally:
+
+- N1 is fixed for the tested cases. An on-device result is applied only when its request identity, notice snapshot, and document generation are still current. A result for notice A is discarded after an edit to B, after an edit back to A, and when an older request resolves after a newer one. A discarded result does not update the action plan, the grounded facts, the v2 brief, the inference receipt, or a local approval. A current `on_device` result can update the screen. A current result that does not report `on_device` is still rejected. This does not enable cloud sending.
+- N2 is fixed for the tested cases. The review checkbox is bound to the exact canonical bytes, the document generation, and the identifier context. Any of those changing clears the tick, including an edit that returns to the same bytes. The Approve action checks that binding again and does not rely on the button looking disabled. v1 remains rejected. The cloud-send lock is not acquired.
+- N3 adds D4 to the expected-failure matrix. The sentence “A late payment fee of £40 may apply if you do not pay by 25 November 2026.” still expects no verified payment action and no verified response deadline. It is an expected failure. Payment grounding was not redesigned.
+- N6. The inspection table names a conditional fee and says it is not the current balance. A verified balance is not given a generic “Amount status: Unverified” label. A payment heading whose only evidence is a conditional fee is marked unverified. An unsupported payment action is named. The v2 schema is unchanged. The Action Plan still uses the local grounding labels.
+- N4 remains open. Additional non-index array properties are not rejected.
+- N5 remains open. An omitted `guardOptions` argument is still accepted by the approval view.
+
+R5-3 remains unresolved. R5-5, the immutable domain-owned approval registry, remains pending. R5-2, R5-4, N-5, App Check, Chrome request-body inspection, and invented-identifier output checks remain tracked. This is not cloud readiness. `CLOUD_SUBMISSION_ENABLED` stays false.
 
 These stay tracked and are not implemented here:
 
@@ -185,7 +196,9 @@ These stay tracked and are not implemented here:
 - Demo-mode removal of the legacy SpikeHarness.
 - Soft-hyphen alphanumeric false positives, where a format character joins letters to digits that are not an account reference.
 - R5-2: fullwidth and accented salutations remain undetected, including Zoë Brontë, Siân Jones, José García, and Chloé O'Brien. `Sarah_1`, `SMITH_44`, and `Example99` remain insufficiently protected. Mandatory before live cloud submission.
-- R5-3 HARD GATE: H2, I2, and J2; S1–S3; settlement and negation paraphrases; a quoted “cancelled”; Q3 unquoted prompt-injected £9,999; truncated quotes without an ellipsis; and D4, a conditional late-payment fee that can become an unsupported verified obligation. R5-3 remains unresolved and blocks any live cloud submission or product demonstration claiming verified payment obligations. Of the 40 characterization tests, 28 are expected failures for the secure outcome and 12 assert results that already fail closed. Do not treat those 28 as cleared for cloud submission.
+- R5-3 HARD GATE: H2, I2, and J2; S1–S3; settlement and negation paraphrases; a quoted “cancelled”; Q3 unquoted prompt-injected £9,999; truncated quotes without an ellipsis; and D4, a conditional late-payment fee that can become an unsupported verified obligation. R5-3 remains unresolved and blocks any live cloud submission or product demonstration claiming verified payment obligations. Of the 41 characterization tests, 29 are expected failures for the secure outcome and 12 assert results that already fail closed. Do not treat those 29 as cleared for cloud submission.
+- N4 remains open: additional non-index array properties are not rejected by the v2 validator.
+- N5 remains open: an omitted `guardOptions` argument is still accepted by the approval view. R5-5, the immutable domain-owned approval registry, remains pending.
 - D1: getter or Proxy bypasses are rejected by the v2 validator. This does not enable cloud sending.
 - D2: inherited prototype values are rejected by the v2 validator, including nested obligations and billing periods. This does not enable cloud sending.
 - D3: duplicate amounts and obligations are rejected, and canonical order is deterministic. This does not enable cloud sending.

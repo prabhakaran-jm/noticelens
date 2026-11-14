@@ -270,7 +270,68 @@ describe("production v2 inspection and approval", () => {
     });
     expect(inspection.canonical?.payload.amountsGBP).toEqual([1280]);
     expect(inspection.exactSerialized).not.toContain("40");
-    expect(inspection.readableRows.find((row) => row.label === "Amount status")?.value).toBe("Unverified");
+    expect(inspection.readableRows.find((row) => row.label === "Amount status")).toBeUndefined();
+    expect(inspection.readableRows.find((row) => row.label === "Amounts")?.value).toMatch(/1,280/);
+    const fee = inspection.readableRows.find((row) => row.label === "Conditional fee");
+    expect(fee?.value).toMatch(/40/);
+    expect(fee?.value).toMatch(/unverified/i);
+    expect(fee?.value).toMatch(/not the current balance/i);
+    const action = inspection.readableRows.find((row) => row.label.startsWith("Action label"));
+    expect(action?.value).not.toMatch(/unverified/i);
+  });
+
+  it("marks a fee-only payment heading unverified and names the fee", () => {
+    const text = "A late payment fee of £40 may apply if you do not pay by 25 November 2026.";
+    const view = groundNoticeFacts({ rawNoticeText: text, today: TODAY });
+    const inspection = buildClosedCloudInspection({
+      rawNoticeText: text,
+      view,
+      responseGoal: "request_billing_review",
+    });
+    expect(inspection.readableRows.find((row) => row.label === "Amounts")?.value).toBe("Not stated");
+    expect(inspection.readableRows.map((row) => row.value).join(" ")).not.toContain("£0");
+    expect(inspection.readableRows.find((row) => row.label === "Amount status")).toBeUndefined();
+    const fee = inspection.readableRows.find((row) => row.label === "Conditional fee");
+    expect(fee?.value).toMatch(/40/);
+    expect(fee?.value).toMatch(/unverified/i);
+    expect(fee?.value).toMatch(/not the current balance/i);
+    const payment = inspection.readableRows.find((row) => row.value.includes("Pay the stated balance"));
+    expect(payment?.value).toMatch(/unverified/i);
+    expect(payment?.value).toMatch(/conditional fee/i);
+  });
+
+  it("names an unsupported payment action without marking the verified balance unverified", () => {
+    const payQuote =
+      "Please pay the balance or contact our billing team by 25 November 2026 to discuss your account.";
+    const view = groundNoticeFacts({
+      rawNoticeText: original,
+      today: TODAY,
+      extraction: {
+        noticeCategory: "utility_electricity",
+        issueDate: "18 November 2026",
+        billingPeriod: "January and June 2025",
+        amountGBP: 1280,
+        responseDeadline: "25 November 2026",
+        obligations: [
+          { action: "Pay the balance", dueDate: null, sourceQuote: payQuote },
+          { action: "Pay £4,400", dueDate: null, sourceQuote: payQuote },
+        ],
+      },
+    });
+    const inspection = buildClosedCloudInspection({
+      rawNoticeText: original,
+      view,
+      responseGoal: "request_billing_review",
+    });
+    expect(inspection.readableRows.find((row) => row.label === "Amounts")?.value).toMatch(/1,280/);
+    expect(inspection.readableRows.find((row) => row.label === "Amount status")).toBeUndefined();
+    expect(inspection.readableRows.find((row) => row.label === "Conditional fee")).toBeUndefined();
+    const unsupported = inspection.readableRows.find((row) => row.label.startsWith("Unsupported action"));
+    expect(unsupported?.value).toMatch(/unverified/i);
+    expect(unsupported?.value).toMatch(/Pay or contact the sender/);
+    const verified = inspection.readableRows.find((row) => row.label.startsWith("Action label"));
+    expect(verified?.value).toMatch(/Pay or contact the sender/);
+    expect(verified?.value).not.toMatch(/unverified/i);
   });
 
   it("binds approval to the exact bytes, generation, and identifier context, and still refuses to send", () => {

@@ -55,10 +55,22 @@ function formatGbp(amount: number): string {
   }).format(amount);
 }
 
+function onlyConditionalFeeEvidence(view: GroundedNoticeViewModel): boolean {
+  return (
+    view.amount.verifiedForDisplay === null &&
+    view.amount.conditionalFeesGBP.length > 0 &&
+    view.amount.classified.every(
+      (item) => item.role === "conditional_fee" || item.support !== "supports_claim"
+    )
+  );
+}
+
 /**
  * Readable rows from the canonical v2 object. Action sentences are labels.
- * An empty amountsGBP array is "Not stated", never £0. Conditional fees and
- * unsupported actions are labelled unverified and are not copied into the JSON.
+ * An empty amountsGBP array is "Not stated", never £0. A conditional fee is
+ * named as unverified and is not described as the current balance. A payment
+ * heading whose only evidence is that fee is marked unverified. This display
+ * does not change the v2 schema or treat structural validation as payment proof.
  */
 export function readableRowsFromClosedBrief(
   payload: ClosedCloudBrief,
@@ -83,6 +95,25 @@ export function readableRowsFromClosedBrief(
           ? "Not stated"
           : payload.amountsGBP.map((amount) => formatGbp(amount)).join(", "),
     },
+  ];
+  if (view.amount.conditionalFeesGBP.length > 0) {
+    const listed = view.amount.conditionalFeesGBP.map((amount) => formatGbp(amount)).join(", ");
+    rows.push({
+      label: "Conditional fee",
+      value: `${listed} is unverified and is not the current balance.`,
+    });
+  }
+  const otherUnverified = view.amount.classified.filter(
+    (item) => item.role !== "conditional_fee" && item.verifiedForDisplay === null
+  );
+  if (otherUnverified.length > 0) {
+    const listed = otherUnverified.map((item) => formatGbp(item.value)).join(", ");
+    rows.push({
+      label: "Unverified amount",
+      value: `${listed} is unverified.`,
+    });
+  }
+  rows.push(
     {
       label: "Response deadlines",
       value:
@@ -90,22 +121,32 @@ export function readableRowsFromClosedBrief(
           ? "Not stated"
           : payload.responseDeadlines.map((date) => formatPoint(date)).join("; "),
     },
-    { label: "Response goal", value: payload.responseGoal },
-  ];
-  if (view.amount.conditionalFeesGBP.length > 0 || (view.amount.verifiedForDisplay === null && view.amount.classified.length > 0)) {
-    rows.push({ label: "Amount status", value: "Unverified" });
-  }
+    { label: "Response goal", value: payload.responseGoal }
+  );
+  const feeOnly = onlyConditionalFeeEvidence(view);
   payload.obligations.forEach((item, index) => {
+    const paymentWithoutBalance =
+      feeOnly &&
+      (item.actionSummary === "pay_stated_balance" || item.actionSummary === "pay_or_contact");
+    const unverified = paymentWithoutBalance
+      ? " Unverified: the only stated amount is a conditional fee, not a current balance."
+      : "";
     rows.push({
       label: `Action label ${index + 1}`,
       value: `${trustedActionSummaryLabel(item.actionSummary)}; due ${
         item.dueDate ? formatPoint(item.dueDate) : "Not stated"
-      }. Label, not a quotation.`,
+      }.${unverified} Label, not a quotation.`,
     });
   });
-  if (view.obligations.some((item) => item.headingSupport !== "supports_claim")) {
-    rows.push({ label: "Unsupported actions", value: "Unverified" });
-  }
+  view.obligations.forEach((item, index) => {
+    if (item.headingSupport === "supports_claim") {
+      return;
+    }
+    rows.push({
+      label: `Unsupported action ${index + 1}`,
+      value: `${trustedActionSummaryLabel(item.actionSummary)} is unverified.`,
+    });
+  });
   return rows;
 }
 

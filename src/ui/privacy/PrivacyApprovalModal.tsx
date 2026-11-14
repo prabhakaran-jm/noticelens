@@ -5,23 +5,61 @@ import {
 import type { PrivacyApprovalView } from "../../adapters/privacyApproval";
 import { STRUCTURAL_VALIDATION_DOES_NOT_ESTABLISH_PAYMENT_CORRECTNESS } from "../../domain/closedCloudBrief";
 
+export interface PayloadConfirmation {
+  readonly serialized: string;
+  readonly generation: number;
+  readonly identifierContext: string;
+}
+
+/**
+ * True only when the tick was made for this exact serialized payload,
+ * this document generation, and this identifier context.
+ */
+export function payloadConfirmationMatches(
+  confirmation: PayloadConfirmation | null,
+  serialized: string | null,
+  generation: number,
+  identifierContext: string
+): boolean {
+  return (
+    confirmation !== null &&
+    serialized !== null &&
+    confirmation.serialized === serialized &&
+    confirmation.generation === generation &&
+    confirmation.identifierContext === identifierContext
+  );
+}
+
 /**
  * Shows the exact canonical payload for a person to approve.
  * Approval is local. This modal does not call the cloud drafter or begin a send lock.
+ * The review tick is bound to the bytes on screen. A later payload, generation,
+ * or identifier context clears it, including when the previous bytes return.
  */
 export function PrivacyApprovalModal(props: {
   open: boolean;
   view: PrivacyApprovalView;
+  generation: number;
+  identifierContext: string;
   actionLabels?: readonly string[];
   onApprove: (serialized: string) => void;
   onClose: () => void;
 }) {
-  const [reviewed, setReviewed] = useState(false);
+  const [confirmation, setConfirmation] = useState<PayloadConfirmation | null>(null);
+  const serialized = props.view.serialized;
+  const confirmed = payloadConfirmationMatches(
+    confirmation,
+    serialized,
+    props.generation,
+    props.identifierContext
+  );
+  if (confirmation !== null && !confirmed) {
+    setConfirmation(null);
+  }
   if (!props.open) {
     return null;
   }
-  const serialized = props.view.serialized;
-  const canRecord = Boolean(serialized) && reviewed && !props.view.matchesCurrentPayload;
+  const canRecord = confirmed && !props.view.matchesCurrentPayload;
 
   return (
     <div className="privacy-backdrop" role="presentation" onClick={props.onClose}>
@@ -64,8 +102,18 @@ export function PrivacyApprovalModal(props: {
         <label className="field">
           <input
             type="checkbox"
-            checked={reviewed}
-            onChange={(event) => setReviewed(event.target.checked)}
+            checked={confirmed}
+            onChange={(event) => {
+              if (!event.target.checked || serialized === null) {
+                setConfirmation(null);
+                return;
+              }
+              setConfirmation({
+                serialized,
+                generation: props.generation,
+                identifierContext: props.identifierContext,
+              });
+            }}
           />
           I have reviewed this exact payload
         </label>
@@ -79,9 +127,18 @@ export function PrivacyApprovalModal(props: {
             data-testid="privacy-approve"
             disabled={!canRecord}
             onClick={() => {
-              if (serialized) {
-                props.onApprove(serialized);
+              if (
+                !payloadConfirmationMatches(
+                  confirmation,
+                  serialized,
+                  props.generation,
+                  props.identifierContext
+                ) ||
+                serialized === null
+              ) {
+                return;
               }
+              props.onApprove(serialized);
             }}
           >
             Approve this exact payload
