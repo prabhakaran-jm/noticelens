@@ -131,13 +131,6 @@ function isMonthName(value: string): boolean {
   return MONTH_NAMES.has(value.toLowerCase());
 }
 
-/** A name component must not be split out of LETTERS + separator + digits. */
-function followedByAccountTail(text: string, end: number): boolean {
-  return /^(?:[\p{Cf}\u2010\u2011\u2012\u2013\u2014\u2015\u2212\uFE58\uFE63\uFF0D\u2043/-])+\d/u.test(
-    text.slice(end)
-  );
-}
-
 /** A letter-digit token whose original span hid a format character inside it. */
 export function containsFormatJoinedAccountToken(value: string): boolean {
   const projected = projectIdentifierPattern(value);
@@ -352,7 +345,23 @@ function mapFoldedMatch(folded: IdentifierFold, foldedStart: number, foldedEnd: 
   return { start, end };
 }
 
-function componentSpans(text: string, component: string): OriginalSpan[] {
+function spanInsideDetectedAccount(
+  span: OriginalSpan,
+  accountOccurrences: readonly OriginalSpan[]
+): boolean {
+  return accountOccurrences.some(
+    (account) =>
+      span.start >= account.start &&
+      span.end <= account.end &&
+      account.end - account.start > span.end - span.start
+  );
+}
+
+function componentSpans(
+  text: string,
+  component: string,
+  detectedAccountValues: readonly string[] = []
+): OriginalSpan[] {
   const needle = prepareForMatch(component);
   if (!needle) {
     return [];
@@ -361,6 +370,9 @@ function componentSpans(text: string, component: string): OriginalSpan[] {
   const pattern = new RegExp(
     `(?<![\\p{L}\\p{M}\\p{N}_])${escapeRegExp(needle)}(?![\\p{L}\\p{M}\\p{N}_])`,
     "gu"
+  );
+  const accountOccurrences = detectedAccountValues.flatMap((account) =>
+    findFoldedOccurrences(text, account)
   );
   const spans: OriginalSpan[] = [];
   for (const match of folded.folded.matchAll(pattern)) {
@@ -374,7 +386,7 @@ function componentSpans(text: string, component: string): OriginalSpan[] {
     ) {
       continue;
     }
-    if (followedByAccountTail(text, span.end)) {
+    if (spanInsideDetectedAccount(span, accountOccurrences)) {
       continue;
     }
     spans.push(span);
@@ -475,12 +487,17 @@ export function nameComponentMatches(text: string, component: string): boolean {
 export function replaceNameComponent(
   input: string,
   component: string,
-  replacement: string
+  replacement: string,
+  detectedAccountValues: readonly string[] = []
 ): string {
   if (!component) {
     return input;
   }
-  return replaceSpans(input, componentSpans(input, component), replacement);
+  return replaceSpans(
+    input,
+    componentSpans(input, component, detectedAccountValues),
+    replacement
+  );
 }
 
 /**

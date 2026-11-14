@@ -509,11 +509,14 @@ export function redactAndBuildBrief(input: RedactAndBriefInput): RedactAndBriefR
   const map: LocalIdentifierMap = { locality: "browser-only", entries };
   const rawValues = replacements.map((item) => item.rawValue);
 
+  const detectedAccountValues = merged.kept
+    .filter((span) => span.kind === "account_ref")
+    .map((span) => span.rawValue);
   const redact = (value: string) => {
     const ordered = [...replacements].sort((a, b) => b.rawValue.length - a.rawValue.length);
     return ordered.reduce((text, item) => {
       if (item.wholeWord) {
-        return replaceNameComponent(text, item.rawValue, item.placeholder);
+        return replaceNameComponent(text, item.rawValue, item.placeholder, detectedAccountValues);
       }
       return replacePersonalName(
         replaceAllInsensitive(text, item.rawValue, item.placeholder),

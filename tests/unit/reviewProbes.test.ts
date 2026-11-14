@@ -246,6 +246,61 @@ describe("review probes — unicode dashes, name parts, long numbers, delivery, 
     expect(JSON.stringify(result.structuralBrief)).not.toContain("90210");
   });
 
+  it.each([
+    ["Ref SMITH-44", "Ref SMITH-44", "SMITH-44", "John Smith", "Ref [RECIPIENT_NAME]-44"],
+    ["Smith/7", "See Smith/7 before you reply.", "Smith/7", "John Smith", "[RECIPIENT_NAME]/7"],
+    ["Sarah-1", "See Sarah-1 before you reply.", "Sarah-1", "Sarah Example", "[RECIPIENT_NAME]-1"],
+    ["Example-12", "See Example-12 before you reply.", "Example-12", "Sarah Example", "[RECIPIENT_NAME]-12"],
+  ])(
+    "R5-1 keeps %s from escaping redaction and the final guard",
+    (_label, line, token, recipient, redactedToken) => {
+      const rawNoticeText = noticeWith([
+        "18 November 2026",
+        `Dear ${recipient},`,
+        line,
+        "The period Nov-2026 is a calendar label.",
+        "Our records show an outstanding balance of £1,280 for electricity supplied between January and June 2025.",
+        PAY_QUOTE,
+      ]);
+      const result = briefFrom(rawNoticeText, PAY_QUOTE);
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      expect(result.redactedNoticePreview).toContain(redactedToken);
+      expect(result.redactedNoticePreview).toContain("Nov-2026");
+      expect(result.redactedNoticePreview).not.toContain(token);
+      expect(result.redactedNoticePreview).not.toContain(recipient);
+      expect(JSON.stringify(result.structuralBrief)).not.toContain(token);
+
+      const forbidden = result.localIdentifierMap.entries.map((entry) => entry.rawValue);
+      expect(() =>
+        validateCloudBoundPayload(clausePayload(`Please review ${token} before the response date.`), {
+          forbiddenIdentifiers: [recipient, ...forbidden],
+        })
+      ).toThrow(/forbidden local identifier|partial identifier|account reference/);
+      expect(() =>
+        revalidateFinalCloudPayload(
+          clausePayload(`Please review ${redactedToken} before the response date.`),
+          { forbiddenIdentifiers: [recipient, ...forbidden] }
+        )
+      ).toThrow(/partial identifier/);
+
+      const edited = {
+        ...result.structuralBrief,
+        redactedObligations: [
+          {
+            ...result.structuralBrief.redactedObligations[0]!,
+            redactedClause: `Please review ${token} before the response date.`,
+          },
+        ],
+      };
+      expect(() =>
+        revalidateFinalCloudPayload(edited, { forbiddenIdentifiers: [recipient, ...forbidden] })
+      ).toThrow(/forbidden local identifier|partial identifier|account reference/);
+    }
+  );
+
   it("K5 rejects a digit tail beside any canonical placeholder", () => {
     const clauses = [
       "The saved reference is [RECIPIENT_NAME]-8472 today.",
