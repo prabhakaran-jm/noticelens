@@ -157,6 +157,8 @@ A local privacy approval records the exact canonical JSON for the current edit g
 
 Milestone 2 live cloud submission of edited or redacted notices stays blocked. N-1, N-2, M2A-1, M2A-3, M2A-5, M2B-1a, the tested K3/K5 tokens, and R5-1 are fixed for the cases named above. R5-2, R5-3, R5-4, and R5-5 are not resolved. R5-3 is a hard gate before live cloud submission or a product-demo recording. A local privacy approval records the exact canonical payload for the current production path and does not start a cloud send. Do not enable cloud submission, and do not record a product demonstration, until the remaining items below are closed.
 
+Phase 1 adds a local `noticelens.cloud-brief.v2` brief beside the current preview. `amountsGBP` on that brief means verified outstanding balances only. An empty array means no such balance was supported. It does not mean £0. Historical payments, cancelled or withdrawn charges, conditional fees, and ambiguous figures are omitted when grounding already withholds them. Issue dates are not copied into response deadlines. Source quotations, the redaction preview, and the identifier map stay local. Fixed action labels stay outside the JSON. This does not resolve R5-3. A figure that grounding still marks `supports_claim` can appear in v2, including separate-sentence settlement, a quoted “cancelled”, an unquoted prompt-injected £9,999, a truncated quote without an ellipsis, and the settlement paraphrases in the known-failure matrix. Phase 2 is not implemented: the privacy screen and approval record are still the v1 payload, and sending stays disabled.
+
 These stay tracked and are not implemented here:
 
 - N-5 nonstandard placeholders, and export restrictions while a placeholder is unresolved or malformed.

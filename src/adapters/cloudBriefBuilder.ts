@@ -13,6 +13,7 @@ import {
   type BriefSource,
   type RedactAndBriefResult,
 } from "../domain/redactAndBrief";
+import { trustedActionSummaryLabel } from "../domain/closedCloudBrief";
 import {
   GUIDANCE_IDS_BY_CATEGORY,
   type ActionSummaryId,
@@ -22,15 +23,6 @@ import {
   type NoticeCategory,
   type ResponseGoal,
 } from "../domain/types";
-
-const ACTION_LABELS: Record<ActionSummaryId, string> = {
-  pay_or_contact: "Pay or contact the sender",
-  contact_sender: "Contact the sender",
-  provide_records: "Provide records",
-  request_review: "Request a review",
-  pay_stated_balance: "Pay the stated balance",
-  review_stated_obligation: "Review the stated obligation",
-};
 
 export interface CloudBriefEdits {
   responseGoal: ResponseGoal;
@@ -81,7 +73,7 @@ function formatGbp(amount: number): string {
 }
 
 export function actionSummaryLabel(id: ActionSummaryId): string {
-  return ACTION_LABELS[id];
+  return trustedActionSummaryLabel(id);
 }
 
 export function readableRowsFromPayload(
