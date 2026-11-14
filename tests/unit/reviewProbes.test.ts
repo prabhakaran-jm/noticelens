@@ -743,3 +743,169 @@ describe("review probes — unicode dashes, name parts, long numbers, delivery, 
     ).toThrow(/forbidden local identifier/);
   });
 });
+
+describe("M2B-2B name components, reference shapes, and edited clauses", () => {
+  const pay =
+    "Please pay the outstanding balance of £1,280 by 25 November 2026.";
+
+  function noticeFor(body: string[]): ReturnType<typeof briefFrom> {
+    return briefFrom(
+      noticeWith([
+        "18 November 2026",
+        ...body,
+        "Our records show an outstanding balance of £1,280 for electricity supplied between January and June 2025.",
+        pay,
+      ]),
+      pay
+    );
+  }
+
+  it("R5-2 redacts plain components of a disguised name and rejects them in an edited clause", () => {
+    const disguised = [
+      { salutation: "Sar\u00ADah Exam\u00ADple", first: "Sarah", second: "Example" },
+      { salutation: "Pri\u200Bya Test\u200Bperson", first: "Priya", second: "Testperson" },
+      { salutation: "An\u2060na Samp\u2060le", first: "Anna", second: "Sample" },
+    ];
+    for (const { salutation, first, second } of disguised) {
+      const result = noticeFor([
+        `Dear ${salutation},`,
+        "Account reference: EXAMPLE-8472",
+        `Please contact ${first} about ${second} before the response date.`,
+      ]);
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        continue;
+      }
+      expect(result.redactedNoticePreview).toContain(
+        `Please contact [RECIPIENT_NAME] about [RECIPIENT_NAME] before the response date.`
+      );
+      expect(result.redactedNoticePreview).not.toContain(first);
+      expect(result.redactedNoticePreview).not.toContain(second);
+      expect(result.redactedNoticePreview).not.toContain("8472");
+      const clause = `Please contact ${first} before the response date.`;
+      expect(() =>
+        revalidateFinalCloudPayload(clausePayload(clause), {
+          forbiddenIdentifiers: [salutation],
+        })
+      ).toThrow(/forbidden local identifier/);
+    }
+
+    const bill = noticeFor([
+      "Dear B\u00ADill Exam\u00ADple,",
+      "Account reference: EXAMPLE-8472",
+      "Please review the bill before the response date.",
+      "Bill asked for the annual energy billing review.",
+    ]);
+    expect(bill.ok).toBe(true);
+    if (bill.ok) {
+      expect(bill.redactedNoticePreview).toContain("Please review the bill");
+      expect(bill.redactedNoticePreview).toContain("annual energy billing");
+      expect(bill.redactedNoticePreview).toContain("[RECIPIENT_NAME] asked");
+      expect(bill.redactedNoticePreview).not.toMatch(/\bBill\b/);
+    }
+
+    const fullwidth = "\uFF33\uFF41\uFF52\uFF41\uFF48";
+    const nfd = "Jose\u0301";
+    const varied = redactAndBuildBrief({
+      rawNoticeText: noticeWith([
+        "18 November 2026",
+        "Dear Sarah Example,",
+        "Account reference: EXAMPLE-8472",
+        `Please contact ${fullwidth} and ${nfd} before the response date.`,
+        "Our records show an outstanding balance of £1,280 for electricity supplied between January and June 2025.",
+        pay,
+      ]),
+      responseGoal: "request_billing_review",
+      guidanceIds: ["ofgem-backbilling-12m-v1"],
+      extraKnownIdentifiers: ["\uFF33\uFF41\uFF52\uFF41\uFF48 \uFF25\uFF58\uFF41\uFF4D\uFF50\uFF4C\uFF45", "Jose\u0301 Sample"],
+      extraction: {
+        noticeCategory: "utility_electricity",
+        issueDate: "18 November 2026",
+        billingPeriod: "January and June 2025",
+        amountGBP: 1280,
+        responseDeadline: "25 November 2026",
+        obligations: [{ action: "Pay the stated balance", dueDate: "25 November 2026", sourceQuote: pay }],
+      },
+    });
+    expect(varied.ok).toBe(true);
+    if (varied.ok) {
+      expect(varied.redactedNoticePreview).toContain(
+        "Please contact [RECIPIENT_NAME] and [LOCAL_ID] before the response date."
+      );
+      expect(varied.redactedNoticePreview).not.toContain(fullwidth);
+      expect(varied.redactedNoticePreview).not.toContain("José");
+      expect(varied.redactedNoticePreview).not.toContain("\u0301");
+    }
+    expect(() =>
+      revalidateFinalCloudPayload(
+        clausePayload("Please contact José before the response date."),
+        { forbiddenIdentifiers: ["Jose\u0301 Sample"] }
+      )
+    ).toThrow(/forbidden local identifier/);
+  });
+
+  it("R5-4 redacts joined and separated references without treating a prose year as an account", () => {
+    const separators = ["", "_", ".", ":", "#", "-", "/"];
+    for (const separator of separators) {
+      const token = `SMITH${separator}4471`;
+      const result = noticeFor([
+        "Dear John Smith,",
+        `Account reference: ${token}`,
+        "The billing2026 note and Nov-2026 stay in the letter.",
+        "Nov2026 is a date label beside balance2026.",
+      ]);
+      expect(result.ok, token).toBe(true);
+      if (!result.ok) {
+        continue;
+      }
+      expect(result.redactedNoticePreview, token).toContain("[ACCOUNT_REF]");
+      expect(result.redactedNoticePreview, token).not.toContain("4471");
+      expect(result.redactedNoticePreview, token).not.toContain("SMITH");
+      expect(result.redactedNoticePreview, token).toContain("billing2026");
+      expect(result.redactedNoticePreview, token).toContain("Nov-2026");
+      expect(result.redactedNoticePreview, token).toContain("Nov2026");
+      expect(result.redactedNoticePreview, token).toContain("balance2026");
+      expect(result.redactedNoticePreview).toContain("[ACCOUNT_REF]");
+      const before = result.redactedNoticePreview.indexOf("[ACCOUNT_REF]");
+      expect(result.redactedNoticePreview.slice(0, before)).toContain("Account reference: ");
+    }
+
+    const dotted = `SMITH\uFF0E4471`;
+    const hidden = noticeFor(["Dear John Smith,", `Reference ${dotted} is quoted.`]);
+    expect(hidden.ok).toBe(true);
+    if (hidden.ok) {
+      expect(hidden.redactedNoticePreview).not.toContain("4471");
+      expect(hidden.redactedNoticePreview).toContain("Reference [ACCOUNT_REF] is quoted.");
+    }
+
+    const tails = [
+      "[RECIPIENT_NAME]_8472",
+      "[ACCOUNT_REF].8472",
+      "[ACCOUNT_REF_2]:8472",
+      "[LOCAL_ID]#8472",
+      "[EMAIL]:8472",
+      "[NINO]/8472",
+      "[PHONE]-8472",
+      "[SUPPLY_ADDRESS]_8472",
+    ];
+    for (const tail of tails) {
+      expect(() =>
+        revalidateFinalCloudPayload(
+          clausePayload(`The saved reference is ${tail} today.`),
+          { forbiddenIdentifiers: ["SMITH4471"] }
+        )
+      ).toThrow(/partial identifier/);
+      expect(() =>
+        validateCloudBoundPayload(clausePayload(`The saved reference is ${tail} today.`), {
+          forbiddenIdentifiers: ["John Smith"],
+        })
+      ).toThrow(/partial identifier/);
+    }
+    expect(() =>
+      revalidateFinalCloudPayload(
+        clausePayload("The saved reference is SMITH4471 today."),
+        { forbiddenIdentifiers: ["John Smith"] }
+      )
+    ).toThrow(/account reference/);
+  });
+});

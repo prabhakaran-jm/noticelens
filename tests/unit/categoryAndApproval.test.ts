@@ -119,7 +119,7 @@ describe("privacy approval is exact, local, and cannot send", () => {
     resetCloudSendStateForTests();
     resetUserApprovalStateForTests();
     const canonical = canonicalCloudPayload(M0_SMOKE_TEST_CLOUD_PAYLOAD);
-    const approval = recordUserPayloadApproval(canonical.serialized, canonical.serialized, 1);
+    const approval = recordUserPayloadApproval(canonical.serialized, canonical.serialized, 1, {});
     expect(CLOUD_SUBMISSION_ENABLED).toBe(false);
     expect(approval.cloudSendEnabled).toBe(false);
     expect(approval.generation).toBe(1);
@@ -127,7 +127,7 @@ describe("privacy approval is exact, local, and cannot send", () => {
     expect(approvalStillMatches(approval, canonical.serialized.replace("1280", "520"), 1)).toBe(false);
     expect(approvalStillMatches(approval, canonical.serialized, 2)).toBe(false);
     expect(() =>
-      recordUserPayloadApproval(canonical.serialized, canonical.serialized.replace("1280", "520"), 1)
+      recordUserPayloadApproval(canonical.serialized, canonical.serialized.replace("1280", "520"), 1, {})
     ).toThrow(/current canonical payload/);
     expect(() => requestApprovedCloudSend(approval)).toThrow(/not connected/i);
     expect(approvalStillMatches(approval, canonical.serialized, 1)).toBe(false);
@@ -147,7 +147,7 @@ describe("privacy approval is exact, local, and cannot send", () => {
       unknown
     >;
     const withUnknown = JSON.stringify({ ...unknown, extraNote: "no" });
-    expect(() => recordUserPayloadApproval(withUnknown, withUnknown, 1)).toThrow(
+    expect(() => recordUserPayloadApproval(withUnknown, withUnknown, 1, {})).toThrow(
       /canonical validation/
     );
 
@@ -161,7 +161,7 @@ describe("privacy approval is exact, local, and cannot send", () => {
       ],
     };
     const malformedSerialized = JSON.stringify(malformed);
-    expect(() => recordUserPayloadApproval(malformedSerialized, malformedSerialized, 1)).toThrow(
+    expect(() => recordUserPayloadApproval(malformedSerialized, malformedSerialized, 1, {})).toThrow(
       /malformed placeholder|canonical validation/
     );
 
@@ -175,7 +175,7 @@ describe("privacy approval is exact, local, and cannot send", () => {
       ],
     };
     const leakingSerialized = JSON.stringify(leaking);
-    expect(() => recordUserPayloadApproval(leakingSerialized, leakingSerialized, 1)).toThrow(
+    expect(() => recordUserPayloadApproval(leakingSerialized, leakingSerialized, 1, {})).toThrow(
       /canonical validation/
     );
 
@@ -189,12 +189,61 @@ describe("privacy approval is exact, local, and cannot send", () => {
       ],
     };
     const partialSerialized = JSON.stringify(partial);
-    expect(() => recordUserPayloadApproval(partialSerialized, partialSerialized, 1)).toThrow(
+    expect(() => recordUserPayloadApproval(partialSerialized, partialSerialized, 1, {})).toThrow(
       /canonical validation|partial identifier/
     );
 
-    const stale = recordUserPayloadApproval(canonical.serialized, canonical.serialized, 4);
+    const stale = recordUserPayloadApproval(canonical.serialized, canonical.serialized, 4, {});
     expect(approvalStillMatches(stale, canonical.serialized, 5)).toBe(false);
+    expect(CLOUD_SUBMISSION_ENABLED).toBe(false);
+  });
+
+  it("uses the same forbidden identifiers at approval and at the blocked send", () => {
+    resetCloudSendStateForTests();
+    resetUserApprovalStateForTests();
+    const canonical = canonicalCloudPayload(M0_SMOKE_TEST_CLOUD_PAYLOAD);
+    const named = {
+      ...canonical.payload,
+      redactedObligations: [
+        {
+          ...canonical.payload.redactedObligations[0]!,
+          redactedClause: "Please contact Priya Testperson before the response date.",
+        },
+      ],
+    };
+    const serialized = JSON.stringify(named);
+    expect(() => recordUserPayloadApproval(serialized, serialized, 1, {})).not.toThrow();
+    expect(() =>
+      recordUserPayloadApproval(serialized, serialized, 1, {
+        forbiddenIdentifiers: ["Priya Testperson"],
+      })
+    ).toThrow(/canonical validation/);
+
+    const approval = recordUserPayloadApproval(serialized, serialized, 2, {});
+    approval.guardOptions.forbiddenIdentifiers?.push("Priya Testperson");
+    let sendError = "";
+    expect(() => {
+      try {
+        requestApprovedCloudSend(approval);
+      } catch (error) {
+        sendError = error instanceof Error ? error.message : String(error);
+        throw error;
+      }
+    }).toThrow(/canonical validation/);
+    expect(sendError).not.toMatch(/Priya|Testperson/);
+    expect(() => requestApprovedCloudSend(approval)).toThrow(/already been used/i);
+
+    const clean = recordUserPayloadApproval(canonical.serialized, canonical.serialized, 3, {
+      forbiddenIdentifiers: ["Priya Testperson"],
+      rawNoticeText: "Dear Priya Testperson",
+    });
+    expect(clean.guardOptions.forbiddenIdentifiers).toEqual(["Priya Testperson"]);
+    expect(clean.serialized).toBe(canonical.serialized);
+    expect(() => requestApprovedCloudSend(clean)).toThrow(/not connected/i);
+    expect(() => requestApprovedCloudSend(clean)).toThrow(/already been used/i);
+    const flight = approveCloudPayload(M0_SMOKE_TEST_CLOUD_PAYLOAD);
+    expect(flight.begin()).toBe(canonical.serialized);
+    flight.cancel();
     expect(CLOUD_SUBMISSION_ENABLED).toBe(false);
   });
 });

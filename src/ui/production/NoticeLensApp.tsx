@@ -216,7 +216,12 @@ export function NoticeLensApp() {
               return;
             }
             setUserApproval(
-              recordUserPayloadApproval(serialized, inspection.exactSerialized, editGeneration)
+              recordUserPayloadApproval(
+                serialized,
+                inspection.exactSerialized,
+                editGeneration,
+                inspection.guardOptions
+              )
             );
           }}
         />

@@ -95,11 +95,91 @@ export function groundMonetaryAmount(
   if (amounts.length > 1) {
     return grounded(amount, quote, "ambiguous", verification);
   }
+  if (
+    quotedStatementOnly(source, quote ?? "") ||
+    claimedAmountOnlyInsideQuotes(source, quote ?? "", amount)
+  ) {
+    return grounded(amount, quote, "substring_only", verification);
+  }
   const disposition = obligationDisposition(quote ?? "");
   if (disposition) {
     return grounded(amount, quote, disposition, verification);
   }
   return grounded(amount, quote, "supports_claim", verification);
+}
+
+function indexInsideQuotes(text: string, index: number): boolean {
+  let doubleQuote = false;
+  let curlyQuote = false;
+  for (let cursor = 0; cursor < index && cursor < text.length; cursor += 1) {
+    const char = text[cursor];
+    if (char === '"' && !curlyQuote) {
+      doubleQuote = !doubleQuote;
+    } else if (char === "\u201C" && !doubleQuote) {
+      curlyQuote = true;
+    } else if (char === "\u201D" && curlyQuote) {
+      curlyQuote = false;
+    }
+  }
+  return doubleQuote || curlyQuote;
+}
+
+function outsideQuotes(quote: string): string {
+  return quote.replace(/"[^"]*"|“[^”]*”/g, " ");
+}
+
+function quotedStatementOnly(source: string, quote: string): boolean {
+  const needle = quote.trim();
+  if (needle.length < 12) {
+    return false;
+  }
+  let from = 0;
+  let found = false;
+  while (from < source.length) {
+    const at = source.indexOf(needle, from);
+    if (at < 0) {
+      break;
+    }
+    found = true;
+    if (!indexInsideQuotes(source, at)) {
+      return false;
+    }
+    from = at + Math.max(needle.length, 1);
+  }
+  return found;
+}
+
+function claimedAmountOnlyInsideQuotes(source: string, quote: string, amount: number): boolean {
+  const needle = quote.trim();
+  if (!needle) {
+    return false;
+  }
+  const pattern = /£\s?[\d,]+(?:\.\d{1,2})?/g;
+  let from = 0;
+  let saw = false;
+  while (from < source.length) {
+    const at = source.indexOf(needle, from);
+    if (at < 0) {
+      break;
+    }
+    let localSaw = false;
+    for (const match of needle.matchAll(pattern)) {
+      const values = amountValuesIn(match[0]);
+      if (!values.some((value) => Math.abs(value - amount) < 0.001)) {
+        continue;
+      }
+      localSaw = true;
+      saw = true;
+      if (!indexInsideQuotes(source, at + (match.index ?? 0))) {
+        return false;
+      }
+    }
+    if (!localSaw) {
+      return false;
+    }
+    from = at + Math.max(needle.length, 1);
+  }
+  return saw;
 }
 
 function figureContextNegated(quote: string): boolean {
@@ -135,7 +215,9 @@ function explicitlyNegated(quote: string): boolean {
   return (
     figureContextNegated(quote) ||
     /\bdo\s+not\s+need\s+to\s+pay\b/i.test(quote) ||
-    /\bdo\s+not\s+need\s+to\s+contact\b/i.test(quote)
+    /\bdo\s+not\s+need\s+to\s+contact\b/i.test(quote) ||
+    /\bdo\s+not\s+have\s+to\s+pay\b/i.test(quote) ||
+    /\bpay\s+nothing\b/i.test(quote)
   );
 }
 
@@ -143,20 +225,37 @@ function historicalPayment(quote: string): boolean {
   return (
     /\balready\s+paid\b/i.test(quote) ||
     /\balready\s+received\b/i.test(quote) ||
+    /\bthank\s+you\s+for\s+(?:your\s+)?payment\b/i.test(quote) ||
     /\b(?:we|our records)\s+(?:have\s+)?received\s+(?:your\s+)?payment\b/i.test(quote) ||
     /\bpayment\b[^.]{0,48}\b(?:was|were|has been|have been)\s+received\b/i.test(quote)
   );
 }
 
-function affirmativePaymentInstruction(quote: string): boolean {
+function settledPayment(quote: string): boolean {
   return (
-    /\bplease\s+pay\b/i.test(quote) ||
-    /\boutstanding\s+balance\b/i.test(quote) ||
-    /\bamount\s+due\b/i.test(quote) ||
-    /\bbalance\s+now\s+requested\b/i.test(quote) ||
-    /\bmust\s+pay\b/i.test(quote) ||
-    /\bpayment\s+is\s+due\b/i.test(quote)
+    /\bpaid\s+in\s+full\b/i.test(quote) ||
+    /\bwritten\s+off\b/i.test(quote) ||
+    /\bno\s+longer\s+required\b/i.test(quote) ||
+    /\b(?:was|were|is|are|has been|have been|hereby|now)\s+waived\b/i.test(quote) ||
+    /\b(?:was|were|is|are|has been|have been|hereby|now)\s+refunded\b/i.test(quote) ||
+    /\brefunded\s+in\s+full\b/i.test(quote) ||
+    /\b(?:please\s+)?(?:ignore|disregard)\b[^.]{0,80}\brequest\s+to\s+pay\b/i.test(quote)
   );
+}
+
+function textHasAffirmativeDemand(text: string): boolean {
+  return (
+    /\bplease\s+pay\b/i.test(text) ||
+    /\boutstanding\s+balance\b/i.test(text) ||
+    /\bamount\s+due\b/i.test(text) ||
+    /\bbalance\s+now\s+requested\b/i.test(text) ||
+    (/\bmust\s+pay\b/i.test(text) && !/\bmust\s+pay\s+nothing\b/i.test(text)) ||
+    /\bpayment\s+is\s+due\b/i.test(text)
+  );
+}
+
+function affirmativePaymentInstruction(quote: string): boolean {
+  return textHasAffirmativeDemand(outsideQuotes(quote));
 }
 
 /**
@@ -166,12 +265,19 @@ function affirmativePaymentInstruction(quote: string): boolean {
  * "May be withdrawn" and "if you do not pay" are not blocking roles.
  */
 function obligationDisposition(quote: string): ClaimSupport | null {
+  const outside = outsideQuotes(quote);
+  const affirmative = textHasAffirmativeDemand(outside);
+  const quotedOnly = textHasAffirmativeDemand(quote) && !affirmative;
   const blocking = [
-    explicitlyCancelled(quote),
-    explicitlyWithdrawn(quote),
-    explicitlyNegated(quote),
-    historicalPayment(quote),
+    explicitlyCancelled(outside),
+    explicitlyWithdrawn(outside),
+    explicitlyNegated(outside),
+    historicalPayment(outside),
+    settledPayment(outside),
   ].filter(Boolean);
+  if (quotedOnly && blocking.length === 0) {
+    return "substring_only";
+  }
   if (affirmativePaymentInstruction(quote) && blocking.length > 0) {
     return "ambiguous";
   }
@@ -228,6 +334,9 @@ export function groundCalendarDate(
   if (dates.length > 1) {
     return grounded(claimIso, quote, "ambiguous", verification);
   }
+  if (quotedStatementOnly(source, quote ?? "")) {
+    return grounded(claimIso, quote, "substring_only", verification);
+  }
   const disposition = obligationDisposition(quote ?? "");
   if (disposition) {
     return grounded(claimIso, quote, disposition, verification);
@@ -269,6 +378,9 @@ const CONTRADICTION =
   /\b(cancel(?:led|lation)?|waiv(?:e|ed|er)|invalid|void|refunded in full|no longer due)\b/i;
 
 export function actionSummaryFromQuote(quote: string): ActionSummaryId {
+  if (obligationDisposition(quote)) {
+    return "review_stated_obligation";
+  }
   const pay = /\bpay(?:ing|ment)?\b/i.test(quote);
   const contact = /\bcontact\b/i.test(quote);
   if (/\b(meter readings?|relevant records)\b/i.test(quote)) {
@@ -302,6 +414,9 @@ export function groundObligation(
   }
   if (CONTRADICTION.test(action) && !CONTRADICTION.test(quote)) {
     return grounded(summary, quote, "substring_only", verification);
+  }
+  if (quotedStatementOnly(source, quote)) {
+    return grounded("review_stated_obligation", quote, "substring_only", verification);
   }
   const disposition = obligationDisposition(quote);
   if (disposition) {

@@ -83,6 +83,28 @@ export interface CloudPayloadGuardOptions {
   forbiddenIdentifiers?: string[];
 }
 
+/** One guard-option object for construction, inspection, approval, and a later send. */
+export function cloudGuardOptionsFromPrivateIdentifiers(input: {
+  rawNoticeText?: string;
+  localRawValues?: readonly string[];
+  extraKnownIdentifiers?: readonly string[];
+}): CloudPayloadGuardOptions {
+  const seen = new Set<string>();
+  const forbiddenIdentifiers: string[] = [];
+  for (const value of [...(input.localRawValues ?? []), ...(input.extraKnownIdentifiers ?? [])]) {
+    const trimmed = value.trim();
+    if (trimmed.length < 3 || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    forbiddenIdentifiers.push(trimmed);
+  }
+  return {
+    rawNoticeText: input.rawNoticeText,
+    forbiddenIdentifiers,
+  };
+}
+
 export interface CanonicalCloudPayload {
   payload: CloudBoundStructuralPayload;
   serialized: string;
