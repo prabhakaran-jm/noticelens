@@ -23,6 +23,10 @@ import {
   groundCalendarDate,
   groundMonetaryAmount,
   groundObligation,
+  paymentQuoteUndermined,
+  paymentSentenceRole,
+  resolvedCurrentBalanceAmounts,
+  sentenceSupportsResponseDeadline,
   type ClaimSupport,
 } from "../domain/sourceGrounding";
 import { decideNoticeCategory, type NoticeCategoryDecision } from "../domain/noticeCategory";
@@ -132,7 +136,7 @@ export function claimSupportLabel(support: ClaimSupport): string {
     case "ambiguous":
       return "Ambiguous — multiple figures or dates in the passage";
     case "incomplete":
-      return "Incomplete quote — contains an ellipsis";
+      return "Incomplete quote — the quotation does not contain the whole sentence";
     case "missing":
       return "Not stated";
     case "unverified":
@@ -173,6 +177,18 @@ function sentenceAt(text: string, index: number): string {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function appearsOnlyAsByDate(text: string, token: string | null): boolean {
+  if (!token) {
+    return false;
+  }
+  const escaped = escapeRegExp(token);
+  if (!new RegExp(`\\bby\\s+${escaped}\\b`, "i").test(text)) {
+    return false;
+  }
+  const withoutBy = text.replace(new RegExp(`\\bby\\s+${escaped}\\b`, "gi"), " ");
+  return !new RegExp(`\\b${escaped}\\b`, "i").test(withoutBy);
 }
 
 function calendarIsoDates(text: string): string[] {
@@ -249,9 +265,24 @@ function classifyAmounts(text: string): ClassifiedAmount[] {
   });
 }
 
-function amountView(classified: ClassifiedAmount[]): GroundedAmountView {
-  const fees = classified.filter((item) => item.role === "conditional_fee");
-  const supported = classified.filter(
+function amountView(classified: ClassifiedAmount[], resolved: readonly number[]): GroundedAmountView {
+  const conflictCandidates = resolved.length > 1;
+  const allowed = new Set(conflictCandidates ? [] : resolved);
+  const adjusted = classified.map((item) => {
+    if (item.role === "conditional_fee" || item.support !== "supports_claim") {
+      return item;
+    }
+    if (allowed.has(item.value)) {
+      return item;
+    }
+    return {
+      ...item,
+      support: conflictCandidates ? ("ambiguous" as const) : ("unverified" as const),
+      verifiedForDisplay: null,
+    };
+  });
+  const fees = adjusted.filter((item) => item.role === "conditional_fee");
+  const supported = adjusted.filter(
     (item) => item.role !== "conditional_fee" && item.support === "supports_claim"
   );
   const preferred = supported.filter((item) => item.role === "balance");
@@ -262,15 +293,15 @@ function amountView(classified: ClassifiedAmount[]): GroundedAmountView {
   const conflict = distinctBalances.length > 1;
   const main = !conflict && distinctBalances.length === 1 ? distinctBalances[0]! : null;
   const mainItem = balances.find((item) => main !== null && Math.abs(item.value - main) < 0.001);
-  const onlyFees = classified.length > 0 && fees.length === classified.length;
+  const onlyFees = adjusted.length > 0 && fees.length === adjusted.length;
   const support: ClaimSupport = conflict
     ? "ambiguous"
     : mainItem
       ? "supports_claim"
-      : classified.length === 0 || onlyFees
+      : adjusted.length === 0 || onlyFees
         ? "missing"
         : "unverified";
-  return {
+  const view: GroundedAmountView = {
     value: main,
     verifiedForDisplay: conflict ? null : mainItem?.verifiedForDisplay ?? null,
     amountsGBP: distinctBalances,
@@ -281,7 +312,18 @@ function amountView(classified: ClassifiedAmount[]): GroundedAmountView {
     conflict,
     quote: mainItem?.quote ?? null,
     verification: mainItem?.verification ?? null,
-    classified,
+    classified: adjusted,
+  };
+  if (!conflictCandidates) {
+    return view;
+  }
+  return {
+    ...view,
+    value: null,
+    verifiedForDisplay: null,
+    amountsGBP: [...resolved],
+    support: "ambiguous",
+    conflict: true,
   };
 }
 
@@ -422,6 +464,16 @@ function quoteSupportsEntireAction(action: string, quote: string): boolean {
   return words.every((word) => quoted.has(word));
 }
 
+function claimIdentity(action: string, actionSummary: string, quote: string): string {
+  const basis = `${actionSummary}\u001f${action.trim()}\u001f${quote.trim()}`;
+  let hash = 2166136261;
+  for (let index = 0; index < basis.length; index += 1) {
+    hash ^= basis.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `claim-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
 function headingSupportFor(
   quoteSupport: ClaimSupport,
   quote: string
@@ -458,19 +510,24 @@ function obligationViews(
             },
           ]
         : [];
-  return seeded.map((item, index) => {
+  const resolved = resolvedCurrentBalanceAmounts(text);
+  return seeded.map((item) => {
     const fact = groundObligation(text, item.action, item.sourceQuote);
     const claimExceedsQuote = actionClaimsUnsupportedDetail(item.action, item.sourceQuote);
     const support =
       claimExceedsQuote && fact.support === "supports_claim" ? "substring_only" : fact.support;
     const actionSummary = fact.value ?? actionSummaryFromQuote(item.sourceQuote);
-    const headingSupport = headingSupportFor(support, item.sourceQuote);
+    const quoteHeading = headingSupportFor(support, item.sourceQuote);
+    const headingSupport =
+      paymentQuoteUndermined(item.sourceQuote, actionSummary, resolved) && quoteHeading === "supports_claim"
+        ? "substring_only"
+        : quoteHeading;
     const quotedDate = soleDateToken(item.sourceQuote);
     const dueInQuote =
       item.dueDate !== null &&
       calendarIsoDates(item.sourceQuote).includes(parseCalendarDate(item.dueDate)?.iso ?? "");
     return {
-      id: `obligation-${index + 1}`,
+      id: claimIdentity(item.action, actionSummary, item.sourceQuote),
       action: item.action,
       actionSummary,
       modelActionSupported: quoteSupportsEntireAction(item.action, item.sourceQuote),
@@ -559,11 +616,27 @@ export function groundNoticeFacts(input: {
   const issueQuote = comparable.issueDateQuote
     ? lineAt(rawText, rawText.indexOf(comparable.issueDateQuote))
     : null;
+  const resolvedBalances = resolvedCurrentBalanceAmounts(rawText);
   const issue = dateView(
     comparable.issueDate ? [comparable.issueDate] : [],
     () => issueQuote,
     rawText
   );
+  const issueSentence = comparable.issueDate
+    ? sentenceAt(rawText, Math.max(rawText.toLowerCase().indexOf(comparable.issueDate.toLowerCase()), 0))
+    : "";
+  const issueRole = paymentSentenceRole(issueSentence);
+  const supportedIssue =
+    issue.support === "supports_claim" &&
+    !appearsOnlyAsByDate(rawText, comparable.issueDate) &&
+    issueRole !== "conditional_fee" &&
+    issueRole !== "injected_command"
+      ? issue
+      : {
+          ...issue,
+          support: issue.support === "missing" ? ("missing" as const) : ("unverified" as const),
+          verifiedForDisplay: null,
+        };
 
   const deadlineStated = comparable.responseDeadlines.filter((token) => {
     const iso = parseCalendarDate(token)?.iso ?? null;
@@ -575,8 +648,13 @@ export function groundNoticeFacts(input: {
     }
     return true;
   });
+  const supportedDeadlineStated = deadlineStated.filter((token) => {
+    const at = rawText.toLowerCase().indexOf(token.toLowerCase());
+    const sentence = at < 0 ? token : sentenceAt(rawText, at);
+    return sentenceSupportsResponseDeadline(sentence, resolvedBalances);
+  });
   const deadlines = dateView(
-    deadlineStated,
+    supportedDeadlineStated,
     (stated) => {
       const quoted = comparable.deadlineQuote;
       if (quoted && quoted.includes(stated)) {
@@ -594,14 +672,14 @@ export function groundNoticeFacts(input: {
   const periodPhrase = comparable.billingPeriod;
   const periodQuote = comparable.billingPeriodQuote;
   const periodFact = groundBillingPeriod(rawText, periodPhrase, periodQuote);
-  const issueForGap = issue.verifiedForDisplay ?? issue.stated;
-  const amount = amountView(classifyAmounts(rawText));
+  const issueForGap = supportedIssue.verifiedForDisplay ?? supportedIssue.stated;
+  const amount = amountView(classifyAmounts(rawText), resolvedBalances);
 
   return {
     rawText,
     noticeCategory,
     categoryDecision,
-    issueDate: { ...issue, assessment: assessIssueDate(issue.stated, input.today) },
+    issueDate: { ...supportedIssue, assessment: assessIssueDate(supportedIssue.stated, input.today) },
     amount,
     billingPeriod: {
       stated: periodFact.support === "supports_claim" ? periodFact.verifiedForDisplay : periodPhrase,

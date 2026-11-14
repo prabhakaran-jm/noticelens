@@ -131,7 +131,7 @@ D4. A conditional late-payment fee can become an unsupported verified obligation
 
 R5-3 remains unresolved and blocks any live cloud submission or product demonstration claiming verified payment obligations. Do not claim that payment-role grounding is fully resolved. Do not enable cloud submission while this gate is open. A structurally valid v2 brief is not a verified payment fact.
 
-`tests/unit/r5-3KnownFailures.test.ts` has 41 characterization tests. 29 expect the secure outcome and are marked as expected failures because the current result is still unsafe. That includes D4, the conditional late-payment fee of £40. 12 assert secure results that already hold. Do not remove `it.fails` from those 29, and do not treat a known unsafe scenario as cleared for cloud submission. Phase 3 has not started.
+At that review, `tests/unit/r5-3KnownFailures.test.ts` had 41 characterization tests. 29 expected the secure outcome and failed it, including D4. 12 already failed closed. Phase 3 later converted the 29 recorded cases to ordinary passing tests. The review finding above is the state before that change. A green suite is still not proof of complete grounding accuracy, and cloud submission stays closed.
 
 ### M2B-1c — Approval invalidated on edit — fixed for the local lifecycle
 
@@ -159,11 +159,11 @@ A local privacy approval records the exact canonical JSON for the current edit g
 
 ## Milestone 2
 
-Milestone 2 live cloud submission of edited or redacted notices stays blocked. N-1, N-2, M2A-1, M2A-3, M2A-5, M2B-1a, the tested K3/K5 tokens, and R5-1 are fixed for the cases named above. R5-2, R5-3, R5-4, and R5-5 are not resolved. R5-3 is a hard gate before live cloud submission or a product-demo recording. A local privacy approval records the exact canonical payload for the current production path and does not start a cloud send. Do not enable cloud submission, and do not record a product demonstration, until the remaining items below are closed.
+Milestone 2 live cloud submission of edited or redacted notices stays blocked. N-1, N-2, M2A-1, M2A-3, M2A-5, M2B-1a, the tested K3/K5 tokens, and R5-1 are fixed for the cases named above. The recorded R5-3 payment-role cases now fail closed. R5-2, R5-4, and R5-5 are not resolved. A local privacy approval records the exact canonical payload for the current production path and does not start a cloud send. Do not enable cloud submission, and do not record a product demonstration, until the remaining items below are closed. A green test suite is not, by itself, proof of complete grounding accuracy.
 
 Phase 1 adds a local closed v2 builder for `noticelens.cloud-brief.v2`. Phase 2 connects Prepare Reply and the privacy approval modal to that builder. The exact canonical bytes are shown without reformatting. Action labels stay outside the JSON and are marked as labels, not quotations. An empty `amountsGBP` array is shown as “Not stated”, never £0. Conditional fees and unsupported actions are labelled unverified. v1 payloads are rejected in that production approval path. Production does not use v1 `clauseReplacements`. The screen says cloud sending is disabled. The choice of the closed brief is recorded in `docs/M2_CLOUD_PAYLOAD_ARCHITECTURE_DECISION.md` (option B). `amountsGBP` means verified outstanding balances only when grounding already supports them. An empty array means no such balance was supported. It does not mean £0. Historical payments, cancelled or withdrawn charges, conditional fees, and ambiguous figures are omitted when grounding already withholds them. Issue dates are not copied into response deadlines. Source quotations, the redaction preview, and the identifier map stay local.
 
-This does not resolve R5-3. R5-3 remains unresolved and blocks any live cloud submission or product demonstration claiming verified payment obligations. Structural validation does not establish that a payment obligation is correct. A figure that grounding still marks `supports_claim` can appear in the local v2 object, including separate-sentence settlement, a quoted “cancelled”, an unquoted prompt-injected £9,999, a truncated quote without an ellipsis, the settlement paraphrases in the characterization matrix, and D4 below. Those 29 cases expect the secure outcome and are expected failures. They are not cleared for cloud submission.
+Structural validation does not establish that a payment obligation is correct. Phase 3 applies the payment-claim table below to the recorded R5-3 cases. Those cases are ordinary passing tests. They are not a claim that every unseen notice is grounded, and they do not enable cloud submission.
 
 The closed-schema validator now rejects the Phase 2 bypasses below. That does not enable sending, and it does not close R5-3.
 
@@ -171,18 +171,18 @@ The closed-schema validator now rejects the Phase 2 bypasses below. That does no
 - D2. Inherited required properties and `Object.prototype` values are rejected, including on obligations and billing periods. Own prototype-pollution keys are rejected.
 - D3. Duplicate amounts and obligations are rejected. Amounts, deadlines, obligations, guidance ids, and circumstance flags are ordered deterministically. Equivalent payloads produce the same bytes. Array limits remain. Mutating the source array does not change the canonical bytes.
 
-`tests/unit/r5-3KnownFailures.test.ts` has 41 characterization tests. 29 expect the secure outcome and are marked as expected failures. 12 assert secure results that already hold. Phase 3 has not started. Sending stays disabled.
+`tests/unit/r5-3KnownFailures.test.ts` started Phase 3 with 41 characterization tests: 29 expected failures and 12 that already failed closed. The 29 recorded cases now pass as ordinary tests and keep the secure outcome. No expected failures remain in that file. Sending stays disabled.
 
 Reviewed corrections on the Phase 2 inspection branch, tested locally:
 
 - N1 is fixed for the tested cases. An on-device result is applied only when its request identity, notice snapshot, and document generation are still current. A result for notice A is discarded after an edit to B, after an edit back to A, and when an older request resolves after a newer one. A discarded result does not update the action plan, the grounded facts, the v2 brief, the inference receipt, or a local approval. A current `on_device` result can update the screen. A current result that does not report `on_device` is still rejected. This does not enable cloud sending.
 - N2 is fixed for the tested cases. The review checkbox is bound to the exact canonical bytes, the document generation, and the identifier context. Any of those changing clears the tick, including an edit that returns to the same bytes. The Approve action checks that binding again and does not rely on the button looking disabled. v1 remains rejected. The cloud-send lock is not acquired.
-- N3 adds D4 to the expected-failure matrix. The sentence “A late payment fee of £40 may apply if you do not pay by 25 November 2026.” still expects no verified payment action and no verified response deadline. It is an expected failure. Payment grounding was not redesigned.
+- N3 recorded D4 as an expected failure on the Phase 2 branch. Phase 3 now keeps “A late payment fee of £40 may apply if you do not pay by 25 November 2026.” out of the verified balance, the verified payment action, the response deadline, and the issue date.
 - N6. The inspection table names a conditional fee and says it is not the current balance. A verified balance is not given a generic “Amount status: Unverified” label. A payment heading whose only evidence is a conditional fee is marked unverified. An unsupported payment action is named. The v2 schema is unchanged. The Action Plan still uses the local grounding labels.
 - N4 remains open. Additional non-index array properties are not rejected.
 - N5 remains open. An omitted `guardOptions` argument is still accepted by the approval view.
 
-R5-3 remains unresolved. R5-5, the immutable domain-owned approval registry, remains pending. R5-2, R5-4, N-5, App Check, Chrome request-body inspection, and invented-identifier output checks remain tracked. This is not cloud readiness. `CLOUD_SUBMISSION_ENABLED` stays false.
+The recorded R5-3 cases are verified fixed for the sentences in the characterization file. R1 shows conflicting amounts as unverified, says that no current balance is established, and explains an empty `amountsGBP` as no supported outstanding balance. R2 uses a stable claim identity for action labels and does not pair sorted and unsorted actions by list index. R5-5, the immutable domain-owned approval registry, remains a separate mandatory gate and is not started. R5-2, R5-4, N-5, N4, N5, App Check, Chrome request-body inspection, and invented-identifier output checks remain open. This is not cloud readiness. `CLOUD_SUBMISSION_ENABLED` stays false. A green suite is not, by itself, proof of complete grounding accuracy.
 
 These stay tracked and are not implemented here:
 
@@ -196,7 +196,7 @@ These stay tracked and are not implemented here:
 - Demo-mode removal of the legacy SpikeHarness.
 - Soft-hyphen alphanumeric false positives, where a format character joins letters to digits that are not an account reference.
 - R5-2: fullwidth and accented salutations remain undetected, including Zoë Brontë, Siân Jones, José García, and Chloé O'Brien. `Sarah_1`, `SMITH_44`, and `Example99` remain insufficiently protected. Mandatory before live cloud submission.
-- R5-3 HARD GATE: H2, I2, and J2; S1–S3; settlement and negation paraphrases; a quoted “cancelled”; Q3 unquoted prompt-injected £9,999; truncated quotes without an ellipsis; and D4, a conditional late-payment fee that can become an unsupported verified obligation. R5-3 remains unresolved and blocks any live cloud submission or product demonstration claiming verified payment obligations. Of the 41 characterization tests, 29 are expected failures for the secure outcome and 12 assert results that already fail closed. Do not treat those 29 as cleared for cloud submission.
+- R5-3 recorded cases: H2, I2, and J2; S1–S3; the recorded settlement and negation paraphrases; a quoted “cancelled”; Q3 unquoted prompt-injected £9,999, including beside a real £520; a truncated quote without an ellipsis; and D4. These now fail closed in ordinary tests. Before Phase 3 there were 29 expected failures. After Phase 3 there are none in that file. Unresolved semantic limits remain: a later sentence that independently states an outstanding balance is not treated as part of an earlier injected command; a later positive balance can follow a historical payment of the same figure; a terminal account settlement is not restored by repeating “please pay” for an amount already introduced; two surviving outstanding balances stay unverified even if one is repeated. A green suite is not proof that every unseen notice is grounded. Live cloud submission stays closed.
 - N4 remains open: additional non-index array properties are not rejected by the v2 validator.
 - N5 remains open: an omitted `guardOptions` argument is still accepted by the approval view. R5-5, the immutable domain-owned approval registry, remains pending.
 - D1: getter or Proxy bypasses are rejected by the v2 validator. This does not enable cloud sending.
@@ -207,6 +207,34 @@ These stay tracked and are not implemented here:
 - R5-6: Form-1040, ISO-9001, and Section-123 can be treated as account references. A surname plus a year, such as SMITH-2026, can too. Those are availability issues, not privacy leaks.
 - The benchmark still uses the old short-quote verifier.
 - Live cloud drafting is not connected. `CLOUD_SUBMISSION_ENABLED` stays false.
+
+## Phase 3 payment-claim assessment
+
+This table is the rule for whether a figure is a current outstanding balance. It was written before the grounding change. A currency amount, the word “pay”, or the word “due” is not enough. Neighbouring sentences and the rest of the notice count. A negation does not wipe the whole notice: a cancelled £1,280 followed by a clearly supported £520 keeps the £520. If two roles cannot be separated, the current obligation stays unverified.
+
+Lexical cues mark a role. They do not, by themselves, decide the notice. The notice walk uses sentence order, whether the statement names an amount or the whole account, and whether a later sentence resolves the earlier one.
+
+| Role | What the sentence is doing | Current outstanding balance |
+| --- | --- | --- |
+| Current outstanding balance | The figure is tied to an outstanding balance, an amount due, a balance now requested, or “please pay the balance”, and nothing later takes that role away | Yes, when it is the only surviving figure |
+| Historical payment | A completed past payment, such as a thank-you for a payment or a payment already received | No for that figure, until a later sentence positively states a current balance |
+| Paid in full | The account is paid in full | No. Repeating “please pay” for an amount already introduced does not restore it. A later figure that first appears as its own outstanding balance can remain |
+| Written off | The named charge or balance was written off | No for that amount |
+| Waived | The charge was waived | No for that amount, or for the account when the sentence names no amount |
+| Cancelled demand | A demand was cancelled | No for that demand, unless a later sentence itself states a current outstanding balance, or the demand is explicitly reinstated |
+| Withdrawn demand | A demand was withdrawn | Same as a cancelled demand |
+| Reinstated demand | The text reinstates a demand, says it remains payable, or says to disregard the cancellation | Restores the named amount |
+| Conditional fee | A fee, surcharge, or penalty that may apply, often if unpaid | No. The figure may be recorded as a conditional fee. Its date is not an issue date and not a response deadline |
+| Refunded payment | A payment was refunded | No |
+| Conflicting balances | Two different figures both survive as current outstanding balances | No current balance. Both stay unverified. v2 `amountsGBP` is `[]` |
+| Unsupported payment instruction | “Pay”, “due”, or a bare currency amount without a positive balance role | No |
+| Ambiguous or incomplete evidence | One sentence both demands payment and withdraws it, a quotation stops before the sentence ends, or the role cannot be told apart | The current obligation is unverified |
+
+A terminal account settlement (paid in full, written off, waived, refunded, or a statement that nothing remains payable) is not undone by a later “please pay” of an amount the notice had already introduced. A cancellation or withdrawal is different: if it comes first, a later sentence that positively states a current outstanding balance is a new demand and can remain. If the cancellation or withdrawal comes after the demand and nothing later reinstates it or states a new current balance, that demand is not current. A historical payment of one figure does not remove a later, different current balance.
+
+An empty v2 `amountsGBP` means no supported outstanding balance. It is not proof that the notice contains no amounts. Conflicting figures stay in the local view as unverified and are not copied into v2. Notice text that tells a model to ignore instructions or to record a verified balance is data, not a balance. A payment deadline is kept only when its own sentence still supports a surviving current payment, or it is an explicit response date that is not a conditional fee or a withdrawn demand. A date that appears only inside a conditional fee does not become the issue date or the response deadline.
+
+Phase 3 result for the recorded cases: H2, I2, J2, S1–S3, the settlement paraphrases, quoted cancellation, Q3, the no-ellipsis truncation, and D4 fail closed. A genuine current £1,280 and its deadline remain. A withdrawn or historical £1,280 does not remove a later current £520. An explicit reinstatement restores the named demand. A conditional fee beside a genuine balance stays a fee. £1,280 against £1,380 stays unverified, with `amountsGBP` empty. Action rows use stable claim ids. The v2 schema is unchanged: no `sourceQuote`, `redactedClause`, or private identifier map. D1, D2, D3, N1, and N2 stay in place. There is no v1 fallback on the production path. No unsupported payment action is given a Verified badge in the tested screens. R5-5 is not started. `CLOUD_SUBMISSION_ENABLED` stays false. A green suite is not, by itself, proof of complete grounding accuracy.
 
 ## Milestone 4
 
@@ -223,7 +251,7 @@ These items are not implemented here:
 - Residual PII detection limitations, including unusual names, addresses, and Unicode homoglyphs.
 - Production test-injection seam review and restriction.
 - Dead raw-embed guard.
-- Source role grounding. R5-3 is a hard gate and is not resolved. It blocks any live cloud submission or product demonstration claiming verified payment obligations. Paid in full, written off, and waived can still be verified from separate sentences. Neighbouring cancellation, withdrawal, or negation can leave another sentence verified. Quoted “cancelled”, an unquoted prompt-injected amount, and a truncated quote without an ellipsis can still pass. D4: a conditional late-payment fee can become an unsupported verified obligation.
+- Source role grounding beyond the recorded R5-3 sentences. Those recorded sentences now fail closed. The semantic limits named under R5-3 remain. A green suite is not proof of complete grounding accuracy. Live cloud submission stays closed.
 - Cloud output legal-conclusion validation.
 - False positives in grouped number detection.
 - Bracketed instructional text versus supported placeholder tokens.

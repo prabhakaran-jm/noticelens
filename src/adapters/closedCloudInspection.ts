@@ -90,10 +90,7 @@ export function readableRowsFromClosedBrief(
     },
     {
       label: "Amounts",
-      value:
-        payload.amountsGBP.length === 0
-          ? "Not stated"
-          : payload.amountsGBP.map((amount) => formatGbp(amount)).join(", "),
+      value: amountRowValue(payload, view),
     },
   ];
   if (view.amount.conditionalFeesGBP.length > 0) {
@@ -124,30 +121,73 @@ export function readableRowsFromClosedBrief(
     { label: "Response goal", value: payload.responseGoal }
   );
   const feeOnly = onlyConditionalFeeEvidence(view);
-  payload.obligations.forEach((item, index) => {
-    const paymentWithoutBalance =
-      feeOnly &&
-      (item.actionSummary === "pay_stated_balance" || item.actionSummary === "pay_or_contact");
-    const unverified = paymentWithoutBalance
-      ? " Unverified: the only stated amount is a conditional fee, not a current balance."
-      : "";
+  const usedClaims = new Set<string>();
+  payload.obligations.forEach((item) => {
+    const match = view.obligations.find(
+      (candidate) =>
+        !usedClaims.has(candidate.id) &&
+        candidate.headingSupport === "supports_claim" &&
+        candidate.actionSummary === item.actionSummary &&
+        sameDue(candidate.dueDate, item.dueDate)
+    );
+    if (match) {
+      usedClaims.add(match.id);
+    }
+    const claim = match?.id ?? `unmatched-${item.actionSummary}`;
     rows.push({
-      label: `Action label ${index + 1}`,
-      value: `${trustedActionSummaryLabel(item.actionSummary)}; due ${
+      label: `Action label ${claim}`,
+      value: `${trustedActionSummaryLabel(item.actionSummary)}; claim ${claim}; due ${
         item.dueDate ? formatPoint(item.dueDate) : "Not stated"
-      }.${unverified} Label, not a quotation.`,
+      }. Label, not a quotation.`,
     });
   });
-  view.obligations.forEach((item, index) => {
+  view.obligations.forEach((item) => {
     if (item.headingSupport === "supports_claim") {
       return;
     }
+    const payment =
+      item.actionSummary === "pay_stated_balance" || item.actionSummary === "pay_or_contact";
+    const feeNote =
+      feeOnly && payment
+        ? " The only stated amount is a conditional fee, not a current balance."
+        : "";
+    const conflictNote =
+      view.amount.conflict && payment ? " No current balance is established." : "";
     rows.push({
-      label: `Unsupported action ${index + 1}`,
-      value: `${trustedActionSummaryLabel(item.actionSummary)} is unverified.`,
+      label: `Unsupported action ${item.id}`,
+      value: `${trustedActionSummaryLabel(item.actionSummary)} is unverified. Claim ${item.id}.${feeNote}${conflictNote}`,
     });
   });
   return rows;
+}
+
+function sameDue(viewDue: string | null, payloadDue: string | null): boolean {
+  const viewIso = viewDue ? parseCalendarDate(viewDue)?.iso ?? viewDue : null;
+  return viewIso === payloadDue;
+}
+
+function amountRowValue(payload: ClosedCloudBrief, view: GroundedNoticeViewModel): string {
+  if (payload.amountsGBP.length > 0) {
+    return payload.amountsGBP.map((amount) => formatGbp(amount)).join(", ");
+  }
+  const rawFigures = view.amount.conflict
+    ? view.amount.amountsGBP
+    : [
+        ...new Set(
+          view.amount.classified
+            .filter((item) => item.role !== "conditional_fee" && item.verifiedForDisplay === null)
+            .map((item) => item.value)
+        ),
+      ];
+  const figures = rawFigures.map((amount) => formatGbp(amount));
+  const listed = figures.join(" and ");
+  if (view.amount.conflict) {
+    return `No supported outstanding balance. ${listed} are unverified, and no current balance is established. amountsGBP is empty because those figures conflict, not because the notice states no amounts.`;
+  }
+  if (listed) {
+    return `No supported outstanding balance. ${listed} is unverified. amountsGBP is empty because no outstanding balance is supported, not because the notice states no amounts.`;
+  }
+  return "Not stated";
 }
 
 /**
