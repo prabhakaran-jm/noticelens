@@ -36,6 +36,87 @@ export function normalizeDashes(value: string): string {
   return value.replace(UNICODE_DASH, "-");
 }
 
+export interface PatternProjection {
+  text: string;
+  /** Original inclusive index for each UTF-16 unit of `text`. */
+  startAt: number[];
+  /** Original exclusive index for each UTF-16 unit of `text`. */
+  endAt: number[];
+}
+
+function isRealDash(raw: string): boolean {
+  UNICODE_DASH.lastIndex = 0;
+  const matched = UNICODE_DASH.test(raw);
+  UNICODE_DASH.lastIndex = 0;
+  return matched;
+}
+
+/**
+ * Pattern view for account and other token recognition.
+ * Real dashes become one ASCII hyphen. Format characters, including U+00AD,
+ * are removed. Each remaining unit still points at the original span, so a
+ * match that crosses a removed character covers that character too.
+ * Case and other letters stay as they are. Name matching uses `foldIdentifierText`.
+ */
+export function projectIdentifierPattern(value: string): PatternProjection {
+  const startAt: number[] = [];
+  const endAt: number[] = [];
+  let text = "";
+  for (let index = 0; index < value.length; ) {
+    const codePoint = value.codePointAt(index);
+    if (codePoint === undefined) {
+      break;
+    }
+    const raw = String.fromCodePoint(codePoint);
+    const next = index + raw.length;
+    if (/\p{Cf}/u.test(raw)) {
+      index = next;
+      continue;
+    }
+    const piece = isRealDash(raw) ? "-" : raw;
+    for (let unit = 0; unit < piece.length; unit += 1) {
+      text += piece[unit];
+      startAt.push(index);
+      endAt.push(next);
+    }
+    index = next;
+  }
+  return { text, startAt, endAt };
+}
+
+export function mapProjectedSpan(
+  projection: PatternProjection,
+  start: number,
+  end: number
+): { start: number; end: number } | null {
+  if (end <= start) {
+    return null;
+  }
+  const originStart = projection.startAt[start];
+  const originEnd = projection.endAt[end - 1];
+  if (originStart === undefined || originEnd === undefined || originEnd <= originStart) {
+    return null;
+  }
+  return { start: originStart, end: originEnd };
+}
+
+/** A letter-digit token whose original span hid a format character inside it. */
+export function containsFormatJoinedAccountToken(value: string): boolean {
+  const projected = projectIdentifierPattern(value);
+  const pattern = /\b[A-Z]{2,12}\d{3,12}\b/gi;
+  for (const match of projected.text.matchAll(pattern)) {
+    const index = match.index ?? 0;
+    const origin = mapProjectedSpan(projected, index, index + match[0].length);
+    if (!origin) {
+      continue;
+    }
+    if (/\p{Cf}/u.test(value.slice(origin.start, origin.end))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export interface IdentifierFold {
   folded: string;
   /** Original inclusive index for each UTF-16 unit of `folded`. */

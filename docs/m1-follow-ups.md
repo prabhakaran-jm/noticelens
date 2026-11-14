@@ -90,6 +90,10 @@ Review of `857d792` on `feat/m2b-secure-cloud-flow`. Live notice-to-cloud submis
 
 A known name such as Sarah Example stayed in the notice, and the final cloud guard accepted it, when U+00AD sat inside one component (`Sar` + U+00AD + `ah`). The shared fold treated that soft hyphen as a Unicode dash and turned it into `-`, so the component no longer matched. Detection, redaction, and the final payload guard now use one fold that removes U+00AD with the other format characters and keeps the original source offsets. Real hyphens in account references and surnames stay hyphens. This is not a claim that every personal identifier is removed.
 
+### Z6d — Salutation detector can miss a soft-hyphen name — remaining limitation
+
+`Dear Sar\u00ADah Exam\u00ADple` can miss the complete name in the salutation detector, so those components are not captured from the greeting and can escape. This remains a privacy limitation. It is a mandatory consideration before real cloud submission. The account-reference fix does not rewrite salutation detection.
+
 ### M2B-1b — Hard gate before cloud send or a product demonstration
 
 Cancelled, withdrawn, negated, and historical-payment claims can still appear as Verified. Do not enable the M2B-2 cloud-send path, and do not record a product demonstration, until this is closed.

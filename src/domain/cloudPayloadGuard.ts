@@ -1,6 +1,7 @@
 import { hasAtMostTwoDecimalPlaces } from "./amounts";
 import { parseCalendarDate } from "./dates";
 import {
+  containsFormatJoinedAccountToken,
   hasLongNumericIdentifier,
   identifierLeaks,
   normalizeDashes,
@@ -144,7 +145,8 @@ function inspectStringForPiiOrLeakage(
   }
   if (
     LABELED_ACCOUNT_REF_REGEX.test(visible) ||
-    ALPHANUMERIC_REF_TOKEN_REGEX.test(visible)
+    ALPHANUMERIC_REF_TOKEN_REGEX.test(visible) ||
+    containsFormatJoinedAccountToken(value)
   ) {
     violations.push("a text field contains an account reference pattern");
   }
