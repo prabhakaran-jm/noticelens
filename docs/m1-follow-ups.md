@@ -1,6 +1,6 @@
 # NoticeLens follow-ups after Milestone 1
 
-This note is not a product screen. Milestone 1 stays on the deterministic domain core and the security fixes already on `feat/m1-deterministic-domain-core`. N-1 and N-2 are fixed for the reproductions named below, and M2A-2 is fixed in the Milestone 2A follow-up. M2B-1a is fixed for the soft-hyphen reproduction Z6. M2B-2A records a local approval lifecycle and the K3/K5 cases that were tested, and R5-1 is fixed for the short digit tails named below. M2B-2B records the R5-2, R5-3, R5-4, and R5-5 cases named below. Live cloud submission stays closed. These notes do not claim that personal data is guaranteed to have been removed.
+This note is not a product screen. Milestone 1 stays on the deterministic domain core and the security fixes already on `feat/m1-deterministic-domain-core`. N-1 and N-2 are fixed for the reproductions named below, and M2A-2 is fixed in the Milestone 2A follow-up. M2B-1a is fixed for the soft-hyphen reproduction Z6. M2B-2A records a local approval lifecycle and the K3/K5 cases that were tested, and R5-1 is fixed for the short digit tails named below. M2B-2B records partial local checks for R5-2, R5-3, R5-4, and R5-5. Independent review of `42b443c` shows those four items are not resolved. Each remains a mandatory gate before live cloud submission. R5-3 is also a hard gate before any product-demo recording. Live cloud submission stays closed. These notes do not claim that personal data is guaranteed to have been removed.
 
 Independent review of `5f2f9d0` is **merge with documented deferments**. O10 nested placeholders and the name-component substring false positives are verified fixed. `npm test` passed 83/83, and typecheck and build passed. The additional regressions below are not reachable through the shipped UI. Recording them is not a claim that personal data is guaranteed to be removed. Pattern checks do not prove that.
 
@@ -90,9 +90,11 @@ Review of `857d792` on `feat/m2b-secure-cloud-flow`. Live notice-to-cloud submis
 
 A known name such as Sarah Example stayed in the notice, and the final cloud guard accepted it, when U+00AD sat inside one component (`Sar` + U+00AD + `ah`). The shared fold treated that soft hyphen as a Unicode dash and turned it into `-`, so the component no longer matched. Detection, redaction, and the final payload guard now use one fold that removes U+00AD with the other format characters and keeps the original source offsets. Real hyphens in account references and surnames stay hyphens. This is not a claim that every personal identifier is removed.
 
-### Z6d / R5-2 — Normalised name components — fixed for the tested cases
+### Z6d / R5-2 — Normalised name components — not resolved
 
-`Dear Sar\u00ADah Exam\u00ADple` is still detected as the complete original identifier. Name components are now taken from the normalised identifier, so a format character inside a known name no longer drops `Sarah` or `Example`. The same extraction covers U+200B, U+2060, NFC, NFD, and fullwidth forms of a known name. Plain occurrences elsewhere in the notice are redacted, and an edited clause that reintroduces a protected component is rejected. Original offsets stay in place. Lowercase `bill` and `energy billing` stay in place when the capitalised name is protected. This is not a claim that every personal identifier is removed. Two-letter names remain under N-3.
+When a known identifier is successfully detected, its components are taken from the normalised form. A format character inside that detected name no longer drops a component such as `Sarah` or `Example` from `Dear Sar\u00ADah Exam\u00ADple`. The same path covers U+200B and U+2060 inside a detected name, and plain occurrences of those detected components are redacted. Original offsets stay in place. Lowercase `bill` and `energy billing` stay in place when the capitalised name was detected. Those protections do not run for an identifier the detector missed.
+
+Fullwidth and accented salutations remain undetected. Reproductions include Zoë Brontë, Siân Jones, José García, and Chloé O'Brien. Names adjacent to underscores or short digit tails remain insufficiently protected. Reproductions include `Sarah_1`, `SMITH_44`, and `Example99`. This is a mandatory gate before live cloud submission. Do not treat R5-2 as resolved. This is not a claim that every personal identifier is removed. Two-letter names remain under N-3.
 
 ### K3/K5 — Partial account-reference leakage — fixed for the tested longer tokens
 
@@ -102,17 +104,30 @@ A known name such as Sarah Example stayed in the notice, and the final cloud gua
 
 `Ref SMITH-44`, `Smith/7`, `Sarah-1`, and `Example-12` were redacted on `b7384fb` and then escaped both redaction and the final guard. The name-component skip ran whenever digits followed a separator, even when no account span had been detected. A name component is now left in place only when that occurrence sits inside a detected account span. These four tokens are redacted to the recipient placeholder plus the unmatched tail, and canonical validation and edited-clause revalidation reject both the raw token and the partial placeholder. Complete account tokens such as `SMITH-4471` are still replaced as one `[ACCOUNT_REF]`.
 
-### R5-4 — Joined references and placeholder tails — fixed for the tested shapes
+### R5-4 — Joined references and placeholder tails — not resolved
 
-`SMITH4471`, `SMITH_4471`, `SMITH.4471`, and the same letter-digit form with `:` or `#`, are detected as one account reference. A fullwidth dot is included. A canonical placeholder does not hide a numeric tail: `[RECIPIENT_NAME]_8472`, `[ACCOUNT_REF].8472`, `[ACCOUNT_REF_2]:8472`, and the same tail on the other canonical bases with `_`, `.`, `:`, `#`, `/`, or `-`, are rejected in an edited clause. `Nov-2026`, `Nov2026`, `balance2026`, and `billing2026` stay prose. A surname glued to a year, such as `SMITH-2026`, can still be treated as an account reference. That is an availability false positive, not a privacy leak. R5-6 remains open.
+Previously tested reference formats remain protected. `SMITH4471`, `SMITH_4471`, `SMITH.4471`, and the same letter-digit form with `:` or `#` are detected as one account reference for those tested shapes. A fullwidth dot is included in that tested set. A canonical placeholder does not hide a numeric tail for `_`, `.`, `:`, `#`, `/`, or `-` on the tested canonical bases, including `[ACCOUNT_REF_2]:8472`. `Nov-2026`, `Nov2026`, `balance2026`, and `billing2026` stay prose in those tests.
+
+Residual separator leaks remain. U+2044, U+2215, comma, plus, tilde, and asterisk can still separate an identifier from a numeric tail. Certain partial-placeholder tails that use these separators are accepted. Those privacy leaks are mandatory blockers before live cloud submission. Some ordinary alphanumeric phrases are rejected when they are not account references. Those false-positive rejections are tracked separately from the leaks. A surname glued to a year, such as `SMITH-2026`, can still be treated as an account reference. R5-6 remains open for `Form-1040`, `ISO-9001`, and `Section-123`. Do not treat R5-4 as resolved.
 
 ### Soft-hyphen alphanumeric false positives — remaining limitation
 
 A format character that joins letters to three or more digits is still treated as an account token. That catches hidden references such as `EXAMPLE` + U+00AD + `8472`. It can also flag ordinary text that is not an account reference, for example a word, a soft hyphen, and a number. That false positive remains. It is not solved by a special case for one reference string.
 
-### M2B-1b / R5-3 — Obligation role grounding — fixed for the tested sentences
+### M2B-1b / R5-3 — Obligation role grounding — not resolved — HARD GATE
 
-A current demand is distinguished from a negated, withdrawn, cancelled, historical, settled, conditional, or quoted statement by the clause around it. “You must pay nothing.”, “Please ignore our request to pay.”, “You do not have to pay.”, “Thank you for your payment of £1,280.”, “This account is paid in full.”, “The balance of £1,280 has been written off.”, “Payment is no longer required.”, “The charge has been waived.”, and “The payment was refunded.” are not verified. A truncated quotation stays incomplete. A quoted or prompt-injected balance is not a current demand. “Please pay £1,280 or the revised £520.” stays ambiguous. A genuine outstanding balance of £1,280, a later outstanding balance of £520 beside a historical £1,280, and a conditional £40 fee beside a current £1,280 stay as they were: the current balance and deadline can be verified, and the conditional fee is not the main balance. The Action Plan, the amount tile, and the cloud brief use that same support. A separate genuine “please pay” sentence remains verified when another sentence says an earlier demand was cancelled. This is clause-role evidence, not general language understanding. An unseen wording can still be wrong. Do not treat that remaining gap as closed.
+R5-3 is a hard gate before live cloud submission or a product-demo recording. Payment-role grounding is not fully resolved. Some single-sentence cases are no longer verified, including “You must pay nothing.”, “Please ignore our request to pay.”, “You do not have to pay.”, and “Thank you for your payment of £1,280.” A genuine outstanding balance can still be verified when the source states it as the current demand. That partial behaviour is not closure.
+
+Independent review of `42b443c` reproduced these failures:
+
+- H2, I2, and J2. “Paid in full”, “written off”, and “waived” in separate sentences can still be verified as a current demand.
+- S1–S3. Cancellation, withdrawal, or negation in a neighbouring sentence can leave another sentence verified.
+- R. 13 of 19 payment-settlement and negation paraphrases remain incorrectly verified.
+- A quoted “cancelled” can bypass the disposition checks.
+- Q3. An unquoted prompt-injected £9,999 line can enter the cloud brief.
+- Truncated quotations that do not contain an ellipsis may be incorrectly verified.
+
+Do not claim that payment-role grounding is fully resolved. Do not enable cloud submission, and do not record a product demonstration, while this gate is open.
 
 ### M2B-1c — Approval invalidated on edit — fixed for the local lifecycle
 
@@ -122,9 +137,11 @@ Any relevant edit increments an approval generation immediately. Restoring the p
 
 `recordUserPayloadApproval` requires the exact current canonical serialization and runs `canonicalCloudPayload` on it. Unknown keys, malformed placeholders, and clauses that fail the payload guard are rejected. This record still cannot send.
 
-### R5-5 — Approval uses the same guard options — fixed for the local record
+### R5-5 — Approval guard options — not resolved
 
-Candidate construction, inspection, approval, and the pre-send check now share one `CloudPayloadGuardOptions` value built from the local identifier map and the user-added private identifiers. Approval runs canonical validation itself. It is bound to the exact current serialized payload. The still-disabled send revalidates that snapshot with the stored options and then refuses. A failed revalidation is a generic error, the approval id is consumed, and the error does not echo the identifier. Approval does not take the cloud-send lock. `CLOUD_SUBMISSION_ENABLED` stays false. The live cloud-send function is not connected.
+The production application currently supplies the same guard options to candidate construction, inspection, approval, and the still-disabled pre-send check. Those options are built from the local identifier map and the user-added private identifiers. The production screen does not call `CloudPayloadApproval.begin`, and `CLOUD_SUBMISSION_ENABLED` stays false.
+
+That production path does not close the gate. Domain functions can still accept an altered or empty forbidden-identifier list. Approval records are mutable. Identifiers shorter than three characters may be ignored. A future live-send path requires a private immutable approval registry and fresh validation against the current identifiers. This is a mandatory gate before live cloud submission. Do not treat R5-5 as resolved. The live cloud-send function is not connected.
 
 ### R5-6 — Standards-shaped tokens are an availability issue
 
@@ -138,7 +155,7 @@ A local privacy approval records the exact canonical JSON for the current edit g
 
 ## Milestone 2
 
-Milestone 2 live cloud submission of edited or redacted notices stays blocked. N-1, N-2, M2A-1, M2A-3, M2A-5, M2B-1a, the tested K3/K5 tokens, R5-1, R5-2, R5-3, R5-4, and R5-5 are fixed for the cases named above. A local privacy approval records the exact canonical payload, is invalidated by a later edit, stores the guard options, and does not start a cloud send. The pre-send check revalidates those options and still refuses. Do not enable cloud submission, and do not record a product demonstration, until an independent review closes the remaining items below.
+Milestone 2 live cloud submission of edited or redacted notices stays blocked. N-1, N-2, M2A-1, M2A-3, M2A-5, M2B-1a, the tested K3/K5 tokens, and R5-1 are fixed for the cases named above. R5-2, R5-3, R5-4, and R5-5 are not resolved. R5-3 is a hard gate before live cloud submission or a product-demo recording. A local privacy approval records the exact canonical payload for the current production path and does not start a cloud send. Do not enable cloud submission, and do not record a product demonstration, until the remaining items below are closed.
 
 These stay tracked and are not implemented here:
 
@@ -151,10 +168,13 @@ These stay tracked and are not implemented here:
 - Content Security Policy and the dependency audit.
 - Demo-mode removal of the legacy SpikeHarness.
 - Soft-hyphen alphanumeric false positives, where a format character joins letters to digits that are not an account reference.
-- R5-3 remaining gap: clause-role patterns do not understand every negation, quotation, or contradiction. An unseen wording can still be classified wrongly.
+- R5-2: fullwidth and accented salutations remain undetected, including Zoë Brontë, Siân Jones, José García, and Chloé O'Brien. `Sarah_1`, `SMITH_44`, and `Example99` remain insufficiently protected. Mandatory before live cloud submission.
+- R5-3 HARD GATE: H2, I2, and J2; S1–S3; 13 of 19 settlement and negation paraphrases; a quoted “cancelled”; Q3 unquoted prompt-injected £9,999; and truncated quotes without an ellipsis. Mandatory before live cloud submission or a product-demo recording.
+- R5-4: residual separator leaks for U+2044, U+2215, comma, plus, tilde, and asterisk, including some partial-placeholder tails. Those leaks are mandatory cloud-activation blockers. Ordinary alphanumeric false-positive rejections are tracked separately.
+- R5-5: domain functions can accept an altered or empty forbidden-identifier list, approval records are mutable, and identifiers shorter than three characters may be ignored. A live-send path needs a private immutable approval registry and fresh validation against current identifiers. Mandatory before live cloud submission.
 - R5-6: Form-1040, ISO-9001, and Section-123 can be treated as account references. A surname plus a year, such as SMITH-2026, can too. Those are availability issues, not privacy leaks.
 - The benchmark still uses the old short-quote verifier.
-- Live cloud drafting is not connected. `CLOUD_SUBMISSION_ENABLED` stays false until an independent review says otherwise.
+- Live cloud drafting is not connected. `CLOUD_SUBMISSION_ENABLED` stays false.
 
 ## Milestone 4
 
@@ -171,7 +191,7 @@ These items are not implemented here:
 - Residual PII detection limitations, including unusual names, addresses, and Unicode homoglyphs.
 - Production test-injection seam review and restriction.
 - Dead raw-embed guard.
-- Source role grounding beyond the tested R5-3 sentences. Unseen negations, quotations, and contradictions can still be classified wrongly.
+- Source role grounding. R5-3 is a hard gate and is not resolved. Paid in full, written off, and waived can still be verified from separate sentences. Neighbouring cancellation, withdrawal, or negation can leave another sentence verified. Quoted “cancelled”, an unquoted prompt-injected amount, and a truncated quote without an ellipsis can still pass.
 - Cloud output legal-conclusion validation.
 - False positives in grouped number detection.
 - Bracketed instructional text versus supported placeholder tokens.
