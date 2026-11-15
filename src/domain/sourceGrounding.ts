@@ -217,7 +217,9 @@ function explicitlyCancelled(quote: string): boolean {
     /\b(?:has|have)\s+been\s+cancelled\b/i.test(quote) ||
     /\b(?:is|was|were|hereby|now)\s+cancelled\b/i.test(quote) ||
     /\bcancelled\s+(?:demand|notice|balance|payment|debt|request|charge|amount)\b/i.test(quote) ||
-    (/\bcancell/i.test(quote) && /\b(?:bill|charge|demand|balance|debt)\b/i.test(quote))
+    (/\bcancell/i.test(quote) && /\b(?:bill|charge|demand|balance|debt)\b/i.test(quote)) ||
+    /\b(?:has|have)\s+been\s+rescinded\b/i.test(quote) ||
+    (/\brescinded\b/i.test(quote) && /\b(?:demand|notice|charge|bill|balance)\b/i.test(quote))
   );
 }
 
@@ -586,7 +588,7 @@ function withoutModelAsides(sentence: string): string {
 }
 
 export function paymentSentenceRole(sentence: string): PaymentSentenceRole {
-  const text = withoutModelAsides(sentence).replace(/\s+/g, " ").trim();
+  const text = withoutModelAsides(sentence).replace(/\u00AD/g, "").replace(/\s+/g, " ").trim();
   if (!text) {
     return "unsupported";
   }
@@ -732,9 +734,36 @@ export function nonFeeAmountValues(sentence: string): number[] {
 }
 
 function namesDistinctNewCharge(sentence: string): boolean {
+  const text = sentence.replace(/\u00AD/g, "");
+  if (
+    /\bno\s+(?:new|separate)\s+charge\b/i.test(text) ||
+    /\bnot\s+a\s+(?:new|separate)\s+charge\b/i.test(text)
+  ) {
+    return false;
+  }
   return /\b(?:new\s+and\s+separate|separate\s+(?:charge|bill)|new\s+charge|corrected\s+bill|replacement\s+(?:charge|bill)|re-?billed|re-?issued)\b/i.test(
-    sentence
+    text
   );
+}
+
+function deniesDistinctNewCharge(sentence: string): boolean {
+  const text = sentence.replace(/\u00AD/g, "");
+  return (
+    /\bno\s+(?:new|separate)\s+charge\b/i.test(text) ||
+    /\bnot\s+a\s+(?:new|separate)\s+charge\b/i.test(text)
+  );
+}
+
+/** Account-level closure. A later slip does not revive a balance. */
+function closesWholeAccount(sentence: string): boolean {
+  const text = sentence.replace(/\u00AD/g, "");
+  if (/\bpaid\s+in\s+full\b/i.test(text) || /\bwritten\s+off\b/i.test(text)) {
+    return true;
+  }
+  if (/\baccount\b/i.test(text) && /\b(?:was|is|has been|have been)\s+settled\b/i.test(text)) {
+    return true;
+  }
+  return /\baccount\s+is\s+(?:now\s+)?clear\b/i.test(text);
 }
 
 function opensFreshBalance(sentence: string): boolean {
@@ -801,7 +830,21 @@ function claimKey(sentenceIndex: number, amount: number | null, role: string): s
  * cancellation, or a different later amount, can remain. A forward
  * "amount below" negation covers only the next stated amount.
  */
-export function resolvedCurrentBalanceAmounts(text: string): number[] {
+function rememberPositive(acceptedAt: Map<number, number[]>, amount: number, index: number, lastPositive: Map<number, number>) {
+  lastPositive.set(amount, index);
+  const seen = acceptedAt.get(amount);
+  if (seen) {
+    seen.push(index);
+  } else {
+    acceptedAt.set(amount, [index]);
+  }
+}
+
+function walkCurrentBalances(text: string): {
+  current: number[];
+  acceptedAt: Map<number, number[]>;
+  reinstatedAt: Map<number, number>;
+} {
   const sentences = noticeSentences(text);
   let lastUnscopedTerminal = -1;
   let accountClosed = false;
@@ -812,6 +855,7 @@ export function resolvedCurrentBalanceAmounts(text: string): number[] {
   let lastUnscopedHistorical = -1;
   const lastScopedHistorical = new Map<number, number>();
   const lastPositive = new Map<number, number>();
+  const acceptedAt = new Map<number, number[]>();
   const lastReinstatement = new Map<number, number>();
   const seen = new Set<number>();
   let forwardBlock = false;
@@ -843,7 +887,7 @@ export function resolvedCurrentBalanceAmounts(text: string): number[] {
       const targets = amounts.length > 0 ? amounts : [...seen];
       for (const amount of targets) {
         lastReinstatement.set(amount, index);
-        lastPositive.set(amount, index);
+        rememberPositive(acceptedAt, amount, index, lastPositive);
       }
       return;
     }
@@ -863,7 +907,7 @@ export function resolvedCurrentBalanceAmounts(text: string): number[] {
       }
       if (amounts.length === 0) {
         lastUnscopedTerminal = index;
-        if (/\bpaid\s+in\s+full\b/i.test(sentence) || /\bwritten\s+off\b/i.test(sentence)) {
+        if (closesWholeAccount(sentence)) {
           accountClosed = true;
         }
         for (const amount of seen) {
@@ -906,7 +950,12 @@ export function resolvedCurrentBalanceAmounts(text: string): number[] {
           const retired = lastScopedRetirement.get(amount);
           return retired !== undefined && retired < index;
         });
-      if ((settledBefore || retiredBefore) && !opensFreshBalance(sentence) && !namesDistinctNewCharge(sentence)) {
+      const deniesNew = deniesDistinctNewCharge(sentence);
+      if (
+        (settledBefore || retiredBefore) &&
+        (!opensFreshBalance(sentence) || deniesNew) &&
+        !namesDistinctNewCharge(sentence)
+      ) {
         return;
       }
       const replacement = replacementSplit(sentence);
@@ -915,7 +964,7 @@ export function resolvedCurrentBalanceAmounts(text: string): number[] {
           lastScopedRetirement.set(amount, index);
         }
         for (const amount of replacement.current.filter((amount) => amount > 0)) {
-          lastPositive.set(amount, index);
+          rememberPositive(acceptedAt, amount, index, lastPositive);
         }
         return;
       }
@@ -929,10 +978,15 @@ export function resolvedCurrentBalanceAmounts(text: string): number[] {
         if (accountClosed && !distinctNew && !isReinstatement(sentence)) {
           continue;
         }
-        if (sameAmountRetired && !distinctNew && !freshAssessment && !isReinstatement(sentence)) {
+        if (
+          sameAmountRetired &&
+          !distinctNew &&
+          (!freshAssessment || deniesNew) &&
+          !isReinstatement(sentence)
+        ) {
           continue;
         }
-        lastPositive.set(amount, index);
+        rememberPositive(acceptedAt, amount, index, lastPositive);
       }
     }
   });
@@ -969,7 +1023,15 @@ export function resolvedCurrentBalanceAmounts(text: string): number[] {
     current.push(amount);
   }
   current.sort((left, right) => left - right);
-  return current.filter((amount) => amount > 0);
+  return {
+    current: current.filter((amount) => amount > 0),
+    acceptedAt,
+    reinstatedAt: lastReinstatement,
+  };
+}
+
+export function resolvedCurrentBalanceAmounts(text: string): number[] {
+  return walkCurrentBalances(text).current;
 }
 
 /** A notice date needs a date label or a line that is only a date. */
@@ -986,29 +1048,79 @@ export function isPositiveIssueDateEvidence(sentence: string): boolean {
   );
 }
 
-function eligibilityId(sentenceIndex: number, amount: number | null, reason: string): string {
-  return claimKey(sentenceIndex, amount, reason);
+const BALANCE_REASONS = new Set<EligibilityDecision["reason"]>([
+  "current_balance",
+  "explicit_reinstatement",
+  "distinct_new_charge",
+]);
+
+function occurrenceId(start: number, end: number, kind: string, amount: number | null, role: string): string {
+  const basis = `${start}|${end}|${kind}|${amount ?? ""}|${role}`;
+  let hash = 2166136261;
+  for (let index = 0; index < basis.length; index += 1) {
+    hash ^= basis.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `claim-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+function isPaymentInstruction(sentence: string): boolean {
+  return /\b(?:please\s+pay|make\s+a\s+payment|kindly\s+pay|must\s+pay|pay\s+the\s+(?:outstanding\s+)?balance|payment\s+is\s+due|by\s+paying\s+£)\b/i.test(
+    sentence
+  );
+}
+
+function payByIso(sentence: string): string | null {
+  const match = /\b(?:by|due|before)\s+(\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+\s+\d{4})\b/i.exec(sentence);
+  if (!match?.[1] || !/\b(?:pay|payment|due)\b/i.test(sentence)) {
+    return null;
+  }
+  return parseCalendarDate(match[1])?.iso ?? null;
+}
+
+function uniqueAmounts(amounts: readonly number[]): number[] {
+  const unique: number[] = [];
+  for (const amount of amounts) {
+    if (!unique.some((item) => sameAmount(item, amount))) {
+      unique.push(amount);
+    }
+  }
+  unique.sort((left, right) => left - right);
+  return unique;
+}
+
+function freezeEligibility(value: NoticeEligibility): NoticeEligibility {
+  for (const decision of value.decisions) {
+    Object.freeze(decision.evidence);
+    if (decision.actionEvidence) {
+      Object.freeze(decision.actionEvidence);
+    }
+    for (const ref of decision.supporting) {
+      Object.freeze(ref);
+    }
+    for (const ref of decision.contradicting) {
+      Object.freeze(ref);
+    }
+    Object.freeze(decision.supporting);
+    Object.freeze(decision.contradicting);
+    Object.freeze(decision);
+  }
+  Object.freeze(value.decisions);
+  Object.freeze(value.eligibleAmountsGBP);
+  return Object.freeze(value);
 }
 
 /**
- * The single eligibility result for a notice. Amounts come from the balance
- * walk above. Downstream screens and the v2 builder read this object and
- * do not upgrade a non-eligible claim.
+ * One eligibility result. Each occurrence is judged on its own. A shared
+ * amount does not make a different occurrence eligible, and a notice-level
+ * flag does not verify every payment action. The summaries are derived
+ * from the decisions and then frozen.
  */
 export function analyseNoticeEligibility(text: string): NoticeEligibility {
-  const eligibleAmountsGBP = resolvedCurrentBalanceAmounts(text);
-  const single = eligibleAmountsGBP.length === 1;
+  const walk = walkCurrentBalances(text);
   const sentences = noticeSentences(text);
-  const paymentDeadline =
-    single &&
-    sentences.some(
-      (sentence) =>
-        sentenceSupportsResponseDeadline(sentence, eligibleAmountsGBP) &&
-        /\b(?:please\s+pay|make\s+a\s+payment|kindly\s+pay|payment\s+deadline|pay\s+by|due\s+by)\b/i.test(
-          sentence
-        )
-    );
   const decisions: EligibilityDecision[] = [];
+  const spans: { sentenceIndex: number; start: number; end: number }[] = [];
   let cursor = 0;
   const retirementSpans: { sentenceIndex: number; start: number; end: number }[] = [];
   sentences.forEach((sentence, sentenceIndex) => {
@@ -1017,6 +1129,7 @@ export function analyseNoticeEligibility(text: string): NoticeEligibility {
     const end = start + sentence.length;
     cursor = end;
     const evidence = { sentenceIndex, start, end };
+    spans.push(evidence);
     const role = paymentSentenceRole(sentence);
     if (
       role === "cancelled_demand" ||
@@ -1035,8 +1148,27 @@ export function analyseNoticeEligibility(text: string): NoticeEligibility {
     }
     const targets = amounts.length > 0 ? amounts : [null];
     for (const amount of targets) {
-      const eligible =
-        amount !== null && eligibleAmountsGBP.some((item) => sameAmount(item, amount));
+      if (
+        amount === null &&
+        role === "current_balance" &&
+        isPaymentInstruction(sentence) &&
+        walk.current.length === 1
+      ) {
+        continue;
+      }
+      const survived = amount !== null && walk.current.some((item) => sameAmount(item, amount));
+      const accepted =
+        amount !== null && (walk.acceptedAt.get(amount) ?? []).some((index) => index === sentenceIndex);
+      const reinstatedAt = amount === null ? undefined : walk.reinstatedAt.get(amount);
+      const afterReinstatement =
+        survived &&
+        reinstatedAt !== undefined &&
+        sentenceIndex >= reinstatedAt &&
+        (role === "current_balance" || role === "reinstated_demand");
+      const positiveOccurrence =
+        survived &&
+        (accepted || afterReinstatement) &&
+        (role === "current_balance" || role === "reinstated_demand" || namesDistinctNewCharge(sentence));
       let reason: EligibilityDecision["reason"] = "insufficient_evidence";
       let status: EligibilityDecision["status"] = "INELIGIBLE";
       if (role === "injected_command") {
@@ -1049,16 +1181,16 @@ export function analyseNoticeEligibility(text: string): NoticeEligibility {
         reason = "waived_fee";
       } else if (role === "refunded_payment") {
         reason = "refunded_fee";
-      } else if (eligible && eligibleAmountsGBP.length > 1) {
+      } else if (positiveOccurrence && walk.current.length > 1) {
         reason = "conflicting_balances";
         status = "NEEDS_REVIEW";
-      } else if (eligible && role === "reinstated_demand") {
+      } else if (positiveOccurrence && role === "reinstated_demand") {
         reason = "explicit_reinstatement";
         status = "ELIGIBLE";
-      } else if (eligible && namesDistinctNewCharge(sentence)) {
+      } else if (positiveOccurrence && namesDistinctNewCharge(sentence)) {
         reason = "distinct_new_charge";
         status = "ELIGIBLE";
-      } else if (eligible) {
+      } else if (positiveOccurrence) {
         reason = "current_balance";
         status = "ELIGIBLE";
       } else if (role === "current_balance" || role === "reinstated_demand") {
@@ -1082,30 +1214,31 @@ export function analyseNoticeEligibility(text: string): NoticeEligibility {
         /\b(?:includes?|including)\b/i.test(sentence) &&
         /\b(?:fee|surcharge|penalty)\b/i.test(sentence) &&
         isAdjacentFeeAmount(sentence, sentence.indexOf("£"), "£");
-      if (includedFee && !eligible && amount !== null && status !== "ELIGIBLE") {
+      if (includedFee && !positiveOccurrence && amount !== null && status !== "ELIGIBLE") {
         reason = "included_fee";
       }
-      const paymentActionSupported = status === "ELIGIBLE" && single;
       decisions.push({
-        id: eligibilityId(sentenceIndex, amount, reason),
+        id: occurrenceId(start, end, amount === null ? "plain" : "amount", amount, role),
         status,
         reason,
         amount,
         role,
         evidence,
-        supporting: status === "ELIGIBLE" ? [evidence] : [],
+        supporting: status === "ELIGIBLE" || status === "NEEDS_REVIEW" ? [evidence] : [],
         contradicting:
           status === "INELIGIBLE" && (reason === "repeated_retired_amount" || reason === "account_settled")
             ? retirementSpans.filter((span) => span.sentenceIndex < sentenceIndex)
             : [],
-        paymentActionSupported,
-        deadlineSupported: paymentActionSupported && paymentDeadline,
+        paymentActionSupported: false,
+        deadlineSupported: false,
+        actionEvidence: null,
+        deadlineIso: null,
       });
     }
     if (dated && amounts.length === 0) {
       const positive = isPositiveIssueDateEvidence(sentence);
       decisions.push({
-        id: eligibilityId(sentenceIndex, null, positive ? "issue_date" : "wrong_date_role"),
+        id: occurrenceId(start, end, "date", null, role),
         status: positive ? "ELIGIBLE" : "INELIGIBLE",
         reason: positive ? "issue_date" : "wrong_date_role",
         amount: null,
@@ -1115,10 +1248,12 @@ export function analyseNoticeEligibility(text: string): NoticeEligibility {
         contradicting: [],
         paymentActionSupported: false,
         deadlineSupported: false,
+        actionEvidence: null,
+        deadlineIso: null,
       });
     } else if (dated && isPositiveIssueDateEvidence(sentence)) {
       decisions.push({
-        id: eligibilityId(sentenceIndex, null, "issue_date"),
+        id: occurrenceId(start, end, "date", null, role),
         status: "ELIGIBLE",
         reason: "issue_date",
         amount: null,
@@ -1128,15 +1263,86 @@ export function analyseNoticeEligibility(text: string): NoticeEligibility {
         contradicting: [],
         paymentActionSupported: false,
         deadlineSupported: false,
+        actionEvidence: null,
+        deadlineIso: null,
       });
     }
   });
-  return {
+
+  const eligibleClaims = decisions.filter(
+    (item) => item.status === "ELIGIBLE" && item.amount !== null && BALANCE_REASONS.has(item.reason)
+  );
+  const eligibleAmountValues = uniqueAmounts(eligibleClaims.map((item) => item.amount ?? 0));
+  if (eligibleAmountValues.length === 1) {
+    const amount = eligibleAmountValues[0]!;
+    const claims = eligibleClaims.filter((item) => item.amount !== null && sameAmount(item.amount, amount));
+    sentences.forEach((sentence, sentenceIndex) => {
+      const span = spans[sentenceIndex];
+      if (!span || !isPaymentInstruction(sentence)) {
+        return;
+      }
+      if (/\b(?:instalments?|a\s+month|per\s+month|monthly)\b/i.test(sentence)) {
+        return;
+      }
+      const blocks = decisions.some(
+        (item) =>
+          item.evidence.sentenceIndex === sentenceIndex && item.amount !== null && item.status !== "ELIGIBLE"
+      );
+      if (blocks) {
+        return;
+      }
+      const stated = nonFeeAmountValues(sentence);
+      if (stated.some((item) => !sameAmount(item, amount))) {
+        return;
+      }
+      const role = paymentSentenceRole(sentence);
+      if (
+        role === "conditional_fee" ||
+        role === "conditional_obligation" ||
+        role === "injected_command" ||
+        role === "ambiguous" ||
+        role === "historical_payment" ||
+        TERMINAL_ACCOUNT_ROLES.has(role) ||
+        DEMAND_RETIREMENT_ROLES.has(role)
+      ) {
+        return;
+      }
+      const claim =
+        [...claims].reverse().find((item) => item.evidence.start <= span.start) ?? claims[claims.length - 1];
+      if (!claim) {
+        return;
+      }
+      claim.paymentActionSupported = true;
+      claim.actionEvidence = span;
+      if (!claim.supporting.some((item) => item.start === span.start && item.end === span.end)) {
+        claim.supporting = [...claim.supporting, span];
+      }
+      const due = payByIso(sentence);
+      if (!due) {
+        return;
+      }
+      if (claim.deadlineIso && claim.deadlineIso !== due) {
+        claim.deadlineSupported = false;
+        claim.deadlineIso = null;
+        return;
+      }
+      claim.deadlineIso = due;
+      claim.deadlineSupported = true;
+    });
+  }
+
+  const reviewAmounts = uniqueAmounts(
+    decisions
+      .filter((item) => item.status === "NEEDS_REVIEW" && item.reason === "conflicting_balances" && item.amount !== null)
+      .map((item) => item.amount ?? 0)
+  );
+  const eligibleAmountsGBP = eligibleAmountValues.length > 0 ? eligibleAmountValues : reviewAmounts;
+  return freezeEligibility({
     decisions,
     eligibleAmountsGBP,
-    paymentActionSupported: single,
-    deadlineSupported: single && paymentDeadline,
-  };
+    paymentActionSupported: decisions.some((item) => item.status === "ELIGIBLE" && item.paymentActionSupported),
+    deadlineSupported: decisions.some((item) => item.status === "ELIGIBLE" && item.deadlineSupported),
+  });
 }
 
 export function assessPaymentClaims(text: string): PaymentClaimAssessment[] {

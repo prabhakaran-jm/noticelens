@@ -35,22 +35,51 @@ export function buildClosedCloudBrief(input: {
     view.billingPeriod.support === "supports_claim"
       ? parseBillingWindow(view.billingPeriod.verifiedForDisplay)
       : null;
+  const eligibleAmounts = [
+    ...new Set(
+      view.eligibility.decisions
+        .filter(
+          (item) =>
+            item.status === "ELIGIBLE" &&
+            item.amount !== null &&
+            (item.reason === "current_balance" ||
+              item.reason === "explicit_reinstatement" ||
+              item.reason === "distinct_new_charge")
+        )
+        .map((item) => item.amount ?? 0)
+    ),
+  ];
   const amountsGBP =
-    !view.eligibility.paymentActionSupported ||
     view.amount.conflict ||
     view.amount.verifiedForDisplay === null ||
-    view.eligibility.eligibleAmountsGBP.length !== 1 ||
-    Math.abs(view.eligibility.eligibleAmountsGBP[0]! - view.amount.verifiedForDisplay) >= 0.001
+    eligibleAmounts.length !== 1 ||
+    Math.abs(eligibleAmounts[0]! - view.amount.verifiedForDisplay) >= 0.001
       ? []
       : [view.amount.verifiedForDisplay];
-  const deadline =
+  const claimDeadlines = [
+    ...new Set(
+      view.eligibility.decisions
+        .filter((item) => item.status === "ELIGIBLE" && item.deadlineSupported && item.deadlineIso)
+        .map((item) => item.deadlineIso ?? "")
+    ),
+  ];
+  const viewDeadline =
     !view.responseDeadlines.conflicting &&
     view.responseDeadlines.support === "supports_claim" &&
     view.responseDeadlines.verifiedForDisplay &&
     view.responseDeadlines.verifiedForDisplay !== issueDate
       ? view.responseDeadlines.verifiedForDisplay
       : null;
+  const deadline =
+    claimDeadlines.length === 1
+      ? claimDeadlines[0] !== issueDate
+        ? claimDeadlines[0]!
+        : null
+      : claimDeadlines.length > 1
+        ? null
+        : viewDeadline;
   const obligations: ClosedCloudObligation[] = [];
+  const seenObligations = new Set<string>();
   for (const item of view.obligations) {
     if (
       item.headingSupport !== "supports_claim" ||
@@ -61,11 +90,25 @@ export function buildClosedCloudBrief(input: {
     }
     const actionSummary = item.verifiedForDisplay as ActionSummaryId;
     const payable = actionSummary === "pay_stated_balance" || actionSummary === "pay_or_contact";
-    if (payable && (amountsGBP.length === 0 || !view.eligibility.paymentActionSupported)) {
+    const linked = item.claimId
+      ? view.eligibility.decisions.find((decision) => decision.id === item.claimId) ?? null
+      : null;
+    if (payable && (amountsGBP.length === 0 || !linked || linked.status !== "ELIGIBLE" || !linked.paymentActionSupported)) {
       continue;
     }
     const parsedDue = item.dueDate ? parseCalendarDate(item.dueDate) : null;
-    const dueDate = parsedDue && parsedDue.iso !== issueDate ? parsedDue.iso : null;
+    let dueDate = parsedDue && parsedDue.iso !== issueDate ? parsedDue.iso : null;
+    if (payable && dueDate && linked?.deadlineIso && dueDate !== linked.deadlineIso) {
+      dueDate = null;
+    }
+    if (payable && dueDate && linked && !linked.deadlineSupported) {
+      dueDate = null;
+    }
+    const key = `${actionSummary}\u0000${dueDate ?? ""}`;
+    if (seenObligations.has(key)) {
+      continue;
+    }
+    seenObligations.add(key);
     obligations.push({
       actionSummary,
       dueDate,

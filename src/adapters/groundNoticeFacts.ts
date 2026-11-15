@@ -107,6 +107,8 @@ export interface GroundedObligationView {
   verifiedForDisplay: string | null;
   verification: QuoteVerificationResult | null;
   claimExceedsQuote: boolean;
+  /** Eligibility decision this action belongs to. Local only. Absent from v2. */
+  claimId: string | null;
 }
 
 export interface GroundedNoticeViewModel {
@@ -525,14 +527,61 @@ function quoteSupportsEntireAction(action: string, quote: string): boolean {
   return words.every((word) => quoted.has(word));
 }
 
-function claimIdentity(action: string, actionSummary: string, quote: string): string {
-  const basis = `${actionSummary}\u001f${action.trim()}\u001f${quote.trim()}`;
+function claimIdentity(action: string, actionSummary: string, quote: string, start: number): string {
+  const basis = `${actionSummary}\u001f${action.trim()}\u001f${quote.trim()}\u001f${start}`;
   let hash = 2166136261;
   for (let index = 0; index < basis.length; index += 1) {
     hash ^= basis.charCodeAt(index);
     hash = Math.imul(hash, 16777619);
   }
   return `claim-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+function locateQuote(text: string, quote: string, used: Set<number>): { start: number; end: number } | null {
+  const trimmed = quote.trim();
+  if (!trimmed) {
+    return null;
+  }
+  let from = 0;
+  let last: { start: number; end: number } | null = null;
+  while (from <= text.length) {
+    const at = text.indexOf(trimmed, from);
+    if (at < 0) {
+      break;
+    }
+    last = { start: at, end: at + trimmed.length };
+    if (!used.has(at)) {
+      used.add(at);
+      return last;
+    }
+    from = at + 1;
+  }
+  return last;
+}
+
+function claimForSpan(
+  eligibility: NoticeEligibility,
+  start: number,
+  end: number
+): NoticeEligibility["decisions"][number] | null {
+  const inside = eligibility.decisions.filter(
+    (item) => item.evidence.start <= start && end <= item.evidence.end
+  );
+  const amount = inside.find((item) => item.amount !== null);
+  if (amount) {
+    return amount;
+  }
+  const linkedAction = eligibility.decisions.find(
+    (item) =>
+      item.status === "ELIGIBLE" &&
+      item.actionEvidence !== null &&
+      item.actionEvidence.start <= start &&
+      end <= item.actionEvidence.end
+  );
+  if (linkedAction) {
+    return linkedAction;
+  }
+  return inside.find((item) => item.reason !== "issue_date" && item.reason !== "wrong_date_role") ?? null;
 }
 
 function headingSupportFor(
@@ -573,6 +622,7 @@ function obligationViews(
           ]
         : [];
   const resolved = eligibility.eligibleAmountsGBP;
+  const usedQuotes = new Set<number>();
   return seeded.map((item) => {
     const fact = groundObligation(text, item.action, item.sourceQuote);
     const claimExceedsQuote = actionClaimsUnsupportedDetail(item.action, item.sourceQuote);
@@ -580,32 +630,41 @@ function obligationViews(
       claimExceedsQuote && fact.support === "supports_claim" ? "substring_only" : fact.support;
     const actionSummary = fact.value ?? actionSummaryFromQuote(item.sourceQuote);
     const quoteHeading = headingSupportFor(support, item.sourceQuote);
-    const headingSupport =
+    const undermined =
       paymentQuoteUndermined(item.sourceQuote, actionSummary, resolved) && quoteHeading === "supports_claim"
         ? "substring_only"
         : quoteHeading;
+    const located = locateQuote(text, item.sourceQuote, usedQuotes);
+    const linked = located ? claimForSpan(eligibility, located.start, located.end) : null;
     const payment =
       actionSummary === "pay_stated_balance" || actionSummary === "pay_or_contact";
-    const sharedHeading =
-      payment && !eligibility.paymentActionSupported && headingSupport === "supports_claim"
+    const headingSupport =
+      payment &&
+      undermined === "supports_claim" &&
+      (!linked || linked.status !== "ELIGIBLE" || !linked.paymentActionSupported)
         ? "substring_only"
-        : headingSupport;
+        : undermined;
     const quotedDate = soleDateToken(item.sourceQuote);
     const dueInQuote =
       item.dueDate !== null &&
       calendarIsoDates(item.sourceQuote).includes(parseCalendarDate(item.dueDate)?.iso ?? "");
+    const dueDate = dueInQuote ? item.dueDate : quotedDate;
+    const dueIso = dueDate ? parseCalendarDate(dueDate)?.iso ?? null : null;
+    const linkedDue =
+      payment && linked && dueIso && linked.deadlineIso && dueIso !== linked.deadlineIso ? null : dueDate;
     return {
-      id: claimIdentity(item.action, actionSummary, item.sourceQuote),
+      id: claimIdentity(item.action, actionSummary, item.sourceQuote, located?.start ?? -1),
       action: item.action,
       actionSummary,
       modelActionSupported: quoteSupportsEntireAction(item.action, item.sourceQuote),
-      dueDate: dueInQuote ? item.dueDate : quotedDate,
+      dueDate: linkedDue,
       sourceQuote: item.sourceQuote,
       support,
-      headingSupport: sharedHeading,
-      verifiedForDisplay: sharedHeading === "supports_claim" ? actionSummary : null,
+      headingSupport,
+      verifiedForDisplay: headingSupport === "supports_claim" ? actionSummary : null,
       verification: fact.verification,
       claimExceedsQuote,
+      claimId: linked?.id ?? null,
     };
   });
 }
@@ -724,7 +783,16 @@ export function groundNoticeFacts(input: {
   const supportedDeadlineStated = deadlineStated.filter((token) => {
     const at = rawText.toLowerCase().indexOf(token.toLowerCase());
     const sentence = at < 0 ? token : sentenceAt(rawText, at);
-    return sentenceSupportsResponseDeadline(sentence, resolvedBalances);
+    if (!sentenceSupportsResponseDeadline(sentence, resolvedBalances)) {
+      return false;
+    }
+    if (at < 0) {
+      return true;
+    }
+    const owner = eligibility.decisions.find(
+      (item) => item.amount !== null && item.evidence.start <= at && at < item.evidence.end
+    );
+    return !owner || owner.status === "ELIGIBLE";
   });
   const deadlines = dateView(
     supportedDeadlineStated,

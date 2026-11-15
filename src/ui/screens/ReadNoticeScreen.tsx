@@ -53,10 +53,15 @@ export function ReadNoticeScreen(props: {
     props.capability?.availability === "available" ||
     props.capability?.availability === "downloadable" ||
     props.capability?.availability === "downloading";
-  const listed = props.grounded.eligibility.eligibleAmountsGBP;
   const rawVerified = props.grounded.amount.verifiedForDisplay;
   const amount =
-    rawVerified !== null && listed.some((value) => Math.abs(value - rawVerified) < 0.001)
+    rawVerified !== null &&
+    props.grounded.eligibility.decisions.some(
+      (item) =>
+        item.status === "ELIGIBLE" &&
+        item.amount !== null &&
+        Math.abs(item.amount - rawVerified) < 0.001
+    )
       ? rawVerified
       : null;
 
