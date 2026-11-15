@@ -349,6 +349,18 @@ Conservative rejections, separate from unsafe admissions: G8e (“must pay … i
 
 R5-3, R5-2, R5-4, and R5-5 remain open. Phase 4 has not started. Cloud submission remains blocked. `CLOUD_SUBMISSION_ENABLED` is false, and the production Send control stays disabled. A green suite is not proof of complete grounding accuracy.
 
+## Phase 3E per-claim authority
+
+Before this change, `resolvedCurrentBalanceAmounts` produced `eligibleAmountsGBP`, and a sentence became `ELIGIBLE` when its number appeared in that list. `paymentActionSupported` was one notice-level flag. Read Notice, Action Plan, and `buildClosedCloudBrief` used that flag, so one eligible balance could verify a payment action that belonged to a different claim.
+
+Phase 3E judges each source occurrence on its own. The decision keeps a stable id from the source offsets, the role, and the amount, plus supporting and contradicting offsets, a linked action span, and a linked deadline when that occurrence supports them. `eligibleAmountsGBP`, the notice-level `paymentActionSupported`, and the notice-level `deadlineSupported` are summaries derived from those decisions. They do not verify a different claim. The result is frozen. The v2 schema is unchanged: no offsets, quotations, identifier map, or eligibility diagnostics are copied.
+
+K1 is closed for the reproduced notices. “Rescinded”, a soft hyphen inside “cancelled”, and “No new charge has been raised, so please pay £1,280” no longer put £1,280 in v2. K2 is closed for the reproduced notices. “Your account was settled” and “Your account is now clear” block a later slip. q26 keeps a historical £520 ineligible beside a current £520. q34 keeps the cancelled demand’s 25 November action and deadline out of v2 while the £520 action stays. q35 gives two identical quotes distinct local ids and one v2 action. o5 keeps the cancellation ineligible and the reinstatement eligible.
+
+K3–K8 remain open. Curly “won’t” and “don’t”, “dropped”, “cleared by your insurer”, and “not required to pay” still leave a balance. “Depending on”, “In case”, “Supposing”, “On condition that”, and a capital “Should” on the next line still admit £1,280. “Chatbot:”, “Hey Gemini,”, “ADMIN OVERRIDE —”, “SYSTEM>”, and a following balance after “Ignore previous instructions.” still admit a figure. “Date of your last payment:”, a bare date under “Due date”, and “Date of meter reading:” can still be stored as the issue date. “Account summarised below” is still withheld. This phase did not add a general phrase list for those cases.
+
+R5-3, R5-2, R5-4, and R5-5 remain open. The R5-5 registry is not implemented. Phase 4 has not started. Cloud submission remains blocked. `CLOUD_SUBMISSION_ENABLED` is false.
+
 ## Milestone 4
 
 - Inspect network request bodies in real Chrome before the public demo. Mocked calls do not satisfy that gate.
@@ -364,7 +376,7 @@ These items are not implemented here:
 - Residual PII detection limitations, including unusual names, addresses, and Unicode homoglyphs.
 - Production test-injection seam review and restriction.
 - Dead raw-embed guard.
-- R5-3 is not fully closed. J1 and J8 are closed for the named reproductions. J2–J7 and J9 are partially closed. Per-claim eligibility records are diagnostic. K1–K8 remain open. Cloud submission remains blocked. R5-2, R5-4, and R5-5 remain open. A green suite is not proof of complete grounding accuracy.
+- R5-3 is not fully closed. J1 and J8 are closed for the named reproductions. J2–J7 and J9 are partially closed. Each source claim is now authoritative, and the cloud result is derived from those decisions. K1 and K2 are closed for the reproduced notices. K3–K8 remain open. Cloud submission remains blocked. R5-2, R5-4, and R5-5 remain open. A green suite is not proof of complete grounding accuracy.
 - Cloud output legal-conclusion validation.
 - False positives in grouped number detection.
 - Bracketed instructional text versus supported placeholder tokens.

@@ -22,10 +22,13 @@ function actionVerified(
     return false;
   }
   const payment = item.actionSummary === "pay_stated_balance" || item.actionSummary === "pay_or_contact";
-  if (payment && !view.eligibility.paymentActionSupported) {
-    return false;
+  if (!payment) {
+    return true;
   }
-  return true;
+  const linked = item.claimId
+    ? view.eligibility.decisions.find((decision) => decision.id === item.claimId) ?? null
+    : null;
+  return linked !== null && linked.status === "ELIGIBLE" && linked.paymentActionSupported;
 }
 
 const GOAL_LABELS: Record<ResponseGoal, string> = {
@@ -89,7 +92,10 @@ export function ActionPlanScreen(props: {
   const rawAmount = props.view.amount.verifiedForDisplay;
   const amount =
     rawAmount !== null &&
-    props.view.eligibility.eligibleAmountsGBP.some((value) => Math.abs(value - rawAmount) < 0.001)
+    props.view.eligibility.decisions.some(
+      (item) =>
+        item.status === "ELIGIBLE" && item.amount !== null && Math.abs(item.amount - rawAmount) < 0.001
+    )
       ? rawAmount
       : null;
   const period = props.view.billingPeriod.verifiedForDisplay;

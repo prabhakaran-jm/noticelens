@@ -1,9 +1,14 @@
 /**
  * One local eligibility result for a notice.
- * Read Notice, Action Plan, closed-brief inspection, and the v2 builder
- * all read this object. None of them may turn NEEDS_REVIEW or INELIGIBLE
- * into a verified payment fact. The cloud payload does not receive these
- * evidence offsets or any notice text.
+ * Each decision is an occurrence in the source. Read Notice, Action Plan,
+ * closed-brief inspection, and the v2 builder derive payment facts from
+ * those decisions. None of them may turn NEEDS_REVIEW or INELIGIBLE into
+ * a verified payment fact. The cloud payload does not receive these
+ * evidence offsets, action links, or any notice text.
+ *
+ * `eligibleAmountsGBP`, `paymentActionSupported`, and `deadlineSupported`
+ * on the notice are summaries derived from the decisions. They do not
+ * verify a different claim.
  */
 export const ELIGIBILITY_STATUSES = ["ELIGIBLE", "NEEDS_REVIEW", "INELIGIBLE"] as const;
 
@@ -48,15 +53,26 @@ export interface EligibilityDecision {
   evidence: EvidenceRef;
   supporting: EvidenceRef[];
   contradicting: EvidenceRef[];
+  /** True only when this occurrence supports a payment action. */
   paymentActionSupported: boolean;
+  /** True only when this occurrence supports a deadline. */
   deadlineSupported: boolean;
+  /** Source span of the linked payment action. Local only. */
+  actionEvidence: EvidenceRef | null;
+  /** Linked deadline, when this occurrence supports one. Local only. */
+  deadlineIso: string | null;
 }
 
 export interface NoticeEligibility {
   decisions: EligibilityDecision[];
-  /** Outstanding balances this analysis treats as current. Empty means none. */
+  /**
+   * Derived from the decisions. One eligible balance, or the unresolved
+   * amounts when every surviving balance is needs-review. Empty means none.
+   */
   eligibleAmountsGBP: number[];
+  /** True when some eligible decision supports a payment action. Not a licence for every action. */
   paymentActionSupported: boolean;
+  /** True when some eligible decision supports a deadline. */
   deadlineSupported: boolean;
 }
 
@@ -66,3 +82,6 @@ export const EMPTY_ELIGIBILITY: NoticeEligibility = {
   paymentActionSupported: false,
   deadlineSupported: false,
 };
+Object.freeze(EMPTY_ELIGIBILITY.decisions);
+Object.freeze(EMPTY_ELIGIBILITY.eligibleAmountsGBP);
+Object.freeze(EMPTY_ELIGIBILITY);
