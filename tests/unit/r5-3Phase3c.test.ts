@@ -1,8 +1,11 @@
+import { createElement } from "react";
+import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { buildClosedCloudBrief } from "../../src/adapters/buildClosedCloudBrief";
 import { groundNoticeFacts } from "../../src/adapters/groundNoticeFacts";
 import { groundObligation } from "../../src/domain/sourceGrounding";
 import type { RawNoticeExtraction } from "../../src/domain/types";
+import { ReadNoticeScreen } from "../../src/ui/screens/ReadNoticeScreen";
 
 const TODAY = "2026-11-13";
 const PAY = "Please pay the outstanding balance by 25 November 2026.";
@@ -97,7 +100,6 @@ const cases: Expectation[] = [
   ["n6", "You have disputed this bill. While we review your dispute, your outstanding balance of £1,280 is still due by 25 November 2026.", 1280, false, "2026-11-25"],
   ["n7", "Your outstanding balance is £520.\nOur earlier letter said \"Please pay £1,280 by 25 November 2026\" but that figure has been replaced.\nPlease pay the outstanding balance by 9 December 2026.", 520, true, "2026-12-09"],
   ["n8", "The £1,280 demand has been cancelled.\nPlease pay by 25 November 2026.", null],
-  ["n9", "The £1,280 demand has been cancelled.\nPlease pay £1,280 by 25 November 2026.", 1280, true, "2026-11-25"],
   ["n10", "Thank you, your account has been paid in full.\n---\nPayment slip\nAmount due: £1,280", null],
   ["n11", "The £40 late fee has been waived. Your outstanding balance is £1,240. Please pay the outstanding balance by 25 November 2026.", 1240, true, "2026-11-25"],
   ["n12", "Your outstanding balance was £1,280. Your outstanding balance is now £0.", null],
@@ -114,7 +116,44 @@ const cases: Expectation[] = [
   issue: (issue as string | null | undefined) ?? null,
 }));
 
+const N9 = "The £1,280 demand has been cancelled.\nPlease pay £1,280 by 25 November 2026.";
+
 describe("Phase 3C strict eligibility", () => {
+  // Remove it.fails only when these secure assertions pass. Do not edit them to match the current result.
+  it.fails(
+    "expected failure N9: cancelled £1,280 must not be revived by later payment wording",
+    () => {
+      const result = read(N9);
+      expect(result.view.amount.verifiedForDisplay).toBeNull();
+      expect(result.view.amount.support).toBe("ambiguous");
+      expect(result.built.payload.amountsGBP).not.toContain(1280);
+      expect(result.built.payload.amountsGBP).toEqual([]);
+      expect(result.pay).toBe(false);
+      expect(
+        result.built.payload.obligations.some(
+          (item) => item.actionSummary === "pay_stated_balance" || item.actionSummary === "pay_or_contact"
+        )
+      ).toBe(false);
+      expect(result.view.responseDeadlines.verifiedForDisplay).toBeNull();
+      expect(result.built.payload.responseDeadlines).toEqual([]);
+      render(
+        createElement(ReadNoticeScreen, {
+          text: N9,
+          onText: () => undefined,
+          onLoadSample: () => undefined,
+          grounded: result.view,
+          capability: null,
+          onReadOnDevice: () => undefined,
+          deviceMessage: null,
+          reading: false,
+        })
+      );
+      expect(screen.getByTestId("read-amount-support")).toHaveTextContent("Needs review");
+      expect(screen.getByTestId("read-amount-support")).not.toHaveTextContent("Verified");
+    }
+  );
+
+
   it.each(cases)("$id stays inside the strict acceptance policy", (item) => {
     const result = read(item.text);
     expect(result.view.amount.verifiedForDisplay).toBe(item.amount);
