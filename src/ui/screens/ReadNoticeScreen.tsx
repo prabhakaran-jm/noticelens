@@ -6,9 +6,19 @@ import {
 } from "../../adapters/groundNoticeFacts";
 import { formatGbp } from "../format";
 
-function amountSupportLabel(support: Parameters<typeof claimSupportLabel>[0], verified: number | null): string {
-  if (verified !== null && support === "supports_claim") {
+function amountSupportLabel(
+  support: Parameters<typeof claimSupportLabel>[0],
+  verified: number | null,
+  eligible: boolean
+): string {
+  if (eligible && verified !== null && support === "supports_claim") {
     return "Verified in notice";
+  }
+  if (support === "missing") {
+    return claimSupportLabel(support);
+  }
+  if (!eligible) {
+    return "Needs review";
   }
   if (support === "ambiguous") {
     return "Needs review";
@@ -43,7 +53,12 @@ export function ReadNoticeScreen(props: {
     props.capability?.availability === "available" ||
     props.capability?.availability === "downloadable" ||
     props.capability?.availability === "downloading";
-  const amount = props.grounded.amount.verifiedForDisplay;
+  const listed = props.grounded.eligibility.eligibleAmountsGBP;
+  const rawVerified = props.grounded.amount.verifiedForDisplay;
+  const amount =
+    rawVerified !== null && listed.some((value) => Math.abs(value - rawVerified) < 0.001)
+      ? rawVerified
+      : null;
 
   return (
     <section className="stack" data-testid="screen-read">
@@ -85,7 +100,7 @@ export function ReadNoticeScreen(props: {
             {amount === null ? "Not stated" : formatGbp(amount)}
           </strong>
           <span className="fact-pill fact-pill-warning" data-testid="read-amount-support">
-            {amountSupportLabel(props.grounded.amount.support, props.grounded.amount.verifiedForDisplay)}
+            {amountSupportLabel(props.grounded.amount.support, amount, amount !== null)}
           </span>
           {props.grounded.amount.conflict ? (
             <span className="fact-pill fact-pill-warning" data-testid="read-amount-conflict">
@@ -104,7 +119,12 @@ export function ReadNoticeScreen(props: {
         <article className="fact-tile">
           <span className="fact-label">Notice date</span>
           <strong className="fact-value">
-            {props.grounded.issueDate.verifiedForDisplay ? props.grounded.issueDate.stated : "Not stated"}
+            {props.grounded.issueDate.verifiedForDisplay &&
+            props.grounded.eligibility.decisions.some(
+              (item) => item.reason === "issue_date" && item.status === "ELIGIBLE"
+            )
+              ? props.grounded.issueDate.stated
+              : "Not stated"}
           </strong>
         </article>
         <article className="fact-tile">

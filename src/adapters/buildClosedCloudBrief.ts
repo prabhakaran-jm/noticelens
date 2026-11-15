@@ -26,7 +26,9 @@ export function buildClosedCloudBrief(input: {
 }): CanonicalClosedCloudBrief {
   const { view } = input;
   const issueDate =
-    view.issueDate.support === "supports_claim" && view.issueDate.verifiedForDisplay
+    view.eligibility.decisions.some((item) => item.reason === "issue_date" && item.status === "ELIGIBLE") &&
+    view.issueDate.support === "supports_claim" &&
+    view.issueDate.verifiedForDisplay
       ? view.issueDate.verifiedForDisplay
       : null;
   const billingPeriod =
@@ -34,7 +36,11 @@ export function buildClosedCloudBrief(input: {
       ? parseBillingWindow(view.billingPeriod.verifiedForDisplay)
       : null;
   const amountsGBP =
-    view.amount.conflict || view.amount.verifiedForDisplay === null
+    !view.eligibility.paymentActionSupported ||
+    view.amount.conflict ||
+    view.amount.verifiedForDisplay === null ||
+    view.eligibility.eligibleAmountsGBP.length !== 1 ||
+    Math.abs(view.eligibility.eligibleAmountsGBP[0]! - view.amount.verifiedForDisplay) >= 0.001
       ? []
       : [view.amount.verifiedForDisplay];
   const deadline =
@@ -55,7 +61,7 @@ export function buildClosedCloudBrief(input: {
     }
     const actionSummary = item.verifiedForDisplay as ActionSummaryId;
     const payable = actionSummary === "pay_stated_balance" || actionSummary === "pay_or_contact";
-    if (payable && amountsGBP.length === 0) {
+    if (payable && (amountsGBP.length === 0 || !view.eligibility.paymentActionSupported)) {
       continue;
     }
     const parsedDue = item.dueDate ? parseCalendarDate(item.dueDate) : null;

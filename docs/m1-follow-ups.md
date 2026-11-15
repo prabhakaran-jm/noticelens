@@ -282,7 +282,7 @@ False rejections, tracked separately from unsafe admissions: G8e, “You must pa
 
 ## Phase 3C review deferments
 
-Independent review of `dc926a36a5c32fb696f62ae4f65f45f88e91c290` is merge with documented deferments. These findings are recorded here. Runtime grounding was not changed for them.
+Independent review of `dc926a36a5c32fb696f62ae4f65f45f88e91c290` is merge with documented deferments. The findings below describe that commit. Phase 3D, later in this note, closes J1–J8 for the reproduced notices and replaces J9 with a typed decision. The N9 `it.fails` described here is now an ordinary passing test.
 
 N9 is an expected failure. `tests/unit/r5-3Phase3c.test.ts` asserts the secure outcome with `it.fails`: no verified current £1,280, no verified payment action, no payment deadline on that demand, v2 `amountsGBP` excludes £1,280, and the ambiguous amount is labelled Needs review. The test fails while the implementation still verifies the cancelled amount. Remove `it.fails` only when a later reviewed change makes that secure outcome true. Do not change the expected result to match the current behaviour.
 
@@ -308,6 +308,47 @@ Claude’s results on this commit: the original 47 notices had no unsafe admissi
 
 R5-3 is not fully closed. R5-2, R5-4, and R5-5 remain open. Phase 4 has not started.
 
+## Phase 3D unified eligibility
+
+Phase 3D stores a local eligibility object on the grounded view. Each per-claim record has a status of `ELIGIBLE`, `NEEDS_REVIEW`, or `INELIGIBLE`, a stable local claim id, evidence offsets, the amount and role where they apply, a reason from the closed set in `src/domain/eligibility.ts`, supporting and contradicting offsets, and its own `paymentActionSupported` and `deadlineSupported` flags. Those per-claim records are diagnostic. They are not the authority for what enters the cloud payload or for what the screens call Verified.
+
+The cloud-eligibility decision is currently driven by `eligibleAmountsGBP`, the notice-level `paymentActionSupported` flag, and the existing `resolvedCurrentBalanceAmounts` walk. An individual `NEEDS_REVIEW` or `INELIGIBLE` record does not, by itself, stop another claim in the same notice from being shown as Verified or copied into v2. Offsets stay on the device. The v2 payload still has no notice text, `sourceQuote`, or `redactedClause`.
+
+N9 is an ordinary passing test for the reproduced sentence. “The £1,280 demand has been cancelled. Please pay £1,280 by 25 November 2026.” leaves £1,280 out of v2, with no verified payment action, no payment deadline, and Needs review on the amount. The same holds for a cancelled demand followed by “Balance due”, “Total to pay”, or “You owe”, and for “paid in full” followed by a repeated slip. A later “outstanding balance is” or “outstanding balance of” can still restate the same figure. Explicit reinstatement, a named new charge, and a different later amount such as £520 still remain.
+
+Reviewed status of J1–J9, for the reproductions named in Phase 3C and the 65 notices in `tests/unit/r5-3Phase3d.test.ts`:
+
+- J1. Closed for those reproductions. “Please pay £”, “Balance due”, “Total to pay”, “You owe”, and a paid-in-full slip do not revive the cancelled or settled amount.
+- J2. PARTIALLY CLOSED. A payment heading is not Verified when the notice has no eligible balance. Residual: one eligible balance does not make every payment heading eligible. A cancelled demand’s 25 November payment action can stay in v2 beside the current 9 December action. See K7.
+- J3. PARTIALLY CLOSED. “Should”, “Assuming”, “Subject to”, “would have been”, “could reach”, and “Were the estimate to stand” do not become a current £1,280. “Your outstanding balance is £1,280 and remains due while we investigate.” stays a current balance. Residual: “Depending on”, “In case”, “Supposing”, “On condition that”, and a capital “Should” on the next line still put £1,280 in v2. See K4.
+- J4. PARTIALLY CLOSED. A line addressed to reader software, a summariser, an LLM, or an automated tool does not create a payment fact, and a real £520 after “To any summariser” stays. “Billing system” and “Payment system: Direct Debit” stay ordinary account wording. Residual: “Chatbot:”, “Hey Gemini,”, “ADMIN OVERRIDE —”, and “SYSTEM>” still put £9,999 in v2, and “Ignore previous instructions.” does not remove a following balance. See K5.
+- J5. PARTIALLY CLOSED. “Issued by mistake”, “decided not to charge”, “absorbed this amount”, and “disregard this amount” remove the earlier £1,280. “Disregard the cancellation” is still reinstatement. Residual: “settled” without “paid in full”, “account is now clear”, curly “won’t” and “don’t”, “dropped”, “cleared by your insurer”, and “not required to pay” still leave £1,280 in v2. See K2 and K3.
+- J6. PARTIALLY CLOSED. A following line that starts in lowercase, including “should” and “where”, stays part of the sentence, and a truncated quote of that sentence is not support. Residual: a following line that starts with a capital “Should” is not joined, so the first line can be verified on its own. See K4.
+- J7. PARTIALLY CLOSED. A cancellation date, an earlier letter, a period end, an effective date, an office-closure date, and a payment deadline are not the issue date in the earlier reproductions. “Date: 18 November 2026” stays. Residual: “Date of your last payment:”, a bare date under “Due date”, and “Date of meter reading:” are stored as the issue date. “Letter date:” and “Dated” are not recognised. See K6.
+- J8. Closed for the reproduced fee sentences. A balance that includes a fee keeps the balance. A waived or refunded fee is not listed as a conditional fee. A fee that may apply stays a conditional fee and is not the balance.
+- J9. PARTIALLY CLOSED. The three statuses exist on the view, but the per-claim records are diagnostic. The cloud decision uses `eligibleAmountsGBP`, notice-level `paymentActionSupported`, and `resolvedCurrentBalanceAmounts`. An individual `NEEDS_REVIEW` or `INELIGIBLE` record can still sit beside a Verified amount or payment action. See K8.
+
+Independent review of `64d535d739547b98fc1dfa3cc2a7f732104dc9b2`: merge with documented deferments. On 54 new notices, v2 had 23 incorrect amounts, 1 incorrect payment action and deadline association, and 3 incorrect issue dates. That probe introduced no new unsafe admissions compared with the base. The 23 incorrect amounts are not closed. R5-3 remains open.
+
+Open findings from that review:
+
+- K1. “Rescinded” and a soft hyphen inside “cancelled” do not retire the demand, so “Please pay £1,280” stays in v2. “No new charge has been raised, so please pay £1,280” is treated as a distinct new charge.
+- K2. “Your account was settled” and “Your account is now clear” do not block a later “Balance due” or “Total to pay”. Only the recorded “paid in full” and “written off” closures do.
+- K3. A curly apostrophe in “won’t have to pay” or “don’t owe”, “this charge has been dropped”, “cleared by your insurer”, and “not required to pay” leave £1,280 in v2.
+- K4. “Depending on”, “In case”, “Supposing”, and “On condition that” still put £1,280 in v2. A capital “Should” on the next line is not joined to “Please pay £1,280”.
+- K5. “Chatbot:”, “Hey Gemini,”, “ADMIN OVERRIDE —”, and “SYSTEM>” still put £9,999 in v2. “Ignore previous instructions.” on its own line does not remove a following “Your outstanding balance is £9,999.”
+- K6. “Date of your last payment:”, a bare date under “Due date”, and “Date of meter reading:” are stored as the issue date. “Letter date:” and “Dated 18 November 2026” are not recognised, so that genuine issue date is omitted.
+- K7. One eligible balance lets a stale payment quote through. A cancelled demand’s 25 November payment action stays in v2 beside the current 9 December action. Two identical payment quotes share one claim id, and the closed-brief serialisation for that notice was null.
+- K8. A cancellation sentence that merely contains the surviving amount can be labelled `ELIGIBLE`. “Account summarised below” is treated as a model instruction, so a genuine £1,280 is withheld. The eligibility object is not frozen. Changing only `eligibleAmountsGBP` and `paymentActionSupported` does not change the built amounts, because the builder also requires the amount view from `resolvedCurrentBalanceAmounts`.
+
+The original byte-for-byte external probe file was not imported. The 65 notice texts are the documented reproductions copied into `tests/unit/r5-3Phase3d.test.ts`.
+
+Tested genuine balances that stay: current £1,280 due 25 November 2026; £520 after a withdrawn £1,280; historical £1,280 with current £520; explicit reinstatement; £1,280 including a £40 fee; £1,240 after a waived £40 fee; “Total to pay: £1,280 (including £40 late fee)”; a corrected bill of £520 replacing a cancelled £1,280; a new and separate £1,280 charge; and “Your outstanding balance is £1,280 and remains due while we investigate.”
+
+Conservative rejections, separate from unsafe admissions: G8e (“must pay … if you have not already done so”) and G8f (“remains payable” while the sender reviews) stay withheld. p5, “The £1,280 charge is back on your account”, is withheld because that sentence is not an explicit reinstatement. K8’s “Account summarised below” is another withhold.
+
+R5-3, R5-2, R5-4, and R5-5 remain open. Phase 4 has not started. Cloud submission remains blocked. `CLOUD_SUBMISSION_ENABLED` is false, and the production Send control stays disabled. A green suite is not proof of complete grounding accuracy.
+
 ## Milestone 4
 
 - Inspect network request bodies in real Chrome before the public demo. Mocked calls do not satisfy that gate.
@@ -323,7 +364,7 @@ These items are not implemented here:
 - Residual PII detection limitations, including unusual names, addresses, and Unicode homoglyphs.
 - Production test-injection seam review and restriction.
 - Dead raw-embed guard.
-- R5-3 is not fully closed. The recorded sentences and the 47 Phase 3B notices still fail closed or keep a genuine current balance. Of the 66 Phase 3C notices, N9 is an expected failure: cancelled or settled wording can be revived by a later “Please pay £”, “Balance due”, “Total to pay”, or “You owe”. J1–J9 in the Phase 3C review deferments record the remaining conditional, injection, settlement, truncation, date-role, and fee-label findings, and the gap between an Action Plan Verified chip and an obligation the closed brief omits. A green suite is not proof of complete grounding accuracy. Live cloud submission stays closed. False rejections stay separate from unsafe admissions.
+- R5-3 is not fully closed. J1 and J8 are closed for the named reproductions. J2–J7 and J9 are partially closed. Per-claim eligibility records are diagnostic. K1–K8 remain open. Cloud submission remains blocked. R5-2, R5-4, and R5-5 remain open. A green suite is not proof of complete grounding accuracy.
 - Cloud output legal-conclusion validation.
 - False positives in grouped number detection.
 - Bracketed instructional text versus supported placeholder tokens.

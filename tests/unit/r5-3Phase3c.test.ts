@@ -119,10 +119,8 @@ const cases: Expectation[] = [
 const N9 = "The £1,280 demand has been cancelled.\nPlease pay £1,280 by 25 November 2026.";
 
 describe("Phase 3C strict eligibility", () => {
-  // Remove it.fails only when these secure assertions pass. Do not edit them to match the current result.
-  it.fails(
-    "expected failure N9: cancelled £1,280 must not be revived by later payment wording",
-    () => {
+  // These secure assertions are the N9 outcome. Do not edit them to match an unsafe result.
+  it("cancelled £1,280 must not be revived by later payment wording", () => {
       const result = read(N9);
       expect(result.view.amount.verifiedForDisplay).toBeNull();
       expect(result.view.amount.support).toBe("ambiguous");
@@ -150,8 +148,7 @@ describe("Phase 3C strict eligibility", () => {
       );
       expect(screen.getByTestId("read-amount-support")).toHaveTextContent("Needs review");
       expect(screen.getByTestId("read-amount-support")).not.toHaveTextContent("Verified");
-    }
-  );
+    });
 
 
   it.each(cases)("$id stays inside the strict acceptance policy", (item) => {
