@@ -14,6 +14,20 @@ import {
 import { formatGbp } from "../format";
 import { SourceNoticeReader, type NoticeMark } from "../shared/SourceNoticeReader";
 
+function actionVerified(
+  view: GroundedNoticeViewModel,
+  item: GroundedNoticeViewModel["obligations"][number]
+): boolean {
+  if (item.headingSupport !== "supports_claim") {
+    return false;
+  }
+  const payment = item.actionSummary === "pay_stated_balance" || item.actionSummary === "pay_or_contact";
+  if (payment && !view.eligibility.paymentActionSupported) {
+    return false;
+  }
+  return true;
+}
+
 const GOAL_LABELS: Record<ResponseGoal, string> = {
   request_billing_review: "Ask for a billing review",
   request_breakdown_and_hold: "Ask for a breakdown and a hold",
@@ -72,7 +86,12 @@ export function ActionPlanScreen(props: {
   onFlags: (flags: CircumstanceFlag[]) => void;
 }) {
   const [pane, setPane] = useState<"facts" | "notice">("facts");
-  const amount = props.view.amount.verifiedForDisplay;
+  const rawAmount = props.view.amount.verifiedForDisplay;
+  const amount =
+    rawAmount !== null &&
+    props.view.eligibility.eligibleAmountsGBP.some((value) => Math.abs(value - rawAmount) < 0.001)
+      ? rawAmount
+      : null;
   const period = props.view.billingPeriod.verifiedForDisplay;
   const deadlines = props.view.responseDeadlines.assessment;
 
@@ -157,7 +176,7 @@ export function ActionPlanScreen(props: {
                 <article
                   key={item.id}
                   className={`checklist-card${
-                    item.headingSupport === "supports_claim" ? "" : " is-insufficient"
+                    actionVerified(props.view, item) ? "" : " is-insufficient"
                   }`}
                   data-testid="plan-action-card"
                 >
@@ -167,16 +186,19 @@ export function ActionPlanScreen(props: {
                   <div className="checklist-meta-bar">
                     <span
                       className={
-                        item.headingSupport === "supports_claim"
+                        actionVerified(props.view, item)
                           ? "verify-chip verify-chip-ok"
                           : "verify-chip verify-chip-warn"
                       }
                       data-testid="plan-action-support"
                     >
-                      {item.headingSupport === "supports_claim"
+                      {actionVerified(props.view, item)
                         ? "Verified in notice"
-                        : (item.actionSummary === "pay_stated_balance" || item.actionSummary === "pay_or_contact") &&
-                            (item.headingSupport === "substring_only" || item.headingSupport === "unverified")
+                        : (item.actionSummary === "pay_stated_balance" ||
+                            item.actionSummary === "pay_or_contact") &&
+                            (item.headingSupport === "substring_only" ||
+                              item.headingSupport === "unverified" ||
+                              item.headingSupport === "supports_claim")
                           ? "Needs review"
                           : claimSupportLabel(item.headingSupport)}
                     </span>

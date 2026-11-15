@@ -17,16 +17,18 @@ import {
   type IssueDateAssessment,
 } from "../domain/dates";
 import type { BriefSource, BriefSourceObligation } from "../domain/redactAndBrief";
+import { EMPTY_ELIGIBILITY, type NoticeEligibility } from "../domain/eligibility";
 import {
   actionSummaryFromQuote,
+  analyseNoticeEligibility,
   groundBillingPeriod,
   groundCalendarDate,
   groundMonetaryAmount,
   groundObligation,
   isAdjacentFeeAmount,
+  isPositiveIssueDateEvidence,
   paymentQuoteUndermined,
   paymentSentenceRole,
-  resolvedCurrentBalanceAmounts,
   sentenceSupportsResponseDeadline,
   type ClaimSupport,
 } from "../domain/sourceGrounding";
@@ -124,6 +126,8 @@ export interface GroundedNoticeViewModel {
   responseDeadlines: GroundedDateView & { assessment: DeadlineSetAssessment };
   obligations: GroundedObligationView[];
   comparable: ComparableNoticeFacts;
+  /** Computed once. Screens and the v2 builder must not upgrade a non-eligible claim. */
+  eligibility: NoticeEligibility;
 }
 
 export function claimSupportLabel(support: ClaimSupport): string {
@@ -205,24 +209,8 @@ function calendarIsoDates(text: string): string[] {
 }
 
 function sentenceCanBeIssueDate(sentence: string): boolean {
-  if (!sentence.trim()) {
+  if (!isPositiveIssueDateEvidence(sentence)) {
     return false;
-  }
-  const explicitIssue = /\b(?:issued|date of (?:this )?(?:issue|notice)|notice date)\b/i.test(sentence);
-  if (!explicitIssue) {
-    if (
-      /\b(?:payment\s+deadline|unavailable|maintenance|outage|statement\s+dated|effective|settle|no later than|kindly\s+pay|make\s+a\s+payment)\b/i.test(
-        sentence
-      )
-    ) {
-      return false;
-    }
-    if (/\b(?:on|at)\s+\d{1,2}\b/i.test(sentence) && /\bbalance\b/i.test(sentence)) {
-      return false;
-    }
-    if (/\b(?:by|before|until)\s+\d{1,2}\b/i.test(sentence)) {
-      return false;
-    }
   }
   const role = paymentSentenceRole(sentence);
   return role !== "conditional_fee" && role !== "conditional_obligation" && role !== "injected_command";
@@ -275,14 +263,21 @@ function classifyAmounts(text: string): ClassifiedAmount[] {
     const sentence = sentenceAt(text, amount.index) || lineAt(text, amount.index);
     const paymentRole = paymentSentenceRole(sentence);
     const feeFigure = isAdjacentFeeAmount(sentence, amount.index, amount.raw);
+    const includedFee =
+      feeFigure &&
+      /\b(?:includes?|including)\b/i.test(sentence) &&
+      /\b(?:outstanding\s+balance|total\s+to\s+pay|balance)\b/i.test(sentence);
+    const retiredFee = paymentRole === "waived" || paymentRole === "refunded_payment";
     const role =
-      feeFigure || paymentRole === "conditional_fee" || isConditionalFee(sentence, amount.raw)
-        ? "conditional_fee"
-        : isBalanceSentence(sentence, amount.raw) ||
-            paymentRole === "current_balance" ||
-            paymentRole === "reinstated_demand"
-          ? "balance"
-          : "other";
+      includedFee || retiredFee
+        ? "other"
+        : feeFigure || paymentRole === "conditional_fee" || isConditionalFee(sentence, amount.raw)
+          ? "conditional_fee"
+          : isBalanceSentence(sentence, amount.raw) ||
+              paymentRole === "current_balance" ||
+              paymentRole === "reinstated_demand"
+            ? "balance"
+            : "other";
     const fact = groundMonetaryAmount(text, amount.value, sentence);
     const otherAmountsAreFees = findExplicitGbpAmounts(sentence).amounts
       .filter((item) => Math.abs(item.value - amount.value) >= 0.001)
@@ -313,6 +308,20 @@ function amountView(classified: ClassifiedAmount[], resolved: readonly number[])
       resolved.length === 1 &&
       Math.abs(item.value - resolved[0]!) < 0.001 &&
       /\b(?:replac|supersed)/i.test(item.quote)
+    ) {
+      return {
+        ...item,
+        role: "balance" as const,
+        support: "supports_claim" as const,
+        verifiedForDisplay: item.value,
+      };
+    }
+    if (
+      resolved.length === 1 &&
+      item.role !== "conditional_fee" &&
+      Math.abs(item.value - resolved[0]!) < 0.001 &&
+      (paymentSentenceRole(item.quote) === "current_balance" ||
+        paymentSentenceRole(item.quote) === "reinstated_demand")
     ) {
       return {
         ...item,
@@ -352,7 +361,7 @@ function amountView(classified: ClassifiedAmount[], resolved: readonly number[])
       ? "supports_claim"
       : adjusted.length === 0 || onlyFees
         ? "missing"
-        : "unverified";
+        : "ambiguous";
   const view: GroundedAmountView = {
     value: main,
     verifiedForDisplay: conflict ? null : mainItem?.verifiedForDisplay ?? null,
@@ -544,6 +553,7 @@ function headingSupportFor(
 function obligationViews(
   text: string,
   comparable: ComparableNoticeFacts,
+  eligibility: NoticeEligibility,
   extraction?: RawNoticeExtraction | null
 ): GroundedObligationView[] {
   const seeded =
@@ -562,7 +572,7 @@ function obligationViews(
             },
           ]
         : [];
-  const resolved = resolvedCurrentBalanceAmounts(text);
+  const resolved = eligibility.eligibleAmountsGBP;
   return seeded.map((item) => {
     const fact = groundObligation(text, item.action, item.sourceQuote);
     const claimExceedsQuote = actionClaimsUnsupportedDetail(item.action, item.sourceQuote);
@@ -574,6 +584,12 @@ function obligationViews(
       paymentQuoteUndermined(item.sourceQuote, actionSummary, resolved) && quoteHeading === "supports_claim"
         ? "substring_only"
         : quoteHeading;
+    const payment =
+      actionSummary === "pay_stated_balance" || actionSummary === "pay_or_contact";
+    const sharedHeading =
+      payment && !eligibility.paymentActionSupported && headingSupport === "supports_claim"
+        ? "substring_only"
+        : headingSupport;
     const quotedDate = soleDateToken(item.sourceQuote);
     const dueInQuote =
       item.dueDate !== null &&
@@ -586,8 +602,8 @@ function obligationViews(
       dueDate: dueInQuote ? item.dueDate : quotedDate,
       sourceQuote: item.sourceQuote,
       support,
-      headingSupport,
-      verifiedForDisplay: headingSupport === "supports_claim" ? actionSummary : null,
+      headingSupport: sharedHeading,
+      verifiedForDisplay: sharedHeading === "supports_claim" ? actionSummary : null,
       verification: fact.verification,
       claimExceedsQuote,
     };
@@ -662,13 +678,15 @@ export function groundNoticeFacts(input: {
       },
       obligations: [],
       comparable,
+      eligibility: EMPTY_ELIGIBILITY,
     };
   }
 
   const issueQuote = comparable.issueDateQuote
     ? lineAt(rawText, rawText.indexOf(comparable.issueDateQuote))
     : null;
-  const resolvedBalances = resolvedCurrentBalanceAmounts(rawText);
+  const eligibility = analyseNoticeEligibility(rawText);
+  const resolvedBalances = eligibility.eligibleAmountsGBP;
   const issue = dateView(
     comparable.issueDate ? [comparable.issueDate] : [],
     () => issueQuote,
@@ -688,6 +706,7 @@ export function groundNoticeFacts(input: {
       ? issue
       : {
           ...issue,
+          stated: null,
           support: issue.support === "missing" ? ("missing" as const) : ("unverified" as const),
           verifiedForDisplay: null,
         };
@@ -753,8 +772,9 @@ export function groundNoticeFacts(input: {
         input.today
       ),
     },
-    obligations: obligationViews(rawText, comparable, input.extraction),
+    obligations: obligationViews(rawText, comparable, eligibility, input.extraction),
     comparable,
+    eligibility,
   };
 }
 

@@ -282,7 +282,7 @@ False rejections, tracked separately from unsafe admissions: G8e, “You must pa
 
 ## Phase 3C review deferments
 
-Independent review of `dc926a36a5c32fb696f62ae4f65f45f88e91c290` is merge with documented deferments. These findings are recorded here. Runtime grounding was not changed for them.
+Independent review of `dc926a36a5c32fb696f62ae4f65f45f88e91c290` is merge with documented deferments. The findings below describe that commit. Phase 3D, later in this note, closes J1–J8 for the reproduced notices and replaces J9 with a typed decision. The N9 `it.fails` described here is now an ordinary passing test.
 
 N9 is an expected failure. `tests/unit/r5-3Phase3c.test.ts` asserts the secure outcome with `it.fails`: no verified current £1,280, no verified payment action, no payment deadline on that demand, v2 `amountsGBP` excludes £1,280, and the ambiguous amount is labelled Needs review. The test fails while the implementation still verifies the cancelled amount. Remove `it.fails` only when a later reviewed change makes that secure outcome true. Do not change the expected result to match the current behaviour.
 
@@ -308,6 +308,34 @@ Claude’s results on this commit: the original 47 notices had no unsafe admissi
 
 R5-3 is not fully closed. R5-2, R5-4, and R5-5 remain open. Phase 4 has not started.
 
+## Phase 3D unified eligibility
+
+Phase 3D adds one local result, computed once in `analyseNoticeEligibility` and stored on the grounded view as `eligibility`. Read Notice, Action Plan, closed-brief inspection, and `buildClosedCloudBrief` read that result. A `NEEDS_REVIEW` or `INELIGIBLE` decision cannot be shown as “Verified in notice” or copied into v2 as a payment fact. The decision carries a stable local claim id, evidence offsets, the amount and role where they apply, a status of `ELIGIBLE`, `NEEDS_REVIEW`, or `INELIGIBLE`, a reason from the closed set in `src/domain/eligibility.ts`, supporting and contradicting evidence offsets, `paymentActionSupported`, and `deadlineSupported`. Offsets stay on the device. The v2 payload still has no notice text, `sourceQuote`, or `redactedClause`.
+
+N9 is now an ordinary passing test. “The £1,280 demand has been cancelled. Please pay £1,280 by 25 November 2026.” leaves £1,280 ineligible, with no verified payment action, no payment deadline, `amountsGBP` excluding £1,280, and Needs review in the Read Notice UI. The same result holds for a cancelled demand followed by “Balance due”, “Total to pay”, or “You owe”, and for paid-in-full followed by a repeated payment slip or a reminder of the same £1,280. A later sentence that assesses “outstanding balance is” or “outstanding balance of” can still state a figure, which is the existing later-demand case, not the N9 slip. Explicit reinstatement, a named new charge, and a different later amount such as £520 still remain.
+
+Findings now fixed by tests, in `tests/unit/r5-3Phase3d.test.ts` (65 notices) together with the existing 29 R5-3 corrections, 47 Phase 3B notices, and 66 Phase 3C notices:
+
+- J1. The N9 family no longer revives a cancelled or settled amount through “Please pay £”, “Balance due”, “Total to pay”, “You owe”, or a paid-in-full reminder.
+- J2. A payment heading is not Verified in the Action Plan when the shared result does not support a payment action. The v2 builder uses the same flag.
+- J3. “Should”, “Assuming”, “Subject to”, “would have been”, “could reach”, and “Were the estimate to stand” do not become a current £1,280. “Your outstanding balance is £1,280 and remains due while we investigate.” stays a current balance.
+- J4. A line addressed to reader software, a summariser, an LLM, or an automated tool does not create a payment fact. A real £520 after “To any summariser” stays. “Billing system” and “Payment system: Direct Debit” stay ordinary account wording.
+- J5. “Issued by mistake”, “decided not to charge”, “absorbed this amount”, and “disregard this amount” remove the earlier £1,280. “Disregard the cancellation” is still reinstatement.
+- J6. A following line that starts in lowercase, including “should” and “where”, stays part of the sentence. A truncated quote of the first line is not support.
+- J7. An issue date needs a bare date line or a Date / Issued / notice-date label. A cancellation date, an earlier letter, a period end, an effective date, an office-closure date, and a payment deadline are not the issue date. “Date: 18 November 2026” stays.
+- J8. A balance that includes a fee keeps the balance. A waived fee and a refunded fee are not listed as conditional fees. A fee that may apply stays a conditional fee and is not the balance.
+- J9. Eligible, needs review, and ineligible are the typed statuses above. They are no longer only descriptive words.
+
+The original byte-for-byte external probe file was not imported. The 65 notice texts are the documented reproductions copied into `tests/unit/r5-3Phase3d.test.ts`.
+
+Tested genuine balances that stay: current £1,280 due 25 November 2026; £520 after a withdrawn £1,280; historical £1,280 with current £520; explicit reinstatement; £1,280 including a £40 fee; £1,240 after a waived £40 fee; “Total to pay: £1,280 (including £40 late fee)”; a corrected bill of £520 replacing a cancelled £1,280; a new and separate £1,280 charge; and “Your outstanding balance is £1,280 and remains due while we investigate.”
+
+Remaining unsafe admissions in the tested 47, 66, and 65 notices: none of the previously recorded wrong amounts or wrong-role issue dates remain in v2. Unseen paraphrases are not claimed safe. R5-3 is not fully closed.
+
+Conservative rejections, separate from unsafe admissions: G8e (“must pay … if you have not already done so”) and G8f (“remains payable” while the sender reviews) stay withheld. p5, “The £1,280 charge is back on your account”, is withheld because that sentence is not an explicit reinstatement, and 3 November 2026 is not stored as the issue date.
+
+R5-2, R5-4, and R5-5 remain open. Phase 4 has not started. Cloud activation stays closed: `CLOUD_SUBMISSION_ENABLED` is false, and the production Send control stays disabled. A green suite is not proof of complete grounding accuracy.
+
 ## Milestone 4
 
 - Inspect network request bodies in real Chrome before the public demo. Mocked calls do not satisfy that gate.
@@ -323,7 +351,7 @@ These items are not implemented here:
 - Residual PII detection limitations, including unusual names, addresses, and Unicode homoglyphs.
 - Production test-injection seam review and restriction.
 - Dead raw-embed guard.
-- R5-3 is not fully closed. The recorded sentences and the 47 Phase 3B notices still fail closed or keep a genuine current balance. Of the 66 Phase 3C notices, N9 is an expected failure: cancelled or settled wording can be revived by a later “Please pay £”, “Balance due”, “Total to pay”, or “You owe”. J1–J9 in the Phase 3C review deferments record the remaining conditional, injection, settlement, truncation, date-role, and fee-label findings, and the gap between an Action Plan Verified chip and an obligation the closed brief omits. A green suite is not proof of complete grounding accuracy. Live cloud submission stays closed. False rejections stay separate from unsafe admissions.
+- R5-3 is not fully closed. The recorded sentences, the 47 Phase 3B notices, the 66 Phase 3C notices, and the 65 Phase 3D notices now fail closed or keep a genuine current balance for the cases named in Phase 3D. N9 is an ordinary passing test, not an expected failure. J1–J8 are fixed for those reproductions. J9 is the typed local eligibility result. Unseen paraphrases are not claimed safe. G8e, G8f, and the non-explicit “back on your account” sentence stay conservative rejections. A green suite is not proof of complete grounding accuracy. Live cloud submission stays closed. R5-2, R5-4, and R5-5 remain open.
 - Cloud output legal-conclusion validation.
 - False positives in grouped number detection.
 - Bracketed instructional text versus supported placeholder tokens.
