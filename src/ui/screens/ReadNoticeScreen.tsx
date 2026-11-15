@@ -2,6 +2,8 @@ import { useState } from "react";
 import type { ChromeCapabilityReport } from "../../ai/capability";
 import {
   claimSupportLabel,
+  displayVerifiedAmount,
+  displayVerifiedIssueDate,
   type GroundedNoticeViewModel,
 } from "../../adapters/groundNoticeFacts";
 import { formatGbp } from "../format";
@@ -53,17 +55,8 @@ export function ReadNoticeScreen(props: {
     props.capability?.availability === "available" ||
     props.capability?.availability === "downloadable" ||
     props.capability?.availability === "downloading";
-  const rawVerified = props.grounded.amount.verifiedForDisplay;
-  const amount =
-    rawVerified !== null &&
-    props.grounded.eligibility.decisions.some(
-      (item) =>
-        item.status === "ELIGIBLE" &&
-        item.amount !== null &&
-        Math.abs(item.amount - rawVerified) < 0.001
-    )
-      ? rawVerified
-      : null;
+  const amount = displayVerifiedAmount(props.grounded);
+  const issueDateStated = displayVerifiedIssueDate(props.grounded);
 
   return (
     <section className="stack" data-testid="screen-read">
@@ -123,14 +116,7 @@ export function ReadNoticeScreen(props: {
         </article>
         <article className="fact-tile">
           <span className="fact-label">Notice date</span>
-          <strong className="fact-value">
-            {props.grounded.issueDate.verifiedForDisplay &&
-            props.grounded.eligibility.decisions.some(
-              (item) => item.reason === "issue_date" && item.status === "ELIGIBLE"
-            )
-              ? props.grounded.issueDate.stated
-              : "Not stated"}
-          </strong>
+          <strong className="fact-value">{issueDateStated ?? "Not stated"}</strong>
         </article>
         <article className="fact-tile">
           <span className="fact-label">Response date</span>

@@ -132,6 +132,63 @@ export interface GroundedNoticeViewModel {
   eligibility: NoticeEligibility;
 }
 
+export function displayVerifiedAmount(view: GroundedNoticeViewModel): number | null {
+  const raw = view.amount.verifiedForDisplay;
+  if (raw === null || view.amount.conflict) {
+    return null;
+  }
+  const start = view.amount.verification?.startOffset;
+  const end = view.amount.verification?.endOffset;
+  const eligibleAtOffset =
+    start !== null &&
+    start !== undefined &&
+    end !== null &&
+    end !== undefined &&
+    view.eligibility.decisions.some(
+      (item) =>
+        item.status === "ELIGIBLE" &&
+        item.amount !== null &&
+        Math.abs(item.amount - raw) < 0.001 &&
+        item.evidence.start <= start &&
+        end <= item.evidence.end
+    );
+  if (eligibleAtOffset) {
+    return raw;
+  }
+  if (start !== null && start !== undefined) {
+    return null;
+  }
+  const eligibleCurrent = view.eligibility.decisions.filter(
+    (item) =>
+      item.status === "ELIGIBLE" &&
+      item.amount !== null &&
+      Math.abs(item.amount - raw) < 0.001 &&
+      (item.reason === "current_balance" ||
+        item.reason === "explicit_reinstatement" ||
+        item.reason === "distinct_new_charge")
+  );
+  return eligibleCurrent.length === 1 ? raw : null;
+}
+
+export function displayVerifiedIssueDate(view: GroundedNoticeViewModel): string | null {
+  const raw = view.issueDate.stated;
+  if (!raw || view.issueDate.support !== "supports_claim" || !view.issueDate.verifiedForDisplay) {
+    return null;
+  }
+  const at = view.rawText.toLowerCase().indexOf(raw.toLowerCase());
+  if (at < 0) {
+    return null;
+  }
+  const backed = view.eligibility.decisions.some(
+    (item) =>
+      item.reason === "issue_date" &&
+      item.status === "ELIGIBLE" &&
+      item.evidence.start <= at &&
+      at < item.evidence.end
+  );
+  return backed ? raw : null;
+}
+
 export function claimSupportLabel(support: ClaimSupport): string {
   switch (support) {
     case "supports_claim":
@@ -559,29 +616,37 @@ function locateQuote(text: string, quote: string, used: Set<number>): { start: n
   return last;
 }
 
+function claimOwnsPaymentSpan(
+  claim: NoticeEligibility["decisions"][number],
+  start: number,
+  end: number
+): boolean {
+  if (claim.status !== "ELIGIBLE" || !claim.paymentActionSupported) {
+    return false;
+  }
+  const candidates = [
+    claim.actionEvidence,
+    ...claim.supporting,
+  ].filter((item): item is NonNullable<typeof item> => item !== null);
+  return candidates.some((item) => item.start <= start && end <= item.end);
+}
+
 function claimForSpan(
   eligibility: NoticeEligibility,
   start: number,
   end: number
 ): NoticeEligibility["decisions"][number] | null {
+  const paymentOwner = eligibility.decisions.find(
+    (item) => item.status === "ELIGIBLE" && item.amount !== null && claimOwnsPaymentSpan(item, start, end)
+  );
+  if (paymentOwner) {
+    return paymentOwner;
+  }
   const inside = eligibility.decisions.filter(
-    (item) => item.evidence.start <= start && end <= item.evidence.end
+    (item) => item.evidence.start <= start && end <= item.evidence.end && item.amount !== null
   );
-  const amount = inside.find((item) => item.amount !== null);
-  if (amount) {
-    return amount;
-  }
-  const linkedAction = eligibility.decisions.find(
-    (item) =>
-      item.status === "ELIGIBLE" &&
-      item.actionEvidence !== null &&
-      item.actionEvidence.start <= start &&
-      end <= item.actionEvidence.end
-  );
-  if (linkedAction) {
-    return linkedAction;
-  }
-  return inside.find((item) => item.reason !== "issue_date" && item.reason !== "wrong_date_role") ?? null;
+  const amount = inside.find((item) => item.status === "ELIGIBLE");
+  return amount ?? null;
 }
 
 function headingSupportFor(
@@ -810,6 +875,70 @@ export function groundNoticeFacts(input: {
     rawText
   );
 
+  const claimDeadlineIsos = [
+    ...new Set(
+      eligibility.decisions
+        .filter((item) => item.status === "ELIGIBLE" && item.deadlineSupported && item.deadlineIso)
+        .map((item) => item.deadlineIso ?? "")
+        .filter((item) => item.length > 0)
+    ),
+  ];
+  const balanceClaims = eligibility.decisions.some(
+    (item) =>
+      item.status === "ELIGIBLE" &&
+      item.amount !== null &&
+      (item.reason === "current_balance" ||
+        item.reason === "explicit_reinstatement" ||
+        item.reason === "distinct_new_charge")
+  );
+  const claimDeadlineUnsettled =
+    balanceClaims &&
+    eligibility.decisions.some(
+      (item) =>
+        item.status === "ELIGIBLE" &&
+        item.amount !== null &&
+        item.paymentActionSupported &&
+        !item.deadlineSupported &&
+        supportedDeadlineStated.length > 0
+    );
+  const authoritativeDeadlines = !balanceClaims
+    ? deadlines
+    : claimDeadlineIsos.length === 1
+      ? {
+          ...deadlines,
+          iso: claimDeadlineIsos[0]!,
+          verifiedForDisplay: claimDeadlineIsos[0]!,
+          support:
+            deadlines.support === "supports_claim" || deadlines.support === "ambiguous"
+              ? ("supports_claim" as const)
+              : deadlines.support,
+          conflicting: false,
+          stated:
+            deadlines.allStated.find((token) => parseCalendarDate(token)?.iso === claimDeadlineIsos[0]) ??
+            deadlines.stated,
+        }
+      : claimDeadlineIsos.length > 1 || claimDeadlineUnsettled || comparable.deadlineConflict
+        ? {
+            ...deadlines,
+            conflicting: true,
+            verifiedForDisplay: null,
+            support: "ambiguous" as const,
+          }
+        : claimDeadlineIsos.length === 0 && claimDeadlineUnsettled
+          ? {
+              ...deadlines,
+              conflicting: true,
+              verifiedForDisplay: null,
+              support: "ambiguous" as const,
+            }
+          : claimDeadlineIsos.length === 0
+            ? {
+                ...deadlines,
+                verifiedForDisplay: null,
+                support: deadlines.support === "supports_claim" ? ("unverified" as const) : deadlines.support,
+              }
+            : deadlines;
+
   const periodPhrase = comparable.billingPeriod;
   const periodQuote = comparable.billingPeriodQuote;
   const periodFact = groundBillingPeriod(rawText, periodPhrase, periodQuote);
@@ -834,9 +963,13 @@ export function groundNoticeFacts(input: {
       ),
     },
     responseDeadlines: {
-      ...deadlines,
+      ...authoritativeDeadlines,
       assessment: assessDeadlines(
-        deadlines.conflicting ? deadlines.allStated : deadlines.verifiedForDisplay ? [deadlines.verifiedForDisplay] : deadlines.allStated,
+        authoritativeDeadlines.conflicting
+          ? authoritativeDeadlines.allStated
+          : authoritativeDeadlines.verifiedForDisplay
+            ? [authoritativeDeadlines.verifiedForDisplay]
+            : authoritativeDeadlines.allStated,
         input.today
       ),
     },

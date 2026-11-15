@@ -1071,11 +1071,24 @@ function isPaymentInstruction(sentence: string): boolean {
 }
 
 function payByIso(sentence: string): string | null {
-  const match = /\b(?:by|due|before)\s+(\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+\s+\d{4})\b/i.exec(sentence);
-  if (!match?.[1] || !/\b(?:pay|payment|due)\b/i.test(sentence)) {
+  const match = /\b(?:by|due|before|payable\s+by)\s+(\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+\s+\d{4})\b/i.exec(sentence);
+  if (!match?.[1]) {
+    return null;
+  }
+  if (!/\b(?:pay|payment|due|payable|balance|respond)\b/i.test(sentence)) {
     return null;
   }
   return parseCalendarDate(match[1])?.iso ?? null;
+}
+
+function balanceDueIso(sentence: string): string | null {
+  if (!/\b(?:outstanding\s+balance|amount\s+due|balance\s+of|payable)\b/i.test(sentence)) {
+    return null;
+  }
+  const match =
+    /\b(?:is\s+)?(?:due|payable)\s+by\s+(\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+\s+\d{4})\b/i.exec(sentence) ??
+    /\bpayable\s+by\s+(\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+\s+\d{4})\b/i.exec(sentence);
+  return match?.[1] ? parseCalendarDate(match[1])?.iso ?? null : null;
 }
 
 function uniqueAmounts(amounts: readonly number[]): number[] {
@@ -1269,13 +1282,42 @@ export function analyseNoticeEligibility(text: string): NoticeEligibility {
     }
   });
 
-  const eligibleClaims = decisions.filter(
-    (item) => item.status === "ELIGIBLE" && item.amount !== null && BALANCE_REASONS.has(item.reason)
-  );
-  const eligibleAmountValues = uniqueAmounts(eligibleClaims.map((item) => item.amount ?? 0));
-  if (eligibleAmountValues.length === 1) {
-    const amount = eligibleAmountValues[0]!;
-    const claims = eligibleClaims.filter((item) => item.amount !== null && sameAmount(item.amount, amount));
+  const eligibleClaims = decisions
+    .filter((item) => item.status === "ELIGIBLE" && item.amount !== null && BALANCE_REASONS.has(item.reason))
+    .sort((left, right) => left.evidence.start - right.evidence.start);
+
+  function isRetiredPaymentQuote(sentence: string): boolean {
+    if (DEMAND_RETIREMENT_ROLES.has(paymentSentenceRole(sentence))) {
+      return true;
+    }
+    if (/\b(?:since\s+withdrawn|letter,?\s+since\s+withdrawn|previous\s+letter)\b/i.test(sentence)) {
+      return true;
+    }
+    if (/\b(?:it|we)\s+said\b/i.test(sentence) && isPaymentInstruction(sentence)) {
+      return true;
+    }
+    if (/\b(?:we\s+wrote|last\s+month\s+we\s+wrote)\b/i.test(sentence) && isPaymentInstruction(sentence)) {
+      return true;
+    }
+    return false;
+  }
+
+  function claimAtSentence(sentenceIndex: number): EligibilityDecision | null {
+    const owned = eligibleClaims.filter((item) => item.evidence.sentenceIndex === sentenceIndex);
+    if (owned.length === 1) {
+      return owned[0]!;
+    }
+    return null;
+  }
+
+  for (const claim of eligibleClaims) {
+    const amount = claim.amount!;
+    const claimSentenceIndex = claim.evidence.sentenceIndex;
+    const claimStart = claim.evidence.start;
+    const nextClaimStart =
+      eligibleClaims.find((item) => item.evidence.start > claimStart)?.evidence.start ?? Number.POSITIVE_INFINITY;
+    const ownedPayments: { span: (typeof spans)[number]; due: string | null; stale: boolean }[] = [];
+
     sentences.forEach((sentence, sentenceIndex) => {
       const span = spans[sentenceIndex];
       if (!span || !isPaymentInstruction(sentence)) {
@@ -1284,15 +1326,30 @@ export function analyseNoticeEligibility(text: string): NoticeEligibility {
       if (/\b(?:instalments?|a\s+month|per\s+month|monthly)\b/i.test(sentence)) {
         return;
       }
+      if (span.start >= nextClaimStart) {
+        return;
+      }
+      const staleQuote = isRetiredPaymentQuote(sentence);
+      const beforeClaim = sentenceIndex < claimSentenceIndex;
+      if (beforeClaim) {
+        return;
+      }
+      const sentenceAmount = claimAtSentence(sentenceIndex);
+      if (sentenceAmount && sentenceAmount.id !== claim.id) {
+        return;
+      }
       const blocks = decisions.some(
         (item) =>
-          item.evidence.sentenceIndex === sentenceIndex && item.amount !== null && item.status !== "ELIGIBLE"
+          item.evidence.sentenceIndex === sentenceIndex &&
+          item.amount !== null &&
+          item.status !== "ELIGIBLE" &&
+          (sameAmount(item.amount, amount) || nonFeeAmountValues(sentence).length === 0)
       );
       if (blocks) {
         return;
       }
       const stated = nonFeeAmountValues(sentence);
-      if (stated.some((item) => !sameAmount(item, amount))) {
+      if (stated.length > 0 && !stated.some((item) => sameAmount(item, amount))) {
         return;
       }
       const role = paymentSentenceRole(sentence);
@@ -1307,29 +1364,49 @@ export function analyseNoticeEligibility(text: string): NoticeEligibility {
       ) {
         return;
       }
-      const claim =
-        [...claims].reverse().find((item) => item.evidence.start <= span.start) ?? claims[claims.length - 1];
-      if (!claim) {
-        return;
-      }
-      claim.paymentActionSupported = true;
-      claim.actionEvidence = span;
-      if (!claim.supporting.some((item) => item.start === span.start && item.end === span.end)) {
-        claim.supporting = [...claim.supporting, span];
-      }
-      const due = payByIso(sentence);
-      if (!due) {
-        return;
-      }
-      if (claim.deadlineIso && claim.deadlineIso !== due) {
-        claim.deadlineSupported = false;
-        claim.deadlineIso = null;
-        return;
-      }
-      claim.deadlineIso = due;
-      claim.deadlineSupported = true;
+      ownedPayments.push({ span, due: payByIso(sentence), stale: staleQuote });
     });
+
+    ownedPayments.sort((left, right) => left.span.start - right.span.start);
+    const genuinePayments = ownedPayments.filter((item) => !item.stale);
+    if (genuinePayments.length > 0) {
+      claim.paymentActionSupported = true;
+      claim.actionEvidence = genuinePayments[0]!.span;
+      for (const payment of genuinePayments) {
+        if (!claim.supporting.some((item) => item.start === payment.span.start && item.end === payment.span.end)) {
+          claim.supporting = [...claim.supporting, payment.span];
+        }
+      }
+    }
+
+    let deadlineConflict = false;
+    let settledDue: string | null = null;
+    for (const payment of genuinePayments) {
+      if (!payment.due) {
+        continue;
+      }
+      if (settledDue !== null && settledDue !== payment.due) {
+        deadlineConflict = true;
+      }
+      settledDue = payment.due;
+    }
+    const embeddedDue = balanceDueIso(sentences[claimSentenceIndex] ?? "");
+    if (embeddedDue) {
+      if (settledDue !== null && settledDue !== embeddedDue) {
+        deadlineConflict = true;
+      }
+      settledDue = settledDue ?? embeddedDue;
+    }
+    if (deadlineConflict) {
+      claim.deadlineSupported = false;
+      claim.deadlineIso = null;
+    } else if (settledDue) {
+      claim.deadlineIso = settledDue;
+      claim.deadlineSupported = true;
+    }
   }
+
+  const eligibleAmountValues = uniqueAmounts(eligibleClaims.map((item) => item.amount ?? 0));
 
   const reviewAmounts = uniqueAmounts(
     decisions
