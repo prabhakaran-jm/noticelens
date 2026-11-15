@@ -301,13 +301,22 @@ function isInjectedCommand(sentence: string): boolean {
   ) {
     return true;
   }
-  if (/(?:^|\s)(?:system|admin|assistant)\s*(?:note)?\s*[:\-]/i.test(sentence)) {
+  if (/(?:^|\s)(?:system|admin|assistant)(?:\s+note)?\s*[:\-]\s+/i.test(sentence)) {
     return true;
   }
   if (/\b(?:system|admin)\s+note\b/i.test(sentence)) {
     return true;
   }
-  if (/\bnote\s+to\s+the\s+assistant\b/i.test(sentence)) {
+  if (/\bnote\s+to\s+the\s+(?:assistant|model)\b/i.test(sentence)) {
+    return true;
+  }
+  if (/\b(?:message|instruction)\s+(?:for|to)\s+(?:the\s+)?(?:model|ai|assistant)\b/i.test(sentence)) {
+    return true;
+  }
+  if (/\b(?:ai|model)\s+assistant\b/i.test(sentence)) {
+    return true;
+  }
+  if (/^account\s+admin\b/i.test(sentence)) {
     return true;
   }
   return /\bfor\s+any\s+ai\b/i.test(sentence);
@@ -315,6 +324,9 @@ function isInjectedCommand(sentence: string): boolean {
 
 function isConditionalFeeSentence(sentence: string): boolean {
   if (!/\b(?:fee|surcharge|penalty)\b/i.test(sentence)) {
+    return false;
+  }
+  if (/\boutstanding\s+balance\b/i.test(sentence) && /\bincludes?\b/i.test(sentence)) {
     return false;
   }
   if (/\bquestions?\b/i.test(sentence) && !/\b(?:may|might|could)\s+(?:apply|be)\b/i.test(sentence)) {
@@ -328,7 +340,30 @@ function isConditionalFeeSentence(sentence: string): boolean {
 }
 
 function isConditionalObligation(sentence: string): boolean {
+  if (/\bmay\s+be\s+withdrawn\b/i.test(sentence)) {
+    return false;
+  }
   if (/\bonly\s+(?:if|after|once|when)\b/i.test(sentence)) {
+    return true;
+  }
+  if (/\b(?:pending|provided|unless)\b/i.test(sentence) && amountValuesIn(sentence).length > 0) {
+    return true;
+  }
+  if (/\bin\s+the\s+event\b/i.test(sentence)) {
+    return true;
+  }
+  if (/\b(?:would|will)\s+(?:be|become|arise)\b/i.test(sentence) && amountValuesIn(sentence).length > 0) {
+    return true;
+  }
+  if (/\bmay\s+be\s+payable\b/i.test(sentence)) {
+    return true;
+  }
+  if (
+    /\bif\b/i.test(sentence) &&
+    /\b(?:will\s+be|would|outstanding\s+balance)\b/i.test(sentence) &&
+    amountValuesIn(sentence).length > 0 &&
+    !/\bif\s+you\s+(?:think|have)\b/i.test(sentence)
+  ) {
     return true;
   }
   if (/\bwould\s+be\s+due\b/i.test(sentence)) {
@@ -362,17 +397,56 @@ function quotedDemandContradiction(sentence: string): boolean {
   });
 }
 
+function isNegativeReinstatement(sentence: string): boolean {
+  return (
+    /\b(?:not|never|no|none|neither|won'?t|will\s+not)\b[\s\S]{0,48}\breinstat/i.test(sentence) ||
+    /\bagainst\s+reinstat/i.test(sentence)
+  );
+}
+
 function isReinstatement(sentence: string): boolean {
-  if (/\b(?:will\s+not|won'?t|never|not)\s+reinstate\b/i.test(sentence)) {
+  if (isNegativeReinstatement(sentence)) {
     return false;
   }
   if (/\b(?:no|nothing)(?:\s+\w+){0,3}\s+remains\s+payable\b/i.test(sentence)) {
     return false;
   }
   return (
-    /\b(?:has|have|is|are|was|were)\s+(?:been\s+)?reinstated\b/i.test(sentence) ||
+    /\b(?:has|have|is|are|was|were)\b(?:\s+\w+){0,4}\s+reinstated\b/i.test(sentence) ||
     /\bdisregard\s+the\s+cancellation\b/i.test(sentence)
   );
+}
+
+function closesObligation(sentence: string): boolean {
+  if (deniesCancellation(sentence)) {
+    return false;
+  }
+  const target = /\b(?:balance|bill|charge|debt|amount|payment|demand|account)\b/i;
+  if (/\bvoid(?:ed)?\b/i.test(sentence) && target.test(sentence)) {
+    return true;
+  }
+  if (/\bwrit(?:e|ten|ing)\b[\s\S]{0,40}\boff\b/i.test(sentence) && target.test(sentence)) {
+    return true;
+  }
+  if (/\b(?:revers(?:e|ed|ing)|credit(?:ed)?)\b/i.test(sentence) && target.test(sentence)) {
+    return true;
+  }
+  if (/\bcancell?ing\b/i.test(sentence) && target.test(sentence)) {
+    return true;
+  }
+  if (/\bno\s+longer\s+liable\b/i.test(sentence)) {
+    return true;
+  }
+  if (/\bnothing\s+more\b[\s\S]{0,40}\bpay\b/i.test(sentence)) {
+    return true;
+  }
+  if (/\b(?:don'?t|do\s+not)\s+owe\b/i.test(sentence)) {
+    return true;
+  }
+  if (/\b(?:won'?t|will\s+not|needn'?t|need\s+not)\b[\s\S]{0,24}\bpay\b/i.test(sentence)) {
+    return true;
+  }
+  return /\b(?:will\s+not|won'?t)\s+be\s+pursuing\b/i.test(sentence);
 }
 
 function isStructuralSettlement(sentence: string): boolean {
@@ -395,7 +469,8 @@ function isStructuralSettlement(sentence: string): boolean {
     /\bbalance\s+is\s+now\s+zero\b/i.test(sentence) ||
     /\bnow\s+zero\b/i.test(sentence) ||
     /\bcredited\s+back\b/i.test(sentence) ||
-    /\bsent\s+in\s+error\b/i.test(sentence);
+    (/\bsent\s+in\s+error\b/i.test(sentence) && !/\bif\b/i.test(sentence)) ||
+    closesObligation(sentence);
   return completed || dutyNegated || disregard || closed;
 }
 
@@ -412,6 +487,8 @@ function isPositiveCurrentBalance(sentence: string): boolean {
   return (
     /\boutstanding\s+balance\b/i.test(sentence) ||
     /\bamount\s+due\b/i.test(sentence) ||
+    /\bbalance\s+due\b/i.test(sentence) ||
+    /\bamount\s+payable\b/i.test(sentence) ||
     /\bbalance\s+now\s+requested\b/i.test(sentence) ||
     /\btotal\s+to\s+pay\b/i.test(sentence) ||
     /\byou\s+owe\s+£/i.test(sentence) ||
@@ -457,8 +534,12 @@ function detectBlockingRole(sentence: string): PaymentSentenceRole | null {
   return null;
 }
 
+function withoutModelAsides(sentence: string): string {
+  return sentence.replace(/\([^)]*\b(?:assistant|system|admin|model|ai)\b[^)]*\)/gi, " ");
+}
+
 export function paymentSentenceRole(sentence: string): PaymentSentenceRole {
-  const text = sentence.trim();
+  const text = withoutModelAsides(sentence).replace(/\s+/g, " ").trim();
   if (!text) {
     return "unsupported";
   }
@@ -475,7 +556,7 @@ export function paymentSentenceRole(sentence: string): PaymentSentenceRole {
   if (isConditionalObligation(outside)) {
     return "conditional_obligation";
   }
-  if (/\b(?:will\s+not|won'?t|never|not)\s+reinstate\b/i.test(outside)) {
+  if (isNegativeReinstatement(outside)) {
     return "settled_or_negated";
   }
   if (isReinstatement(outside)) {
@@ -493,6 +574,10 @@ export function paymentSentenceRole(sentence: string): PaymentSentenceRole {
     return blocking;
   }
   if (positive) {
+    const amounts = amountValuesIn(outside);
+    if (amounts.length > 0 && amounts.every((amount) => amount === 0)) {
+      return "settled_or_negated";
+    }
     return "current_balance";
   }
   return "unsupported";
@@ -513,7 +598,7 @@ function quoteTruncatesSentence(source: string, quote: string): boolean {
   }
   if (/^\s*\n/.test(after)) {
     const next = after.replace(/^\s+/, "");
-    return /^(?:only|if|and|or|unless|subject|after|when|but|provided)\b/i.test(next);
+    return /^(?:only|if|and|or|unless|subject|after|when|but|provided|once|pending|until|while)\b/i.test(next);
   }
   return true;
 }
@@ -529,7 +614,7 @@ function noticeSentences(text: string): string[] {
     if (
       previous &&
       !/[.!?]"?$/.test(previous) &&
-      /^(?:only|if|and|or|unless|subject|after|when|but|provided)\b/i.test(line)
+      /^(?:only|if|and|or|unless|subject|after|when|but|provided|once|pending|until|while)\b/i.test(line)
     ) {
       merged[merged.length - 1] = `${previous} ${line}`;
       continue;
@@ -561,7 +646,44 @@ function sameAmount(left: number, right: number): boolean {
 }
 
 function pointsAtAmountBelow(sentence: string, amounts: readonly number[]): boolean {
-  return amounts.length === 0 && /\b(?:amount|balance|charge|sum)\s+below\b/i.test(sentence);
+  return (
+    amounts.length === 0 &&
+    /\b(?:below|following)\b/i.test(sentence) &&
+    /\b(?:amount|balance|charge|sum)\b/i.test(sentence)
+  );
+}
+
+function statedAmounts(sentence: string) {
+  return findExplicitGbpAmounts(sentence).amounts;
+}
+
+export function isAdjacentFeeAmount(sentence: string, index: number, raw: string): boolean {
+  const feeMatch = /\b(?:fee|surcharge|penalty)\b/i.exec(sentence);
+  if (!feeMatch || feeMatch.index === undefined) {
+    return false;
+  }
+  const start = Math.min(index + raw.length, feeMatch.index);
+  const end = Math.max(index, feeMatch.index);
+  const between = sentence.slice(start, end);
+  return !/£/.test(between) && between.length <= 40;
+}
+
+export function nonFeeAmountValues(sentence: string): number[] {
+  return distinctAmountValues(
+    statedAmounts(sentence).filter((amount) => !isAdjacentFeeAmount(sentence, amount.index, amount.raw))
+  ).filter((amount) => amount > 0);
+}
+
+function opensFreshBalance(sentence: string): boolean {
+  return (
+    /\boutstanding\s+balance\s+(?:is|of|now|:)\b/i.test(sentence) ||
+    /\byou\s+owe\s+£/i.test(sentence) ||
+    /\b(?:total\s+to\s+pay|balance\s+due|amount\s+payable)\b/i.test(sentence) ||
+    /\bamount\s+due\s+is\b/i.test(sentence) ||
+    /\bplease\s+pay\s+the\s+(?:outstanding\s+)?balance\b/i.test(sentence) ||
+    /\bplease\s+pay\s+£/i.test(sentence) ||
+    isReinstatement(sentence)
+  );
 }
 
 function replacementSplit(sentence: string): { current: number[]; retired: number[] } | null {
@@ -636,6 +758,14 @@ export function resolvedCurrentBalanceAmounts(text: string): number[] {
       seen.add(amount);
     }
     const role = paymentSentenceRole(sentence);
+    if (forwardBlock && amounts.length > 0 && role !== "injected_command") {
+      forwardBlock = false;
+      for (const amount of amounts) {
+        introducedAtTerminal.add(amount);
+        lastScopedTerminal.set(amount, index);
+      }
+      return;
+    }
     if (
       role === "injected_command" ||
       role === "conditional_fee" ||
@@ -702,17 +832,27 @@ export function resolvedCurrentBalanceAmounts(text: string): number[] {
         }
         return;
       }
+      const settledBefore = lastUnscopedTerminal >= 0 && lastUnscopedTerminal < index;
+      const retiredBefore =
+        (lastUnscopedRetirement >= 0 && lastUnscopedRetirement < index) ||
+        amounts.some((amount) => {
+          const retired = lastScopedRetirement.get(amount);
+          return retired !== undefined && retired < index;
+        });
+      if ((settledBefore || retiredBefore) && !opensFreshBalance(sentence)) {
+        return;
+      }
       const replacement = replacementSplit(sentence);
       if (replacement) {
         for (const amount of replacement.retired) {
           lastScopedRetirement.set(amount, index);
         }
-        for (const amount of replacement.current) {
+        for (const amount of replacement.current.filter((amount) => amount > 0)) {
           lastPositive.set(amount, index);
         }
         return;
       }
-      for (const amount of amounts) {
+      for (const amount of nonFeeAmountValues(sentence)) {
         lastPositive.set(amount, index);
       }
     }
@@ -750,7 +890,7 @@ export function resolvedCurrentBalanceAmounts(text: string): number[] {
     current.push(amount);
   }
   current.sort((left, right) => left - right);
-  return current;
+  return current.filter((amount) => amount > 0);
 }
 
 export function assessPaymentClaims(text: string): PaymentClaimAssessment[] {
@@ -811,8 +951,16 @@ export function sentenceSupportsResponseDeadline(
   ) {
     return false;
   }
+  if (/\b(?:instalments?|a\s+month|per\s+month|monthly)\b/i.test(sentence)) {
+    return false;
+  }
+  if (/\b(?:refund|in\s+credit)\b/i.test(sentence)) {
+    return false;
+  }
   const paymentLinked =
-    /\bplease\s+pay\b/i.test(sentence) || role === "current_balance" || role === "reinstated_demand";
+    /\b(?:please\s+pay|make\s+a\s+payment|kindly\s+pay|payment\s+deadline|settle\s+your\s+account)\b/i.test(sentence) ||
+    role === "current_balance" ||
+    role === "reinstated_demand";
   if (paymentLinked) {
     if (resolved.length !== 1) {
       return false;
@@ -828,6 +976,13 @@ export function paymentQuoteUndermined(
   actionSummary: string,
   resolved: readonly number[]
 ): boolean {
+  if (
+    actionSummary === "request_review" &&
+    /\bwhile\s+we\s+review\b/i.test(quote) &&
+    !/\bplease\b/i.test(quote)
+  ) {
+    return true;
+  }
   const payment = actionSummary === "pay_stated_balance" || actionSummary === "pay_or_contact";
   if (!payment) {
     return false;
@@ -844,10 +999,17 @@ export function paymentQuoteUndermined(
   ) {
     return true;
   }
+  if (/\binstalments?\b/i.test(quote)) {
+    return true;
+  }
   if (resolved.length > 1) {
     return true;
   }
-  if (resolved.length !== 1 && /\bplease\s+pay\b/i.test(quote)) {
+  if (
+    resolved.length !== 1 &&
+    !/£\s?[\d,]/.test(quote) &&
+    /\b(?:please\s+pay|make\s+a\s+payment|kindly\s+pay|pay\s+the\s+amount|settle\s+your\s+account)\b/i.test(quote)
+  ) {
     return true;
   }
   if (role !== "current_balance" && role !== "reinstated_demand") {

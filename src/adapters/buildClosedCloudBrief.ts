@@ -54,6 +54,10 @@ export function buildClosedCloudBrief(input: {
       continue;
     }
     const actionSummary = item.verifiedForDisplay as ActionSummaryId;
+    const payable = actionSummary === "pay_stated_balance" || actionSummary === "pay_or_contact";
+    if (payable && amountsGBP.length === 0) {
+      continue;
+    }
     const parsedDue = item.dueDate ? parseCalendarDate(item.dueDate) : null;
     const dueDate = parsedDue && parsedDue.iso !== issueDate ? parsedDue.iso : null;
     obligations.push({

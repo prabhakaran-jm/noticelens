@@ -23,6 +23,7 @@ import {
   groundCalendarDate,
   groundMonetaryAmount,
   groundObligation,
+  isAdjacentFeeAmount,
   paymentQuoteUndermined,
   paymentSentenceRole,
   resolvedCurrentBalanceAmounts,
@@ -203,6 +204,30 @@ function calendarIsoDates(text: string): string[] {
   return found;
 }
 
+function sentenceCanBeIssueDate(sentence: string): boolean {
+  if (!sentence.trim()) {
+    return false;
+  }
+  const explicitIssue = /\b(?:issued|date of (?:this )?(?:issue|notice)|notice date)\b/i.test(sentence);
+  if (!explicitIssue) {
+    if (
+      /\b(?:payment\s+deadline|unavailable|maintenance|outage|statement\s+dated|effective|settle|no later than|kindly\s+pay|make\s+a\s+payment)\b/i.test(
+        sentence
+      )
+    ) {
+      return false;
+    }
+    if (/\b(?:on|at)\s+\d{1,2}\b/i.test(sentence) && /\bbalance\b/i.test(sentence)) {
+      return false;
+    }
+    if (/\b(?:by|before|until)\s+\d{1,2}\b/i.test(sentence)) {
+      return false;
+    }
+  }
+  const role = paymentSentenceRole(sentence);
+  return role !== "conditional_fee" && role !== "conditional_obligation" && role !== "injected_command";
+}
+
 function isDeadlineLine(line: string): boolean {
   return /\b(by|deadline|due|no later than|respond)\b/i.test(line);
 }
@@ -249,8 +274,9 @@ function classifyAmounts(text: string): ClassifiedAmount[] {
   return findExplicitGbpAmounts(text).amounts.map((amount) => {
     const sentence = sentenceAt(text, amount.index) || lineAt(text, amount.index);
     const paymentRole = paymentSentenceRole(sentence);
+    const feeFigure = isAdjacentFeeAmount(sentence, amount.index, amount.raw);
     const role =
-      paymentRole === "conditional_fee" || isConditionalFee(sentence, amount.raw)
+      feeFigure || paymentRole === "conditional_fee" || isConditionalFee(sentence, amount.raw)
         ? "conditional_fee"
         : isBalanceSentence(sentence, amount.raw) ||
             paymentRole === "current_balance" ||
@@ -258,13 +284,21 @@ function classifyAmounts(text: string): ClassifiedAmount[] {
           ? "balance"
           : "other";
     const fact = groundMonetaryAmount(text, amount.value, sentence);
+    const otherAmountsAreFees = findExplicitGbpAmounts(sentence).amounts
+      .filter((item) => Math.abs(item.value - amount.value) >= 0.001)
+      .every((item) => isAdjacentFeeAmount(sentence, item.index, item.raw));
+    const includedBalance =
+      !feeFigure &&
+      fact.support === "ambiguous" &&
+      otherAmountsAreFees &&
+      /\boutstanding\s+balance\b/i.test(sentence);
     return {
       value: amount.value,
       raw: amount.raw,
       quote: sentence,
       role,
-      support: fact.support,
-      verifiedForDisplay: fact.verifiedForDisplay,
+      support: includedBalance ? "supports_claim" : fact.support,
+      verifiedForDisplay: includedBalance ? amount.value : fact.verifiedForDisplay,
       verification: fact.verification,
     };
   });
@@ -647,6 +681,7 @@ export function groundNoticeFacts(input: {
   const supportedIssue =
     issue.support === "supports_claim" &&
     !appearsOnlyAsByDate(rawText, comparable.issueDate) &&
+    sentenceCanBeIssueDate(issueSentence) &&
     issueRole !== "conditional_fee" &&
     issueRole !== "conditional_obligation" &&
     issueRole !== "injected_command"
@@ -675,15 +710,15 @@ export function groundNoticeFacts(input: {
   const deadlines = dateView(
     supportedDeadlineStated,
     (stated) => {
+      const at = rawText.toLowerCase().indexOf(stated.toLowerCase());
+      if (at >= 0) {
+        return sentenceAt(rawText, at);
+      }
       const quoted = comparable.deadlineQuote;
       if (quoted && quoted.includes(stated)) {
         return quoted;
       }
-      const line = rawText
-        .split(/\n/)
-        .map((item) => item.trim())
-        .find((item) => item.includes(stated) && isDeadlineLine(item));
-      return line ?? stated;
+      return stated;
     },
     rawText
   );

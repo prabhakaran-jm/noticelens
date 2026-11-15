@@ -6,6 +6,19 @@ import {
 } from "../../adapters/groundNoticeFacts";
 import { formatGbp } from "../format";
 
+function amountSupportLabel(support: Parameters<typeof claimSupportLabel>[0], verified: number | null): string {
+  if (verified !== null && support === "supports_claim") {
+    return "Verified in notice";
+  }
+  if (support === "ambiguous") {
+    return "Needs review";
+  }
+  if (support === "unverified" || support === "substring_only" || support === "insufficient") {
+    return "Insufficient evidence";
+  }
+  return claimSupportLabel(support);
+}
+
 function isPlainTextFile(file: File): boolean {
   return file.type === "text/plain" || file.name.toLowerCase().endsWith(".txt");
 }
@@ -71,8 +84,8 @@ export function ReadNoticeScreen(props: {
           <strong className={`fact-value${amount === null ? " is-missing" : ""}`} data-testid="read-amount">
             {amount === null ? "Not stated" : formatGbp(amount)}
           </strong>
-          <span className="fact-pill fact-pill-warning">
-            {claimSupportLabel(props.grounded.amount.support)}
+          <span className="fact-pill fact-pill-warning" data-testid="read-amount-support">
+            {amountSupportLabel(props.grounded.amount.support, props.grounded.amount.verifiedForDisplay)}
           </span>
           {props.grounded.amount.conflict ? (
             <span className="fact-pill fact-pill-warning" data-testid="read-amount-conflict">
@@ -91,7 +104,7 @@ export function ReadNoticeScreen(props: {
         <article className="fact-tile">
           <span className="fact-label">Notice date</span>
           <strong className="fact-value">
-            {props.grounded.issueDate.stated ?? "Not stated"}
+            {props.grounded.issueDate.verifiedForDisplay ? props.grounded.issueDate.stated : "Not stated"}
           </strong>
         </article>
         <article className="fact-tile">
