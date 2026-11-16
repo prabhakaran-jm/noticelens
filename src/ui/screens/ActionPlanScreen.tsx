@@ -3,6 +3,10 @@ import { actionSummaryLabel } from "../../adapters/cloudBriefBuilder";
 import {
   claimSupportLabel,
   displayVerifiedAmount,
+  displayVerifiedBillingPeriod,
+  displayVerifiedIssueDate,
+  isObligationVerifiedForCloud,
+  verifiedResponseDeadlineIso,
   type GroundedNoticeViewModel,
 } from "../../adapters/groundNoticeFacts";
 import type { LocalIdentifierEntry } from "../../domain/types";
@@ -19,17 +23,7 @@ function actionVerified(
   view: GroundedNoticeViewModel,
   item: GroundedNoticeViewModel["obligations"][number]
 ): boolean {
-  if (item.headingSupport !== "supports_claim") {
-    return false;
-  }
-  const payment = item.actionSummary === "pay_stated_balance" || item.actionSummary === "pay_or_contact";
-  if (!payment) {
-    return true;
-  }
-  const linked = item.claimId
-    ? view.eligibility.decisions.find((decision) => decision.id === item.claimId) ?? null
-    : null;
-  return linked !== null && linked.status === "ELIGIBLE" && linked.paymentActionSupported;
+  return isObligationVerifiedForCloud(view, item);
 }
 
 const GOAL_LABELS: Record<ResponseGoal, string> = {
@@ -91,8 +85,13 @@ export function ActionPlanScreen(props: {
 }) {
   const [pane, setPane] = useState<"facts" | "notice">("facts");
   const amount = displayVerifiedAmount(props.view);
-  const period = props.view.billingPeriod.verifiedForDisplay;
+  const verifiedIssue = displayVerifiedIssueDate(props.view);
+  const period = displayVerifiedBillingPeriod(props.view);
   const deadlines = props.view.responseDeadlines.assessment;
+  const verifiedDeadlineIso = verifiedResponseDeadlineIso(props.view);
+  const deadlineNeedsReview =
+    deadlines.dates.length > 0 &&
+    (props.view.responseDeadlines.conflicting || verifiedDeadlineIso === null);
 
   return (
     <section data-testid="screen-plan">
@@ -115,7 +114,9 @@ export function ActionPlanScreen(props: {
       </div>
       <div className="split-workspace">
         <div className={pane === "notice" ? "pane-hidden-mobile stack" : "stack"}>
-          {props.view.issueDate.assessment.futureDatedFixture && props.view.issueDate.assessment.label ? (
+          {verifiedIssue !== null &&
+          props.view.issueDate.assessment.futureDatedFixture &&
+          props.view.issueDate.assessment.label ? (
             <p className="banner info" data-testid="plan-future-date">
               {props.view.issueDate.assessment.label}
             </p>
@@ -159,11 +160,19 @@ export function ActionPlanScreen(props: {
             </article>
             <article className="fact-tile">
               <span className="fact-label">Response date</span>
-              <strong className="fact-value" data-testid="plan-deadline">
+              <strong
+                className={`fact-value${deadlines.dates.length === 0 ? " is-missing" : ""}`}
+                data-testid="plan-deadline"
+              >
                 {deadlines.dates.length === 0
                   ? "Not stated"
                   : deadlines.dates.map((item) => item.displayLabel).join(" ")}
               </strong>
+              {deadlineNeedsReview ? (
+                <span className="fact-pill fact-pill-warning" data-testid="plan-deadline-support">
+                  Needs review
+                </span>
+              ) : null}
             </article>
           </div>
           <section className="checklist-stack">
