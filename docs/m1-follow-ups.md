@@ -389,15 +389,15 @@ Independent review of `749a8d191b156d25b080eb06ba5780907726e828` (PR #14, Claude
 
 | Id | Status | Finding |
 | --- | --- | --- |
-| K1 | PARTIALLY CLOSED | Per-claim amounts, payment actions, and deadlines for v2. Issue-date screen checks are occurrence-based where offsets exist (see K13). Embedded balance “due by” lines attach to the claim sentence. |
+| K1 | PARTIALLY CLOSED | Per-claim amounts and partially bound payment actions/deadlines (see K9, K10, K12). Screen amount checks use offsets where available; issue-date checks and v2 builder checks remain non-positional (see K13). Embedded balance “due by” lines attach to the claim sentence. |
 | K2 | CLOSED (xD, xD2, xD3, xD4, q34) | Stale or cancelled payment quotes no longer verify the current claim or enter v2 in the tested cases; genuine £520 with 9 December stays when supported. |
 | K3 | OPEN | Settlement and cancellation wording — see Phase 3E register; not expanded in Phase 3F. |
 | K4 | OPEN | Conditions, injection, and line-break continuation — see Phase 3E register. |
-| K5 | OPEN | Issue-date role and model-injection prefixes — see Phase 3E register; k13e remains here. |
+| K5 | OPEN | Issue-date role — see Phase 3E register; k13e remains here. |
 | K6 | OPEN (conservative only) | “Account summarised below” and similar conservative withholds — see Phase 3E register. |
 | K7–K8 | CLOSED | Unchanged from Phase 3E (q3, q35, xK). |
 | K9 | PARTIALLY CLOSED | Same-claim conflicts stay unresolved in v2 (xH, xH2, xH3). **Open:** k9h, k9i — conflicting dates across multiple eligible claims with the same amount can still produce an incorrect deadline, and the Action Plan card versus response-date tile or v2 date can disagree (k9h). |
-| K10 | PARTIALLY CLOSED | **Fixed:** xD, xD2, xD3, xU2, and pre-claim, different-amount, and missing-quote cases covered by tests. **Open:** k10a, k10c, k10l — amount-free payment instructions in the claim window may attach to unrelated eligible balances; a cancelled eligible claim in between does not end the range; phrase-based stale filtering misses phrasings such as “That bill said”. Position within the window does not prove ownership. |
+| K10 | PARTIALLY CLOSED | **Fixed:** xD, xD2, xD3, xU2, and pre-claim, different-amount, and missing-quote cases covered by tests. **Open:** k10a, k10c, k10l — amount-free payment instructions in the claim window may attach to unrelated eligible balances; a cancelled claim in between does not end the range; phrase-based stale filtering misses phrasings such as “That bill said”. Position within the window does not prove ownership. |
 | K11 | CLOSED (xD4, q35, k11a, k11b, k10h) | Distinct obligation quotes map through payment-span ownership; the last span does not overwrite earlier supported actions. Conservative loss: k11c (“As we wrote, please pay”) stays withheld. |
 | K12 | PARTIALLY CLOSED | **Fixed:** legacy view deadline override removed (xH family, k12c). **Open:** k12d, k12e — conflicting dates that are not phrased as payment instructions are not detected against the claim’s pay-by dates. **Conservative regression:** a genuine correspondence response deadline can be withheld from v2 when an eligible balance exists; the Action Plan response-date tile can show unverified notice dates without a warning. |
 | K13 | PARTIALLY CLOSED | Screen amount checks use position with single-claim value fallback when offsets are absent. Screen issue-date check uses first text match rather than position. v2 issue date and amount do not call the screen position helpers. k13e is tracked under K5. |
