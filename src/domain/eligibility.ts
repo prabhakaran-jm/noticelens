@@ -26,6 +26,10 @@ export const ELIGIBILITY_REASONS = [
   "later_settlement",
   "wrong_date_role",
   "issue_date",
+  "correspondence_deadline",
+  "payment_deadline",
+  "conflicting_deadlines",
+  "conflicting_issue_dates",
   "included_fee",
   "waived_fee",
   "refunded_fee",
@@ -57,10 +61,14 @@ export interface EligibilityDecision {
   paymentActionSupported: boolean;
   /** True only when this occurrence supports a deadline. */
   deadlineSupported: boolean;
+  /** True when contradictory deadlines were encountered for this claim/date. Sticky. */
+  deadlineConflict: boolean;
   /** Source span of the linked payment action. Local only. */
   actionEvidence: EvidenceRef | null;
   /** Linked deadline, when this occurrence supports one. Local only. */
   deadlineIso: string | null;
+  /** ISO calendar date grounded at `evidence` for date decisions. Local only. */
+  dateIso: string | null;
 }
 
 export interface NoticeEligibility {
@@ -72,8 +80,16 @@ export interface NoticeEligibility {
   eligibleAmountsGBP: number[];
   /** True when some eligible decision supports a payment action. Not a licence for every action. */
   paymentActionSupported: boolean;
-  /** True when some eligible decision supports a deadline. */
+  /** True when some eligible decision supports a deadline without cross-claim conflict. */
   deadlineSupported: boolean;
+  /** True when payment deadlines conflict within or across relevant claims. */
+  paymentDeadlineConflict: boolean;
+  /** Unambiguous correspondence response deadlines (distinct from payment deadlines). */
+  correspondenceDeadlinesIso: readonly string[];
+  /** True when multiple correspondence deadlines conflict. */
+  correspondenceDeadlineConflict: boolean;
+  /** True when multiple candidate issue dates conflict. */
+  issueDateConflict: boolean;
 }
 
 export const EMPTY_ELIGIBILITY: NoticeEligibility = {
@@ -81,7 +97,12 @@ export const EMPTY_ELIGIBILITY: NoticeEligibility = {
   eligibleAmountsGBP: [],
   paymentActionSupported: false,
   deadlineSupported: false,
+  paymentDeadlineConflict: false,
+  correspondenceDeadlinesIso: [],
+  correspondenceDeadlineConflict: false,
+  issueDateConflict: false,
 };
 Object.freeze(EMPTY_ELIGIBILITY.decisions);
 Object.freeze(EMPTY_ELIGIBILITY.eligibleAmountsGBP);
+Object.freeze(EMPTY_ELIGIBILITY.correspondenceDeadlinesIso);
 Object.freeze(EMPTY_ELIGIBILITY);

@@ -29,19 +29,21 @@ function isSkippableInvisible(ch: string): boolean {
     ch === "\u200B" ||
     ch === "\u200C" ||
     ch === "\u200D" ||
+    ch === "\u2060" ||
     ch === "\uFEFF" ||
-    ch === "\u00AD"
+    ch === "\u00AD" ||
+    /\p{Cf}/u.test(ch)
   );
 }
 
 function normalizeChar(ch: string): string {
-  if (ch === "\u2018" || ch === "\u2019") {
+  if (ch === "\u2018" || ch === "\u2019" || ch === "\u02BC" || ch === "\uFF07") {
     return "'";
   }
   if (ch === "\u201C" || ch === "\u201D") {
     return '"';
   }
-  if (ch === "\u2013" || ch === "\u2014") {
+  if (/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/.test(ch)) {
     return "-";
   }
   return ch;
@@ -54,15 +56,30 @@ function buildNormalizedMap(input: string): NormalizedTextMap {
 
   let i = 0;
   while (i < input.length) {
-    const ch = input[i]!;
-    if (isSkippableInvisible(ch)) {
-      i += 1;
+    const cp = input.codePointAt(i);
+    if (cp === undefined) {
+      break;
+    }
+    const raw = String.fromCodePoint(cp);
+    const next = i + raw.length;
+    if (isSkippableInvisible(raw)) {
+      i = next;
       continue;
     }
-    if (/\s/.test(ch)) {
+    if (/\s/.test(raw)) {
       const wsStart = i;
-      while (i < input.length && /\s/.test(input[i]!)) {
-        i += 1;
+      i = next;
+      while (i < input.length) {
+        const nextCp = input.codePointAt(i);
+        if (nextCp === undefined) {
+          break;
+        }
+        const nextRaw = String.fromCodePoint(nextCp);
+        if (isSkippableInvisible(nextRaw) || /\s/.test(nextRaw)) {
+          i += nextRaw.length;
+          continue;
+        }
+        break;
       }
       if (chars.length > 0) {
         chars.push(" ");
@@ -70,10 +87,36 @@ function buildNormalizedMap(input: string): NormalizedTextMap {
         normToOrigEnd.push(i);
       }
     } else {
-      chars.push(normalizeChar(ch));
-      normToOrigStart.push(i);
-      normToOrigEnd.push(i + 1);
-      i += 1;
+      let cluster = normalizeChar(raw);
+      const clusterStart = i;
+      let clusterEnd = next;
+      let cursor = next;
+      while (cursor < input.length) {
+        const markCp = input.codePointAt(cursor);
+        if (markCp === undefined) {
+          break;
+        }
+        const markRaw = String.fromCodePoint(markCp);
+        if (isSkippableInvisible(markRaw)) {
+          cursor += markRaw.length;
+          clusterEnd = cursor;
+          continue;
+        }
+        if (/\p{M}/u.test(markRaw)) {
+          cluster += markRaw;
+          cursor += markRaw.length;
+          clusterEnd = cursor;
+          continue;
+        }
+        break;
+      }
+      const nfc = cluster.normalize("NFC");
+      for (let u = 0; u < nfc.length; u += 1) {
+        chars.push(nfc[u]!);
+        normToOrigStart.push(clusterStart);
+        normToOrigEnd.push(clusterEnd);
+      }
+      i = cursor;
     }
   }
 

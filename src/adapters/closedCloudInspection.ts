@@ -19,7 +19,11 @@ import {
   type RedactAndBriefResult,
 } from "../domain/redactAndBrief";
 import { GUIDANCE_IDS_BY_CATEGORY, type CircumstanceFlag, type ResponseGoal } from "../domain/types";
-import { briefSourceFromGrounded, type GroundedNoticeViewModel } from "./groundNoticeFacts";
+import {
+  briefSourceFromGrounded,
+  isObligationVerifiedForCloud,
+  type GroundedNoticeViewModel,
+} from "./groundNoticeFacts";
 
 export interface ClosedCloudInspection {
   redaction: RedactAndBriefResult;
@@ -126,7 +130,7 @@ export function readableRowsFromClosedBrief(
     const match = view.obligations.find(
       (candidate) =>
         !usedClaims.has(candidate.id) &&
-        candidate.headingSupport === "supports_claim" &&
+        isObligationVerifiedForCloud(view, candidate) &&
         candidate.actionSummary === item.actionSummary &&
         sameDue(candidate.dueDate, item.dueDate)
     );
@@ -142,7 +146,7 @@ export function readableRowsFromClosedBrief(
     });
   });
   view.obligations.forEach((item) => {
-    if (item.headingSupport === "supports_claim") {
+    if (isObligationVerifiedForCloud(view, item)) {
       return;
     }
     const payment =

@@ -4,6 +4,7 @@ import {
   claimSupportLabel,
   displayVerifiedAmount,
   displayVerifiedIssueDate,
+  verifiedResponseDeadlineIso,
   type GroundedNoticeViewModel,
 } from "../../adapters/groundNoticeFacts";
 import { formatGbp } from "../format";
@@ -57,6 +58,10 @@ export function ReadNoticeScreen(props: {
     props.capability?.availability === "downloading";
   const amount = displayVerifiedAmount(props.grounded);
   const issueDateStated = displayVerifiedIssueDate(props.grounded);
+  const verifiedDeadlineIso = verifiedResponseDeadlineIso(props.grounded);
+  const deadlineNeedsReview =
+    props.grounded.responseDeadlines.conflicting ||
+    (props.grounded.responseDeadlines.allStated.length > 0 && verifiedDeadlineIso === null);
 
   return (
     <section className="stack" data-testid="screen-read">
@@ -116,15 +121,34 @@ export function ReadNoticeScreen(props: {
         </article>
         <article className="fact-tile">
           <span className="fact-label">Notice date</span>
-          <strong className="fact-value">{issueDateStated ?? "Not stated"}</strong>
+          <strong className={`fact-value${issueDateStated ? "" : " is-missing"}`} data-testid="read-issue-date">
+            {props.grounded.issueDate.conflicting ? "Multiple dates" : issueDateStated ?? "Not stated"}
+          </strong>
+          {props.grounded.issueDate.conflicting ? (
+            <span className="fact-pill fact-pill-warning" data-testid="read-issue-support">
+              Needs review
+            </span>
+          ) : null}
         </article>
         <article className="fact-tile">
           <span className="fact-label">Response date</span>
-          <strong className={`fact-value${props.grounded.responseDeadlines.stated ? "" : " is-missing"}`}>
+          <strong
+            className={`fact-value${
+              verifiedDeadlineIso || props.grounded.responseDeadlines.conflicting ? "" : " is-missing"
+            }`}
+            data-testid="read-deadline"
+          >
             {props.grounded.responseDeadlines.conflicting
               ? "Multiple dates"
-              : props.grounded.responseDeadlines.stated ?? "Not stated"}
+              : verifiedDeadlineIso
+                ? props.grounded.responseDeadlines.stated ?? verifiedDeadlineIso
+                : "Not stated"}
           </strong>
+          {deadlineNeedsReview ? (
+            <span className="fact-pill fact-pill-warning" data-testid="read-deadline-support">
+              Needs review
+            </span>
+          ) : null}
         </article>
       </div>
       <div className="btn-row">

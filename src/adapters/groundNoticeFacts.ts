@@ -17,20 +17,25 @@ import {
   type IssueDateAssessment,
 } from "../domain/dates";
 import type { BriefSource, BriefSourceObligation } from "../domain/redactAndBrief";
-import { EMPTY_ELIGIBILITY, type NoticeEligibility } from "../domain/eligibility";
+import { EMPTY_ELIGIBILITY, type EligibilityDecision, type NoticeEligibility } from "../domain/eligibility";
 import {
   actionSummaryFromQuote,
   analyseNoticeEligibility,
+  extractCorrespondenceDeadlineIsos,
+  extractIssueDateCandidateInSpan,
+  extractPaymentDeadlineIso,
   groundBillingPeriod,
   groundCalendarDate,
   groundMonetaryAmount,
   groundObligation,
   isAdjacentFeeAmount,
-  isPositiveIssueDateEvidence,
+  normalizeForRole,
+  noticeSentenceSpans,
   paymentQuoteUndermined,
   paymentSentenceRole,
   sentenceSupportsResponseDeadline,
   type ClaimSupport,
+  type NoticeSentenceSpan,
 } from "../domain/sourceGrounding";
 import { decideNoticeCategory, type NoticeCategoryDecision } from "../domain/noticeCategory";
 import type {
@@ -132,61 +137,229 @@ export interface GroundedNoticeViewModel {
   eligibility: NoticeEligibility;
 }
 
-export function displayVerifiedAmount(view: GroundedNoticeViewModel): number | null {
-  const raw = view.amount.verifiedForDisplay;
-  if (raw === null || view.amount.conflict) {
-    return null;
+const BALANCE_DECISION_REASONS = new Set<EligibilityDecision["reason"]>([
+  "current_balance",
+  "explicit_reinstatement",
+  "distinct_new_charge",
+]);
+
+export function hasValidSourceOffsets(
+  verification: QuoteVerificationResult | null | undefined,
+  rawTextLength: number
+): verification is QuoteVerificationResult & { startOffset: number; endOffset: number } {
+  if (!verification || verification.verified !== true) {
+    return false;
   }
-  const start = view.amount.verification?.startOffset;
-  const end = view.amount.verification?.endOffset;
-  const eligibleAtOffset =
-    start !== null &&
-    start !== undefined &&
-    end !== null &&
-    end !== undefined &&
-    view.eligibility.decisions.some(
-      (item) =>
-        item.status === "ELIGIBLE" &&
-        item.amount !== null &&
-        Math.abs(item.amount - raw) < 0.001 &&
-        item.evidence.start <= start &&
-        end <= item.evidence.end
-    );
-  if (eligibleAtOffset) {
-    return raw;
-  }
-  if (start !== null && start !== undefined) {
-    return null;
-  }
-  const eligibleCurrent = view.eligibility.decisions.filter(
-    (item) =>
-      item.status === "ELIGIBLE" &&
-      item.amount !== null &&
-      Math.abs(item.amount - raw) < 0.001 &&
-      (item.reason === "current_balance" ||
-        item.reason === "explicit_reinstatement" ||
-        item.reason === "distinct_new_charge")
+  const { startOffset, endOffset } = verification;
+  return (
+    typeof startOffset === "number" &&
+    typeof endOffset === "number" &&
+    Number.isInteger(startOffset) &&
+    Number.isInteger(endOffset) &&
+    startOffset >= 0 &&
+    endOffset > startOffset &&
+    endOffset <= rawTextLength
   );
-  return eligibleCurrent.length === 1 ? raw : null;
 }
 
-export function displayVerifiedIssueDate(view: GroundedNoticeViewModel): string | null {
-  const raw = view.issueDate.stated;
-  if (!raw || view.issueDate.support !== "supports_claim" || !view.issueDate.verifiedForDisplay) {
+export function displayVerifiedAmount(
+  view: GroundedNoticeViewModel,
+  authority: NoticeEligibility = view.eligibility
+): number | null {
+  const raw = view.amount.verifiedForDisplay;
+  if (raw === null || view.amount.conflict || view.amount.support !== "supports_claim") {
     return null;
   }
-  const at = view.rawText.toLowerCase().indexOf(raw.toLowerCase());
-  if (at < 0) {
+  if (!hasValidSourceOffsets(view.amount.verification, view.rawText.length)) {
     return null;
   }
-  const backed = view.eligibility.decisions.some(
-    (item) =>
-      item.reason === "issue_date" &&
-      item.status === "ELIGIBLE" &&
-      item.evidence.start <= at &&
-      at < item.evidence.end
+  if (authority.decisions.some((item) => item.status === "NEEDS_REVIEW" && item.reason === "conflicting_balances")) {
+    return null;
+  }
+  const eligibleBalances = authority.decisions.filter(
+    (item) => item.status === "ELIGIBLE" && item.amount !== null && BALANCE_DECISION_REASONS.has(item.reason)
   );
-  return backed ? raw : null;
+  const distinctValues = distinctAmountValues(
+    eligibleBalances.map((item) => ({ value: item.amount!, raw: String(item.amount), index: 0 }))
+  );
+  if (distinctValues.length !== 1 || Math.abs(distinctValues[0]! - raw) >= 0.001) {
+    return null;
+  }
+  const { startOffset, endOffset } = view.amount.verification;
+  const matched = eligibleBalances.some(
+    (item) =>
+      Math.abs(item.amount! - raw) < 0.001 &&
+      item.evidence.start <= startOffset &&
+      endOffset <= item.evidence.end
+  );
+  return matched ? raw : null;
+}
+
+export function verifiedIssueDateIso(
+  view: GroundedNoticeViewModel,
+  authority: NoticeEligibility = view.eligibility
+): string | null {
+  const iso = view.issueDate.verifiedForDisplay;
+  if (!iso || view.issueDate.conflicting || view.issueDate.support !== "supports_claim") {
+    return null;
+  }
+  if (authority.issueDateConflict) {
+    return null;
+  }
+  if (!hasValidSourceOffsets(view.issueDate.verification, view.rawText.length)) {
+    return null;
+  }
+  const eligibleIssueDecisions = authority.decisions.filter(
+    (item) => item.status === "ELIGIBLE" && item.reason === "issue_date" && item.dateIso !== null
+  );
+  const distinctIsos = [...new Set(eligibleIssueDecisions.map((item) => item.dateIso!))];
+  if (distinctIsos.length !== 1 || distinctIsos[0] !== iso) {
+    return null;
+  }
+  const { startOffset, endOffset } = view.issueDate.verification;
+  const matched = eligibleIssueDecisions.some(
+    (item) =>
+      item.dateIso === iso &&
+      item.evidence.start <= startOffset &&
+      endOffset <= item.evidence.end
+  );
+  return matched ? iso : null;
+}
+
+export function displayVerifiedIssueDate(
+  view: GroundedNoticeViewModel,
+  authority: NoticeEligibility = view.eligibility
+): string | null {
+  const iso = verifiedIssueDateIso(view, authority);
+  const raw = view.issueDate.stated;
+  if (!iso || !raw) {
+    return null;
+  }
+  const parsedStated = parseCalendarDate(raw.replace(/(\d{1,2})(?:st|nd|rd|th)\b/i, "$1"))?.iso ?? null;
+  return parsedStated === iso ? raw : null;
+}
+
+export function verifiedResponseDeadlineIso(
+  view: GroundedNoticeViewModel,
+  authority: NoticeEligibility = view.eligibility,
+  issueDateIso: string | null = verifiedIssueDateIso(view, authority)
+): string | null {
+  if (
+    view.responseDeadlines.conflicting ||
+    view.responseDeadlines.support !== "supports_claim" ||
+    !view.responseDeadlines.verifiedForDisplay
+  ) {
+    return null;
+  }
+  if (authority.paymentDeadlineConflict || authority.correspondenceDeadlineConflict) {
+    return null;
+  }
+  const claimDeadlines = [
+    ...new Set(
+      authority.decisions
+        .filter(
+          (item) =>
+            item.status === "ELIGIBLE" &&
+            item.amount !== null &&
+            BALANCE_DECISION_REASONS.has(item.reason) &&
+            item.deadlineSupported &&
+            item.deadlineIso &&
+            item.deadlineIso !== issueDateIso
+        )
+        .map((item) => item.deadlineIso!)
+    ),
+  ];
+  const corrDeadlines = authority.correspondenceDeadlinesIso.filter((iso) => iso !== issueDateIso);
+  if (claimDeadlines.length > 1 || corrDeadlines.length > 1) {
+    return null;
+  }
+  if (claimDeadlines.length === 1 && corrDeadlines.length === 1 && claimDeadlines[0] !== corrDeadlines[0]) {
+    return null;
+  }
+  const authoritativeIso = claimDeadlines[0] ?? corrDeadlines[0] ?? null;
+  if (!authoritativeIso || authoritativeIso === issueDateIso) {
+    return null;
+  }
+  return view.responseDeadlines.verifiedForDisplay === authoritativeIso ? authoritativeIso : null;
+}
+
+export function displayVerifiedBillingPeriod(
+  view: GroundedNoticeViewModel,
+  authority: NoticeEligibility = view.eligibility
+): string | null {
+  const phrase = view.billingPeriod.verifiedForDisplay;
+  if (!phrase || view.billingPeriod.support !== "supports_claim") {
+    return null;
+  }
+  if (!hasValidSourceOffsets(view.billingPeriod.verification, view.rawText.length)) {
+    return null;
+  }
+  const { startOffset, endOffset } = view.billingPeriod.verification;
+  const blocked = authority.decisions.some(
+    (item) =>
+      item.reason === "model_directed" &&
+      item.evidence.start < endOffset &&
+      startOffset < item.evidence.end
+  );
+  if (blocked) {
+    return null;
+  }
+  const slice = view.rawText.slice(startOffset, endOffset);
+  const rechecked = groundBillingPeriod(view.rawText, phrase, slice);
+  if (rechecked.support !== "supports_claim" || rechecked.verifiedForDisplay !== phrase) {
+    return null;
+  }
+  return phrase;
+}
+
+export function isObligationVerifiedForCloud(
+  view: GroundedNoticeViewModel,
+  item: GroundedObligationView,
+  authority: NoticeEligibility = view.eligibility
+): boolean {
+  if (item.headingSupport !== "supports_claim" || item.verifiedForDisplay !== item.actionSummary) {
+    return false;
+  }
+  if (!hasValidSourceOffsets(item.verification, view.rawText.length)) {
+    return false;
+  }
+  const { startOffset, endOffset } = item.verification;
+  const slice = view.rawText.slice(startOffset, endOffset);
+  if (actionSummaryFromQuote(slice) !== item.actionSummary) {
+    return false;
+  }
+  const rechecked = groundObligation(view.rawText, "", slice);
+  if (rechecked.support !== "supports_claim" || rechecked.value !== item.actionSummary) {
+    return false;
+  }
+  if (paymentQuoteUndermined(slice, item.actionSummary, authority.eligibleAmountsGBP)) {
+    return false;
+  }
+  const blockedByInjection = authority.decisions.some(
+    (decision) =>
+      decision.reason === "model_directed" &&
+      decision.evidence.start < endOffset &&
+      startOffset < decision.evidence.end
+  );
+  if (blockedByInjection) {
+    return false;
+  }
+  const payment = item.actionSummary === "pay_stated_balance" || item.actionSummary === "pay_or_contact";
+  if (!payment) {
+    return true;
+  }
+  if (displayVerifiedAmount(view, authority) === null) {
+    return false;
+  }
+  const linked = item.claimId
+    ? authority.decisions.find((decision) => decision.id === item.claimId) ?? null
+    : null;
+  return (
+    linked !== null &&
+    linked.status === "ELIGIBLE" &&
+    linked.paymentActionSupported &&
+    claimOwnsPaymentSpan(linked, startOffset, endOffset)
+  );
 }
 
 export function claimSupportLabel(support: ClaimSupport): string {
@@ -267,14 +440,6 @@ function calendarIsoDates(text: string): string[] {
   return found;
 }
 
-function sentenceCanBeIssueDate(sentence: string): boolean {
-  if (!isPositiveIssueDateEvidence(sentence)) {
-    return false;
-  }
-  const role = paymentSentenceRole(sentence);
-  return role !== "conditional_fee" && role !== "conditional_obligation" && role !== "injected_command";
-}
-
 function isDeadlineLine(line: string): boolean {
   return /\b(by|deadline|due|no later than|respond)\b/i.test(line);
 }
@@ -317,27 +482,66 @@ function isBalanceSentence(sentence: string, raw: string): boolean {
   ).test(sentence);
 }
 
-function classifyAmounts(text: string): ClassifiedAmount[] {
+function classifyAmounts(
+  text: string,
+  sentenceSpans: readonly NoticeSentenceSpan[],
+  eligibility: NoticeEligibility
+): ClassifiedAmount[] {
   return findExplicitGbpAmounts(text).amounts.map((amount) => {
-    const sentence = sentenceAt(text, amount.index) || lineAt(text, amount.index);
-    const paymentRole = paymentSentenceRole(sentence);
-    const feeFigure = isAdjacentFeeAmount(sentence, amount.index, amount.raw);
+    const ownerSpan =
+      sentenceSpans.find((span) => span.start <= amount.index && amount.index < span.end) ?? null;
+    const sentence = ownerSpan
+      ? ownerSpan.raw
+      : sentenceAt(text, amount.index) || lineAt(text, amount.index);
+    const normSentence = normalizeForRole(sentence);
+    const blockedByInjection =
+      ownerSpan !== null &&
+      eligibility.decisions.some(
+        (decision) =>
+          decision.evidence.sentenceIndex === ownerSpan.sentenceIndex &&
+          decision.reason === "model_directed"
+      );
+    const paymentRole: ReturnType<typeof paymentSentenceRole> = blockedByInjection
+      ? "injected_command"
+      : paymentSentenceRole(sentence);
+    const relIndex = ownerSpan ? amount.index - ownerSpan.start : sentence.indexOf(amount.raw);
+    const feeFigure = isAdjacentFeeAmount(sentence, Math.max(relIndex, 0), amount.raw);
     const includedFee =
       feeFigure &&
-      /\b(?:includes?|including)\b/i.test(sentence) &&
-      /\b(?:outstanding\s+balance|total\s+to\s+pay|balance)\b/i.test(sentence);
+      /\b(?:includes?|including)\b/i.test(normSentence) &&
+      /\b(?:outstanding\s+balance|total\s+to\s+pay|balance)\b/i.test(normSentence);
     const retiredFee = paymentRole === "waived" || paymentRole === "refunded_payment";
     const role =
       includedFee || retiredFee
         ? "other"
-        : feeFigure || paymentRole === "conditional_fee" || isConditionalFee(sentence, amount.raw)
+        : feeFigure || paymentRole === "conditional_fee" || isConditionalFee(normSentence, amount.raw)
           ? "conditional_fee"
-          : isBalanceSentence(sentence, amount.raw) ||
+          : isBalanceSentence(normSentence, amount.raw) ||
               paymentRole === "current_balance" ||
               paymentRole === "reinstated_demand"
             ? "balance"
             : "other";
     const fact = groundMonetaryAmount(text, amount.value, sentence);
+    const verification: QuoteVerificationResult | null =
+      ownerSpan && fact.verification?.verified
+        ? {
+            ...fact.verification,
+            startOffset: ownerSpan.start,
+            endOffset: ownerSpan.end,
+            matchedSubstring: text.slice(ownerSpan.start, ownerSpan.end),
+          }
+        : fact.verification;
+    if (blockedByInjection) {
+      return {
+        value: amount.value,
+        raw: amount.raw,
+        quote: sentence,
+        role: "other",
+        support: "unverified",
+        verifiedForDisplay: null,
+        verification,
+      };
+    }
     const otherAmountsAreFees = findExplicitGbpAmounts(sentence).amounts
       .filter((item) => Math.abs(item.value - amount.value) >= 0.001)
       .every((item) => isAdjacentFeeAmount(sentence, item.index, item.raw));
@@ -345,7 +549,7 @@ function classifyAmounts(text: string): ClassifiedAmount[] {
       !feeFigure &&
       fact.support === "ambiguous" &&
       otherAmountsAreFees &&
-      /\boutstanding\s+balance\b/i.test(sentence);
+      /\boutstanding\s+balance\b/i.test(normSentence);
     return {
       value: amount.value,
       raw: amount.raw,
@@ -353,7 +557,7 @@ function classifyAmounts(text: string): ClassifiedAmount[] {
       role,
       support: includedBalance ? "supports_claim" : fact.support,
       verifiedForDisplay: includedBalance ? amount.value : fact.verifiedForDisplay,
-      verification: fact.verification,
+      verification,
     };
   });
 }
@@ -594,7 +798,12 @@ function claimIdentity(action: string, actionSummary: string, quote: string, sta
   return `claim-${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }
 
-function locateQuote(text: string, quote: string, used: Set<number>): { start: number; end: number } | null {
+function locateQuote(
+  text: string,
+  quote: string,
+  used: Set<number>,
+  fallbackVerification?: QuoteVerificationResult | null
+): { start: number; end: number } | null {
   const trimmed = quote.trim();
   if (!trimmed) {
     return null;
@@ -613,10 +822,20 @@ function locateQuote(text: string, quote: string, used: Set<number>): { start: n
     }
     from = at + 1;
   }
-  return last;
+  if (last) {
+    return last;
+  }
+  if (hasValidSourceOffsets(fallbackVerification, text.length)) {
+    used.add(fallbackVerification.startOffset);
+    return {
+      start: fallbackVerification.startOffset,
+      end: fallbackVerification.endOffset,
+    };
+  }
+  return null;
 }
 
-function claimOwnsPaymentSpan(
+export function claimOwnsPaymentSpan(
   claim: NoticeEligibility["decisions"][number],
   start: number,
   end: number
@@ -668,6 +887,7 @@ function obligationViews(
   text: string,
   comparable: ComparableNoticeFacts,
   eligibility: NoticeEligibility,
+  verifiedIssueIso: string | null,
   extraction?: RawNoticeExtraction | null
 ): GroundedObligationView[] {
   const seeded =
@@ -699,24 +919,63 @@ function obligationViews(
       paymentQuoteUndermined(item.sourceQuote, actionSummary, resolved) && quoteHeading === "supports_claim"
         ? "substring_only"
         : quoteHeading;
-    const located = locateQuote(text, item.sourceQuote, usedQuotes);
+    const located = locateQuote(text, item.sourceQuote, usedQuotes, fact.verification);
+    const verification: QuoteVerificationResult | null =
+      located && fact.verification?.verified
+        ? {
+            ...fact.verification,
+            startOffset: located.start,
+            endOffset: located.end,
+            matchedSubstring: text.slice(located.start, located.end),
+          }
+        : fact.verification;
+    const blockedByInjection =
+      located !== null &&
+      eligibility.decisions.some(
+        (decision) =>
+          decision.reason === "model_directed" &&
+          decision.evidence.start < located.end &&
+          located.start < decision.evidence.end
+      );
     const linked = located ? claimForSpan(eligibility, located.start, located.end) : null;
     const payment =
       actionSummary === "pay_stated_balance" || actionSummary === "pay_or_contact";
-    const headingSupport =
-      payment &&
-      undermined === "supports_claim" &&
-      (!linked || linked.status !== "ELIGIBLE" || !linked.paymentActionSupported)
+    const headingSupport: ClaimSupport = blockedByInjection
+      ? "unverified"
+      : payment &&
+          undermined === "supports_claim" &&
+          (!linked ||
+            linked.status !== "ELIGIBLE" ||
+            !linked.paymentActionSupported ||
+            !located ||
+            !claimOwnsPaymentSpan(linked, located.start, located.end))
         ? "substring_only"
         : undermined;
-    const quotedDate = soleDateToken(item.sourceQuote);
+    const quotedDate = soleDateToken(normalizeForRole(item.sourceQuote));
     const dueInQuote =
       item.dueDate !== null &&
-      calendarIsoDates(item.sourceQuote).includes(parseCalendarDate(item.dueDate)?.iso ?? "");
-    const dueDate = dueInQuote ? item.dueDate : quotedDate;
-    const dueIso = dueDate ? parseCalendarDate(dueDate)?.iso ?? null : null;
-    const linkedDue =
-      payment && linked && dueIso && linked.deadlineIso && dueIso !== linked.deadlineIso ? null : dueDate;
+      calendarIsoDates(normalizeForRole(item.sourceQuote)).includes(parseCalendarDate(item.dueDate)?.iso ?? "");
+    const rawDue = dueInQuote ? item.dueDate : quotedDate;
+    const dueIso = rawDue ? parseCalendarDate(rawDue)?.iso ?? null : null;
+    let linkedDue: string | null = null;
+    if (rawDue && dueIso && dueIso !== verifiedIssueIso) {
+      if (payment) {
+        if (
+          !eligibility.paymentDeadlineConflict &&
+          linked &&
+          linked.status === "ELIGIBLE" &&
+          linked.deadlineSupported &&
+          linked.deadlineIso === dueIso
+        ) {
+          linkedDue = rawDue;
+        }
+      } else if (
+        !eligibility.correspondenceDeadlineConflict &&
+        eligibility.correspondenceDeadlinesIso.includes(dueIso)
+      ) {
+        linkedDue = rawDue;
+      }
+    }
     return {
       id: claimIdentity(item.action, actionSummary, item.sourceQuote, located?.start ?? -1),
       action: item.action,
@@ -727,7 +986,7 @@ function obligationViews(
       support,
       headingSupport,
       verifiedForDisplay: headingSupport === "supports_claim" ? actionSummary : null,
-      verification: fact.verification,
+      verification,
       claimExceedsQuote,
       claimId: linked?.id ?? null,
     };
@@ -748,6 +1007,17 @@ function emptyAmount(): GroundedAmountView {
   };
 }
 
+function deepFreeze<T>(target: T): T {
+  if (target === null || typeof target !== "object" || Object.isFrozen(target)) {
+    return target;
+  }
+  Object.freeze(target);
+  for (const key of Object.keys(target as Record<string, unknown>)) {
+    deepFreeze((target as Record<string, unknown>)[key]);
+  }
+  return target;
+}
+
 export function groundNoticeFacts(input: {
   rawNoticeText: string;
   extraction?: RawNoticeExtraction | null;
@@ -763,7 +1033,7 @@ export function groundNoticeFacts(input: {
   );
   const noticeCategory = categoryDecision.noticeCategory;
   if (rawText.trim().length === 0) {
-    return {
+    return deepFreeze({
       rawText,
       noticeCategory,
       categoryDecision,
@@ -803,71 +1073,200 @@ export function groundNoticeFacts(input: {
       obligations: [],
       comparable,
       eligibility: EMPTY_ELIGIBILITY,
+    });
+  }
+
+  const sentenceSpans = noticeSentenceSpans(rawText);
+  const eligibility = analyseNoticeEligibility(rawText);
+  const resolvedBalances = eligibility.eligibleAmountsGBP;
+
+  const issueCandidates = sentenceSpans
+    .map((span) => {
+      const blocked = eligibility.decisions.some(
+        (item) => item.evidence.sentenceIndex === span.sentenceIndex && item.reason === "model_directed"
+      );
+      return extractIssueDateCandidateInSpan(rawText, span, blocked);
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== null);
+
+  let supportedIssue: GroundedDateView;
+  if (eligibility.issueDateConflict && issueCandidates.length > 1) {
+    supportedIssue = {
+      stated: null,
+      iso: null,
+      allStated: [...new Set(issueCandidates.map((item) => item.stated))],
+      allIso: [...new Set(issueCandidates.map((item) => item.iso))],
+      quote: issueCandidates[0]?.quote ?? null,
+      support: "ambiguous",
+      verifiedForDisplay: null,
+      verification: null,
+      conflicting: true,
+    };
+  } else if (!eligibility.issueDateConflict && issueCandidates.length > 0) {
+    const primary = issueCandidates[0]!;
+    const fact = groundCalendarDate(rawText, primary.stated, primary.quote);
+    const onlyAsBy = appearsOnlyAsByDate(rawText, primary.stated);
+    const eligibleDecisionExists = eligibility.decisions.some(
+      (item) =>
+        item.status === "ELIGIBLE" &&
+        item.reason === "issue_date" &&
+        item.dateIso === primary.iso &&
+        item.evidence.start <= primary.start &&
+        primary.end <= item.evidence.end
+    );
+    if (!onlyAsBy && eligibleDecisionExists && (fact.support === "supports_claim" || fact.support === "insufficient")) {
+      supportedIssue = {
+        stated: primary.stated,
+        iso: primary.iso,
+        allStated: [primary.stated],
+        allIso: [primary.iso],
+        quote: primary.quote,
+        support: "supports_claim",
+        verifiedForDisplay: primary.iso,
+        verification: {
+          verified: true,
+          matchMode: "exact",
+          startOffset: primary.start,
+          endOffset: primary.end,
+          matchedSubstring: rawText.slice(primary.start, primary.end),
+          unverifiedReason: null,
+        },
+        conflicting: false,
+      };
+    } else {
+      supportedIssue = {
+        stated: null,
+        iso: null,
+        allStated: [primary.stated],
+        allIso: [primary.iso],
+        quote: primary.quote,
+        support: "unverified",
+        verifiedForDisplay: null,
+        verification: null,
+        conflicting: false,
+      };
+    }
+  } else {
+    const rawCandidatePresent = Boolean(comparable.issueDate || input.extraction?.issueDate?.trim());
+    supportedIssue = {
+      stated: null,
+      iso: null,
+      allStated: [],
+      allIso: [],
+      quote: null,
+      support: rawCandidatePresent ? "unverified" : "missing",
+      verifiedForDisplay: null,
+      verification: null,
+      conflicting: false,
     };
   }
 
-  const issueQuote = comparable.issueDateQuote
-    ? lineAt(rawText, rawText.indexOf(comparable.issueDateQuote))
-    : null;
-  const eligibility = analyseNoticeEligibility(rawText);
-  const resolvedBalances = eligibility.eligibleAmountsGBP;
-  const issue = dateView(
-    comparable.issueDate ? [comparable.issueDate] : [],
-    () => issueQuote,
-    rawText
-  );
-  const issueSentence = comparable.issueDate
-    ? sentenceAt(rawText, Math.max(rawText.toLowerCase().indexOf(comparable.issueDate.toLowerCase()), 0))
-    : "";
-  const issueRole = paymentSentenceRole(issueSentence);
-  const supportedIssue =
-    issue.support === "supports_claim" &&
-    !appearsOnlyAsByDate(rawText, comparable.issueDate) &&
-    sentenceCanBeIssueDate(issueSentence) &&
-    issueRole !== "conditional_fee" &&
-    issueRole !== "conditional_obligation" &&
-    issueRole !== "injected_command"
-      ? issue
-      : {
-          ...issue,
-          stated: null,
-          support: issue.support === "missing" ? ("missing" as const) : ("unverified" as const),
-          verifiedForDisplay: null,
-        };
+  const verifiedIssue = supportedIssue.conflicting ? null : supportedIssue.verifiedForDisplay;
 
-  const deadlineStated = comparable.responseDeadlines.filter((token) => {
-    const iso = parseCalendarDate(token)?.iso ?? null;
-    if (iso && issue.verifiedForDisplay === iso && !comparable.deadlineConflict) {
-      const quote = comparable.deadlineQuote ?? "";
-      if (!isDeadlineLine(quote) && quote === comparable.issueDateQuote) {
-        return false;
+  // Gather candidate deadline tokens across both `by <DATE>` and structured payment/correspondence deadline lines.
+  const candidateDeadlineTokens: string[] = [];
+  const seenDeadlineIsos = new Set<string>();
+  const pushDeadlineToken = (token: string, span: NoticeSentenceSpan | null) => {
+    const clean = token.replace(/(\d{1,2})(?:st|nd|rd|th)\b/i, "$1").trim();
+    const parsed = parseCalendarDate(clean);
+    if (!parsed) {
+      return;
+    }
+    if (verifiedIssue && parsed.iso === verifiedIssue) {
+      const checkLine = span ? span.norm : comparable.deadlineQuote ?? "";
+      if (!isDeadlineLine(checkLine) && extractPaymentDeadlineIso(checkLine) === null && extractCorrespondenceDeadlineIsos(checkLine).length === 0) {
+        return;
       }
     }
-    return true;
-  });
-  const supportedDeadlineStated = deadlineStated.filter((token) => {
-    const at = rawText.toLowerCase().indexOf(token.toLowerCase());
-    const sentence = at < 0 ? token : sentenceAt(rawText, at);
-    if (!sentenceSupportsResponseDeadline(sentence, resolvedBalances)) {
-      return false;
+    if (seenDeadlineIsos.has(parsed.iso)) {
+      return;
     }
-    if (at < 0) {
-      return true;
+    seenDeadlineIsos.add(parsed.iso);
+    candidateDeadlineTokens.push(clean);
+  };
+
+  for (const span of sentenceSpans) {
+    const blocked = eligibility.decisions.some(
+      (item) => item.evidence.sentenceIndex === span.sentenceIndex && item.reason === "model_directed"
+    );
+    if (blocked) {
+      continue;
+    }
+    const role = paymentSentenceRole(span.raw);
+    if (
+      role === "conditional_fee" ||
+      role === "conditional_obligation" ||
+      role === "injected_command" ||
+      role === "ambiguous" ||
+      role === "historical_payment"
+    ) {
+      continue;
+    }
+    const payIso = extractPaymentDeadlineIso(span.raw);
+    const corrIsos = extractCorrespondenceDeadlineIsos(span.raw);
+    if (payIso === null && corrIsos.length === 0) {
+      continue;
     }
     const owner = eligibility.decisions.find(
-      (item) => item.amount !== null && item.evidence.start <= at && at < item.evidence.end
+      (item) =>
+        item.amount !== null &&
+        item.evidence.sentenceIndex === span.sentenceIndex &&
+        item.reason !== "conditional_fee" &&
+        item.reason !== "waived_fee" &&
+        item.reason !== "refunded_fee" &&
+        item.reason !== "included_fee"
     );
-    return !owner || owner.status === "ELIGIBLE";
-  });
+    if (owner && owner.status !== "ELIGIBLE") {
+      continue;
+    }
+    if (payIso !== null && resolvedBalances.length !== 1) {
+      continue;
+    }
+    const dateMatches = [...span.norm.matchAll(new RegExp(DATE_TOKEN.source, "gi"))];
+    for (const m of dateMatches) {
+      const tok = m[1];
+      if (!tok) {
+        continue;
+      }
+      const iso = parseCalendarDate(tok)?.iso ?? null;
+      if (iso && (iso === payIso || corrIsos.includes(iso))) {
+        pushDeadlineToken(tok, span);
+      }
+    }
+  }
+
+  for (const token of comparable.responseDeadlines) {
+    const normText = normalizeForRole(rawText);
+    const at = normText.toLowerCase().indexOf(normalizeForRole(token).toLowerCase());
+    const span =
+      sentenceSpans.find((item) => normalizeForRole(item.raw).toLowerCase().includes(normalizeForRole(token).toLowerCase())) ??
+      null;
+    const sentence = span ? span.raw : at < 0 ? token : sentenceAt(rawText, at);
+    if (!sentenceSupportsResponseDeadline(sentence, resolvedBalances)) {
+      continue;
+    }
+    if (span) {
+      const owner = eligibility.decisions.find(
+        (item) => item.amount !== null && item.evidence.sentenceIndex === span.sentenceIndex
+      );
+      if (owner && owner.status !== "ELIGIBLE") {
+        continue;
+      }
+    }
+    pushDeadlineToken(token, span);
+  }
+
   const deadlines = dateView(
-    supportedDeadlineStated,
+    candidateDeadlineTokens,
     (stated) => {
-      const at = rawText.toLowerCase().indexOf(stated.toLowerCase());
-      if (at >= 0) {
-        return sentenceAt(rawText, at);
+      const span = sentenceSpans.find((item) =>
+        normalizeForRole(item.raw).toLowerCase().includes(normalizeForRole(stated).toLowerCase())
+      );
+      if (span) {
+        return span.raw;
       }
       const quoted = comparable.deadlineQuote;
-      if (quoted && quoted.includes(stated)) {
+      if (quoted && normalizeForRole(quoted).includes(normalizeForRole(stated))) {
         return quoted;
       }
       return stated;
@@ -878,87 +1277,94 @@ export function groundNoticeFacts(input: {
   const claimDeadlineIsos = [
     ...new Set(
       eligibility.decisions
-        .filter((item) => item.status === "ELIGIBLE" && item.deadlineSupported && item.deadlineIso)
-        .map((item) => item.deadlineIso ?? "")
-        .filter((item) => item.length > 0)
+        .filter(
+          (item) =>
+            item.status === "ELIGIBLE" &&
+            item.amount !== null &&
+            BALANCE_DECISION_REASONS.has(item.reason) &&
+            item.deadlineSupported &&
+            item.deadlineIso &&
+            item.deadlineIso !== verifiedIssue
+        )
+        .map((item) => item.deadlineIso!)
     ),
   ];
-  const balanceClaims = eligibility.decisions.some(
-    (item) =>
-      item.status === "ELIGIBLE" &&
-      item.amount !== null &&
-      (item.reason === "current_balance" ||
-        item.reason === "explicit_reinstatement" ||
-        item.reason === "distinct_new_charge")
+  const corrDeadlineIsos = eligibility.correspondenceDeadlinesIso.filter(
+    (iso) => iso !== verifiedIssue
   );
-  const claimDeadlineUnsettled =
-    balanceClaims &&
-    eligibility.decisions.some(
-      (item) =>
-        item.status === "ELIGIBLE" &&
-        item.amount !== null &&
-        item.paymentActionSupported &&
-        !item.deadlineSupported &&
-        supportedDeadlineStated.length > 0
-    );
-  const authoritativeDeadlines = !balanceClaims
-    ? deadlines
-    : claimDeadlineIsos.length === 1
+  const crossRoleDeadlineConflict =
+    claimDeadlineIsos.length === 1 &&
+    corrDeadlineIsos.length === 1 &&
+    claimDeadlineIsos[0] !== corrDeadlineIsos[0];
+  const anyDeadlineConflict =
+    eligibility.paymentDeadlineConflict ||
+    eligibility.correspondenceDeadlineConflict ||
+    claimDeadlineIsos.length > 1 ||
+    corrDeadlineIsos.length > 1 ||
+    crossRoleDeadlineConflict;
+
+  const targetDeadlineIso = anyDeadlineConflict
+    ? null
+    : claimDeadlineIsos[0] ?? corrDeadlineIsos[0] ?? null;
+
+  const authoritativeDeadlines: GroundedDateView = anyDeadlineConflict
+    ? {
+        ...deadlines,
+        stated: null,
+        iso: null,
+        conflicting: true,
+        verifiedForDisplay: null,
+        support: "ambiguous",
+      }
+    : targetDeadlineIso !== null
       ? {
           ...deadlines,
-          iso: claimDeadlineIsos[0]!,
-          verifiedForDisplay: claimDeadlineIsos[0]!,
-          support:
-            deadlines.support === "supports_claim" || deadlines.support === "ambiguous"
-              ? ("supports_claim" as const)
-              : deadlines.support,
+          iso: targetDeadlineIso,
+          verifiedForDisplay: targetDeadlineIso,
+          support: "supports_claim",
           conflicting: false,
           stated:
-            deadlines.allStated.find((token) => parseCalendarDate(token)?.iso === claimDeadlineIsos[0]) ??
-            deadlines.stated,
+            deadlines.allStated.find((token) => parseCalendarDate(token)?.iso === targetDeadlineIso) ??
+            deadlines.stated ??
+            targetDeadlineIso,
         }
-      : claimDeadlineIsos.length > 1 || claimDeadlineUnsettled || comparable.deadlineConflict
-        ? {
-            ...deadlines,
-            conflicting: true,
-            verifiedForDisplay: null,
-            support: "ambiguous" as const,
-          }
-        : claimDeadlineIsos.length === 0 && claimDeadlineUnsettled
-          ? {
-              ...deadlines,
-              conflicting: true,
-              verifiedForDisplay: null,
-              support: "ambiguous" as const,
-            }
-          : claimDeadlineIsos.length === 0
-            ? {
-                ...deadlines,
-                verifiedForDisplay: null,
-                support: deadlines.support === "supports_claim" ? ("unverified" as const) : deadlines.support,
-              }
-            : deadlines;
+      : {
+          ...deadlines,
+          verifiedForDisplay: null,
+          conflicting: false,
+          support: deadlines.allStated.length > 0 ? "unverified" : "missing",
+        };
 
   const periodPhrase = comparable.billingPeriod;
   const periodQuote = comparable.billingPeriodQuote;
   const periodFact = groundBillingPeriod(rawText, periodPhrase, periodQuote);
+  const periodBlockedByInjection =
+    hasValidSourceOffsets(periodFact.verification, rawText.length) &&
+    eligibility.decisions.some(
+      (item) =>
+        item.reason === "model_directed" &&
+        item.evidence.start < periodFact.verification!.endOffset! &&
+        periodFact.verification!.startOffset! < item.evidence.end
+    );
+  const effectivePeriodSupport: ClaimSupport = periodBlockedByInjection ? "unverified" : periodFact.support;
+  const effectivePeriodVerified = periodBlockedByInjection ? null : periodFact.verifiedForDisplay;
   const issueForGap = supportedIssue.verifiedForDisplay ?? supportedIssue.stated;
-  const amount = amountView(classifyAmounts(rawText), resolvedBalances);
+  const amount = amountView(classifyAmounts(rawText, sentenceSpans, eligibility), resolvedBalances);
 
-  return {
+  return deepFreeze({
     rawText,
     noticeCategory,
     categoryDecision,
     issueDate: { ...supportedIssue, assessment: assessIssueDate(supportedIssue.stated, input.today) },
     amount,
     billingPeriod: {
-      stated: periodFact.support === "supports_claim" ? periodFact.verifiedForDisplay : periodPhrase,
+      stated: effectivePeriodSupport === "supports_claim" ? effectivePeriodVerified : periodPhrase,
       quote: periodQuote,
-      support: periodFact.support,
-      verifiedForDisplay: periodFact.verifiedForDisplay,
+      support: effectivePeriodSupport,
+      verifiedForDisplay: effectivePeriodVerified,
       verification: periodFact.verification,
       gap: assessBillingPeriodGap(
-        periodFact.support === "supports_claim" ? periodFact.verifiedForDisplay : null,
+        effectivePeriodSupport === "supports_claim" ? effectivePeriodVerified : null,
         issueForGap
       ),
     },
@@ -968,15 +1374,15 @@ export function groundNoticeFacts(input: {
         authoritativeDeadlines.conflicting
           ? authoritativeDeadlines.allStated
           : authoritativeDeadlines.verifiedForDisplay
-            ? [authoritativeDeadlines.verifiedForDisplay]
+            ? [authoritativeDeadlines.stated ?? authoritativeDeadlines.verifiedForDisplay]
             : authoritativeDeadlines.allStated,
         input.today
       ),
     },
-    obligations: obligationViews(rawText, comparable, eligibility, input.extraction),
+    obligations: obligationViews(rawText, comparable, eligibility, verifiedIssue, input.extraction),
     comparable,
     eligibility,
-  };
+  });
 }
 
 function briefDate(view: GroundedDateView): string | null {
@@ -991,8 +1397,11 @@ function briefDate(view: GroundedDateView): string | null {
  * Issue dates are not copied into response deadlines. Conditional fees are omitted.
  */
 export function briefSourceFromGrounded(view: GroundedNoticeViewModel): BriefSource {
+  const verifiedAmt = displayVerifiedAmount(view);
+  const verifiedIssue = displayVerifiedIssueDate(view);
+  const verifiedDeadline = verifiedResponseDeadlineIso(view);
   const obligations: BriefSourceObligation[] = view.obligations
-    .filter((item) => item.headingSupport === "supports_claim")
+    .filter((item) => isObligationVerifiedForCloud(view, item))
     .map((item) => ({
       action: actionSummaryLabel(item.actionSummary),
       dueDate: item.dueDate,
@@ -1000,16 +1409,16 @@ export function briefSourceFromGrounded(view: GroundedNoticeViewModel): BriefSou
     }));
   const deadlineQuotes = view.responseDeadlines.conflicting
     ? view.responseDeadlines.allStated
-    : briefDate(view.responseDeadlines)
+    : verifiedDeadline && briefDate(view.responseDeadlines)
       ? [briefDate(view.responseDeadlines)!]
       : [];
   return {
     noticeCategory: view.noticeCategory,
-    issueDate: briefDate(view.issueDate),
+    issueDate: verifiedIssue ? briefDate(view.issueDate) : null,
     billingPeriod:
       view.billingPeriod.support === "supports_claim" ? view.billingPeriod.verifiedForDisplay : null,
-    amountGBP: view.amount.verifiedForDisplay,
-    amountsGBP: view.amount.conflict ? view.amount.amountsGBP : view.amount.verifiedForDisplay === null ? [] : [view.amount.verifiedForDisplay],
+    amountGBP: verifiedAmt,
+    amountsGBP: view.amount.conflict ? view.amount.amountsGBP : verifiedAmt === null ? [] : [verifiedAmt],
     responseDeadline: view.responseDeadlines.conflicting ? null : deadlineQuotes[0] ?? null,
     responseDeadlines: view.responseDeadlines.conflicting ? view.responseDeadlines.allStated : deadlineQuotes,
     obligations,
