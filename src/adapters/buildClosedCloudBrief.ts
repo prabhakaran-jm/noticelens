@@ -70,6 +70,14 @@ export function buildClosedCloudBrief(input: {
     view.responseDeadlines.verifiedForDisplay !== issueDate
       ? view.responseDeadlines.verifiedForDisplay
       : null;
+  const balanceClaims = view.eligibility.decisions.some(
+    (item) =>
+      item.status === "ELIGIBLE" &&
+      item.amount !== null &&
+      (item.reason === "current_balance" ||
+        item.reason === "explicit_reinstatement" ||
+        item.reason === "distinct_new_charge")
+  );
   const deadline =
     claimDeadlines.length === 1
       ? claimDeadlines[0] !== issueDate
@@ -77,7 +85,9 @@ export function buildClosedCloudBrief(input: {
         : null
       : claimDeadlines.length > 1
         ? null
-        : viewDeadline;
+        : balanceClaims
+          ? null
+          : viewDeadline;
   const obligations: ClosedCloudObligation[] = [];
   const seenObligations = new Set<string>();
   for (const item of view.obligations) {

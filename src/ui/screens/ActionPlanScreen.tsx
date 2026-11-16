@@ -2,6 +2,7 @@ import { useState } from "react";
 import { actionSummaryLabel } from "../../adapters/cloudBriefBuilder";
 import {
   claimSupportLabel,
+  displayVerifiedAmount,
   type GroundedNoticeViewModel,
 } from "../../adapters/groundNoticeFacts";
 import type { LocalIdentifierEntry } from "../../domain/types";
@@ -89,15 +90,7 @@ export function ActionPlanScreen(props: {
   onFlags: (flags: CircumstanceFlag[]) => void;
 }) {
   const [pane, setPane] = useState<"facts" | "notice">("facts");
-  const rawAmount = props.view.amount.verifiedForDisplay;
-  const amount =
-    rawAmount !== null &&
-    props.view.eligibility.decisions.some(
-      (item) =>
-        item.status === "ELIGIBLE" && item.amount !== null && Math.abs(item.amount - rawAmount) < 0.001
-    )
-      ? rawAmount
-      : null;
+  const amount = displayVerifiedAmount(props.view);
   const period = props.view.billingPeriod.verifiedForDisplay;
   const deadlines = props.view.responseDeadlines.assessment;
 
