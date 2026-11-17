@@ -80,11 +80,10 @@ export function NoticeLensApp() {
     if (originalText === settledText) {
       return;
     }
-    const generation = generationRef.current;
+    // A goal, checkbox, or on-device result bumps the approval generation
+    // without changing the notice text. That must not abandon this timer.
+    // A later text edit clears it through the effect cleanup.
     const handle = window.setTimeout(() => {
-      if (generation !== generationRef.current) {
-        return;
-      }
       setSettledText(noticeTextRef.current);
     }, 300);
     return () => window.clearTimeout(handle);

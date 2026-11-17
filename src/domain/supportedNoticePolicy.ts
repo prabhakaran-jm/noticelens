@@ -14,9 +14,11 @@
  * Unsupported: "was covered by", "met in full", "taken care of", "zeroed",
  * "nothing further is required", "nothing is owed", "has been resolved",
  * "expected to be", "could be", "likely to be", "when the review finishes".
- * A later "outstanding balance is £…" does not override a cancellation or an
- * unclassified conflict for the same amount. An explicit reinstatement or a
- * distinct re-issued charge can.
+ * A later "outstanding balance is £…" or "please pay the outstanding balance
+ * of £…" does not override a cancellation of that same amount. An explicit
+ * reinstatement or a genuinely distinct new charge can. Unknown settlement,
+ * conditional, and injection wording can still be admitted: acceptance is
+ * positive keyword admission plus known rejection patterns, not default-deny.
  *
  * Supported issue date: a header bare date, or an explicit issue, notice,
  * letter, statement, Issued, or Dated label. Unsupported: a generic Date:

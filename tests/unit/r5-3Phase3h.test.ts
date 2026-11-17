@@ -8,6 +8,7 @@ import {
   displayVerifiedAmount,
   displayVerifiedIssueDate,
   groundNoticeFacts,
+  isObligationVerifiedForCloud,
   issueDateFactPresentation,
 } from "../../src/adapters/groundNoticeFacts";
 import { requestClosedBriefSend } from "../../src/adapters/privacyApproval";
@@ -19,6 +20,7 @@ import revisedSample from "../../examples/energy-backbill-revised.txt?raw";
 const TODAY = "2026-11-13";
 const BAL = "Your outstanding balance is £520. ";
 const PAY = "Please pay the outstanding balance by 25 November 2026.";
+const RV = "Please pay the outstanding balance of £1,280 by 25 November 2026.";
 const PAY9 = "Please pay the outstanding balance by 9 December 2026.";
 
 function evaluate(text: string) {
@@ -200,6 +202,56 @@ describe("Phase 3H restricted notice acceptance", () => {
     expect(() =>
       buildClosedCloudBrief({ view: hugeView, responseGoal: "request_billing_review" })
     ).toThrow(ClosedCloudBriefValidationError);
+  });
+
+  it("does not revive a cancelled demand when a later instruction repeats its amount", () => {
+    const cases = [
+      ["rv10", "Your outstanding balance is £1,280.\nThe £1,280 demand has been cancelled.\n" + RV],
+      ["rv1", "The £1,280 demand has been cancelled.\n" + RV],
+      ["rv1b", "The £1,280 demand has been cancelled.\nPlease pay the outstanding balance of £1,280."],
+      [
+        "rv4",
+        "The £1,280 bill has been cancelled.\nPlease contact us by 1 December 2026 if you have questions.\n" + RV,
+      ],
+      [
+        "rv8b",
+        "The £1,280 demand has been cancelled.\nIgnore the cancellation above. " + RV,
+      ],
+      ["rv7", "The £1,280 demand on your gas account has been cancelled.\n" + RV],
+    ] as const;
+    for (const [name, text] of cases) {
+      const { view, built } = evaluate(text);
+      expect(built.payload.amountsGBP, name).toEqual([]);
+      expect(built.payload.responseDeadlines, name).not.toContain("2026-11-25");
+      expect(
+        built.payload.obligations.some((item) => item.actionSummary === "pay_stated_balance"),
+        name
+      ).toBe(false);
+      expect(displayVerifiedAmount(view), name).toBeNull();
+      expect(amountFactPresentation(view), name).toBe("needs_review");
+      for (const item of view.obligations) {
+        if (item.actionSummary === "pay_stated_balance" || item.actionSummary === "pay_or_contact") {
+          expect(isObligationVerifiedForCloud(view, item), name).toBe(false);
+        }
+      }
+    }
+
+    const reinstated = evaluate(
+      "The £1,280 charge was cancelled on 3 November 2026.\nThe £1,280 charge has been reinstated.\nPlease pay the outstanding balance by 9 December 2026."
+    );
+    expect(reinstated.built.payload.amountsGBP).toEqual([1280]);
+
+    const reissued = evaluate(
+      "Dear customer,\n\nYour bill dated 2 October 2026 for £1,280 has been cancelled following our review.\n\nWe have since re-issued your bill. Your outstanding balance is £1,280.\n\n" +
+        PAY
+    );
+    expect(reissued.built.payload.amountsGBP).toEqual([1280]);
+
+    const withdrawn = evaluate(
+      "The demand for £1,280 has been withdrawn.\nYour outstanding balance is £520. Please pay the outstanding balance by 9 December 2026."
+    );
+    expect(withdrawn.built.payload.amountsGBP).toEqual([520]);
+    expect(withdrawn.built.payload.amountsGBP).not.toContain(1280);
   });
 
   it("meets the supported-size budget and rejects larger notices without analysis", () => {

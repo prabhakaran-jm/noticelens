@@ -1227,14 +1227,10 @@ function walkCurrentBalances(text: string): {
         if (accountClosed && !distinctNew && !isReinstatement(sentence)) {
           continue;
         }
-        // A later restatement does not revive the same amount. An explicit
-        // "please pay the outstanding balance of £…" names a new demand. So do
-        // reinstatement and a distinct re-issued charge. "Please pay £…" alone
-        // does not.
-        const explicitBalanceDemand = /\bplease\s+pay\s+the\s+outstanding\s+balance\s+of\s+£/i.test(
-          sentence
-        );
-        if (sameAmountRetired && !distinctNew && !isReinstatement(sentence) && !explicitBalanceDemand) {
+        // Repeating a retired amount, including "please pay the outstanding
+        // balance of £…", is not a new demand. Only an explicit reinstatement
+        // or a genuinely distinct new charge can put that amount back.
+        if (sameAmountRetired && !distinctNew && !isReinstatement(sentence)) {
           continue;
         }
         rememberPositive(acceptedAt, amount, index, lastPositive);
