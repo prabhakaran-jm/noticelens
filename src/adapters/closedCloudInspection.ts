@@ -281,9 +281,7 @@ export function buildClosedCloudInspection(input: {
     });
     const guardOptions = cloudGuardOptionsFromPrivateIdentifiers({
       rawNoticeText: typeof noticeText === "string" ? noticeText : "",
-      localRawValues: redaction.ok
-        ? redaction.localIdentifierMap.entries.map((entry) => entry.rawValue)
-        : [],
+      localRawValues: redaction.localIdentifierMap.entries.map((entry) => entry.rawValue),
       extraKnownIdentifiers: input.extraKnownIdentifiers,
     });
     return {
@@ -314,9 +312,7 @@ export function buildClosedCloudInspection(input: {
   });
   const guardOptions = cloudGuardOptionsFromPrivateIdentifiers({
     rawNoticeText: input.rawNoticeText,
-    localRawValues: redaction.ok
-      ? redaction.localIdentifierMap.entries.map((entry) => entry.rawValue)
-      : [],
+    localRawValues: redaction.localIdentifierMap.entries.map((entry) => entry.rawValue),
     extraKnownIdentifiers: input.extraKnownIdentifiers,
   });
   const limitations = [

@@ -3,6 +3,7 @@ import { parseCalendarDate } from "./dates";
 import { hasPartialPlaceholderIdentifier } from "./placeholders";
 import {
   containsAlphanumericAccountReference,
+  containsPersonalSalutation,
   hasLongNumericIdentifier,
   identifierLeaks,
   normalizeDashes,
@@ -67,8 +68,6 @@ export const CLOUD_PAYLOAD_REDACTION_LIMITATION =
 const UK_POSTCODE_REGEX = /\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b/i;
 const EMAIL_REGEX = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i;
 const PHONE_REGEX = /(?:\+44\s?\d{3,4}|\(?0\d{3,4}\)?)\s?\d{3}\s?\d{3,4}\b(?![\s-]*\d)/;
-const SALUTATION_NAME_REGEX =
-  /\b(?:Dear|Mr|Mrs|Ms|Miss|Dr)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b/;
 const STREET_ADDRESS_REGEX =
   /\b\d{1,4}[A-Z]?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}\s+(?:Road|Street|Lane|Avenue|Close|Drive|Way|Court|Place|Gardens|Crescent|Terrace)\b/;
 const LABELED_ACCOUNT_REF_REGEX =
@@ -93,7 +92,8 @@ export function cloudGuardOptionsFromPrivateIdentifiers(input: {
   const forbiddenIdentifiers: string[] = [];
   for (const value of [...(input.localRawValues ?? []), ...(input.extraKnownIdentifiers ?? [])]) {
     const trimmed = value.trim();
-    if (trimmed.length < 3 || seen.has(trimmed)) {
+    const recognisable = trimmed.length >= 3 || (trimmed.length >= 2 && /\d/.test(trimmed));
+    if (!recognisable || seen.has(trimmed)) {
       continue;
     }
     seen.add(trimmed);
@@ -158,7 +158,7 @@ function inspectStringForPiiOrLeakage(
   if (hasPartialPlaceholderIdentifier(visible)) {
     violations.push("a text field contains a partial identifier beside a placeholder");
   }
-  if (SALUTATION_NAME_REGEX.test(visible)) {
+  if (containsPersonalSalutation(visible)) {
     violations.push("a text field contains a personal salutation pattern");
   }
   if (STREET_ADDRESS_REGEX.test(visible)) {
