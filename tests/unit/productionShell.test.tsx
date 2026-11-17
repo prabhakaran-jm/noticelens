@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { groundNoticeFacts } from "../../src/adapters/groundNoticeFacts";
 import { App } from "../../src/App";
@@ -11,10 +11,40 @@ import type { RawNoticeExtraction } from "../../src/domain/types";
 import { receiptForOnDeviceCall } from "../../src/ui/production/onDeviceSession";
 import { ActionPlanScreen } from "../../src/ui/screens/ActionPlanScreen";
 
+async function settledExactJson(): Promise<string> {
+  let value = "";
+  await waitFor(() => {
+    value = screen.getByTestId("exact-json").textContent ?? "";
+    expect(value.trim().startsWith("{")).toBe(true);
+  }, { timeout: 2000 });
+  return value;
+}
+
 const original = normalizeNewlines(readFileSync("examples/energy-backbill-original.txt", "utf8"));
 const revised = normalizeNewlines(readFileSync("examples/energy-backbill-revised.txt", "utf8"));
 
 describe("production Civic Calm shell", () => {
+  it("explains a notice past the supported size and withholds its figures", async () => {
+    render(<App />);
+    expect(await screen.findByTestId("limited-mode")).toBeInTheDocument();
+    fireEvent.change(screen.getByTestId("notice-text"), {
+      target: { value: "Your outstanding balance is £520. ".repeat(400) },
+    });
+    expect(screen.getByTestId("notice-too-long")).toHaveTextContent("8,000 characters");
+    expect(screen.getByTestId("read-amount")).toHaveTextContent("Needs review");
+    expect(screen.getByTestId("read-amount")).not.toHaveTextContent("£520");
+    expect(screen.getByTestId("read-amount")).not.toHaveTextContent("Not stated");
+    fireEvent.click(screen.getByTestId("nav-plan"));
+    expect(screen.getByTestId("notice-too-long")).toHaveTextContent("8,000 characters");
+    expect(screen.getByTestId("plan-amount")).toHaveTextContent("Needs review");
+    fireEvent.click(screen.getByTestId("nav-reply"));
+    await waitFor(() => {
+      expect(screen.getByTestId("screen-reply")).toHaveTextContent("8,000 characters");
+    }, { timeout: 2000 });
+    expect(screen.getByTestId("exact-json")).toHaveTextContent("No exact payload is available.");
+    expect(screen.getByTestId("cloud-send-button")).toBeDisabled();
+  });
+
   it("navigates the four screens and keeps cloud submission disabled", async () => {
     render(<App />);
     expect(await screen.findByTestId("limited-mode")).toBeInTheDocument();
@@ -82,20 +112,20 @@ describe("production Civic Calm shell", () => {
         ].join("\n"),
       },
     });
-    expect(screen.getByTestId("read-amount")).toHaveTextContent("Not stated");
+    expect(screen.getByTestId("read-amount")).toHaveTextContent("Conflicting");
     expect(screen.getByTestId("read-amount-support")).toHaveTextContent("Needs review");
     expect(screen.getByTestId("read-amount-support")).not.toHaveTextContent("Verified");
     expect(screen.getByTestId("read-amount-conflict")).toHaveTextContent(/no current balance is established/i);
     expect(screen.getByTestId("read-amount-conflict")).toHaveTextContent("£1,280");
     expect(screen.getByTestId("read-amount-conflict")).toHaveTextContent("£1,380");
     fireEvent.click(screen.getByTestId("nav-plan"));
-    expect(screen.getByTestId("plan-amount")).toHaveTextContent("Not stated");
+    expect(screen.getByTestId("plan-amount")).toHaveTextContent("Conflicting");
     expect(screen.getByTestId("plan-amount-conflict")).toHaveTextContent(/no current balance is established/i);
     expect(screen.getByTestId("plan-amount-conflict")).toHaveTextContent("£1,280");
     expect(screen.getByTestId("plan-amount-conflict")).toHaveTextContent("£1,380");
     expect(screen.getByTestId("plan-action-support")).not.toHaveTextContent("Verified in notice");
     fireEvent.click(screen.getByTestId("nav-reply"));
-    const conflictJson = screen.getByTestId("exact-json").textContent ?? "";
+    const conflictJson = await settledExactJson();
     expect(conflictJson).toContain('"amountsGBP":[]');
     expect(conflictJson).not.toContain("1280");
     expect(conflictJson).not.toContain("1380");
@@ -120,7 +150,7 @@ describe("production Civic Calm shell", () => {
     expect(screen.getByTestId("plan-amount")).toHaveTextContent("£1,280");
     expect(screen.getByTestId("plan-action-support")).toHaveTextContent("Verified in notice");
     fireEvent.click(screen.getByTestId("nav-reply"));
-    expect(screen.getByTestId("exact-json").textContent ?? "").toContain("1280");
+    expect(await settledExactJson()).toContain("1280");
 
     fireEvent.click(screen.getByTestId("nav-read"));
     fireEvent.change(screen.getByTestId("notice-text"), {
@@ -134,7 +164,7 @@ describe("production Civic Calm shell", () => {
     });
     expect(screen.getByTestId("read-amount")).toHaveTextContent("£520");
     fireEvent.click(screen.getByTestId("nav-reply"));
-    const injectedJson = screen.getByTestId("exact-json").textContent ?? "";
+    const injectedJson = await settledExactJson();
     expect(injectedJson).toContain("520");
     expect(injectedJson).not.toContain("9999");
     expect(injectedJson).not.toContain("Ignore");
@@ -149,7 +179,7 @@ describe("production Civic Calm shell", () => {
     expect(screen.getByTestId("read-conditional-fee")).toHaveTextContent("£40");
     expect(screen.getByTestId("read-conditional-fee")).toHaveTextContent(/not the balance/i);
     fireEvent.click(screen.getByTestId("nav-reply"));
-    const feeJson = screen.getByTestId("exact-json").textContent ?? "";
+    const feeJson = await settledExactJson();
     expect(feeJson).toContain('"amountsGBP":[]');
     expect(feeJson).not.toContain("40");
     expect(screen.getByTestId("screen-reply")).toHaveTextContent(/not the current balance/i);
@@ -167,13 +197,13 @@ describe("production Civic Calm shell", () => {
         ].join("\n"),
       },
     });
-    expect(screen.getByTestId("read-amount")).toHaveTextContent("Not stated");
+    expect(screen.getByTestId("read-amount")).toHaveTextContent("Needs review");
     expect(screen.getByTestId("read-amount-support")).not.toHaveTextContent("Verified");
     expect(screen.getByTestId("read-amount")).not.toHaveTextContent("£0");
     fireEvent.click(screen.getByTestId("nav-plan"));
     expect(screen.getByTestId("plan-action-support")).not.toHaveTextContent("Verified in notice");
     fireEvent.click(screen.getByTestId("nav-reply"));
-    const slipJson = screen.getByTestId("exact-json").textContent ?? "";
+    const slipJson = await settledExactJson();
     expect(slipJson).toContain('"amountsGBP":[]');
     expect(slipJson).not.toContain("1280");
     expect(slipJson).not.toContain("pay_stated_balance");
@@ -186,7 +216,7 @@ describe("production Civic Calm shell", () => {
     expect(screen.getByTestId("read-amount")).toHaveTextContent("Not stated");
     expect(screen.getByTestId("read-amount-support")).not.toHaveTextContent("Verified");
     fireEvent.click(screen.getByTestId("nav-reply"));
-    const genericPayJson = screen.getByTestId("exact-json").textContent ?? "";
+    const genericPayJson = await settledExactJson();
     expect(genericPayJson).toContain('"amountsGBP":[]');
     expect(genericPayJson).not.toContain("pay_stated_balance");
     expect(screen.getByTestId("cloud-send-button")).toBeDisabled();

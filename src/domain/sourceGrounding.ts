@@ -6,6 +6,15 @@ import {
 import { parseBillingWindow, parseCalendarDate } from "./dates";
 import type { ActionSummaryId, QuoteVerificationResult } from "./types";
 import type { EligibilityDecision, NoticeEligibility } from "./eligibility";
+import {
+  genericDateRowIsNotIssueDate,
+  independentBillLabel,
+  instructionOwnsSelectedBalance,
+  introducesHistoricalCopy,
+  isCompletedDisposition,
+  isContingentBalanceStatement,
+  isModelOrParserDirected,
+} from "./supportedNoticePolicy";
 import { verifyQuoteInSource } from "./verifyQuotes";
 
 export type ClaimSupport =
@@ -311,6 +320,9 @@ const DEMAND_RETIREMENT_ROLES = new Set<PaymentSentenceRole>([
 
 function isInjectedCommand(sentence: string): boolean {
   const s = normalizeForRole(sentence).trim();
+  if (isModelOrParserDirected(s)) {
+    return true;
+  }
   if (
     /\b(?:ignore|disregard|forget|override)\s+(?:all\s+|any\s+|the\s+|your\s+)?(?:previous|prior|above|earlier|preceding|system)?\s*(?:instructions?|rules?|prompts?|directives?|directions?|guidelines?)\b/i.test(
       s
@@ -412,6 +424,9 @@ function isConditionalFeeSentence(sentence: string): boolean {
 
 function isConditionalObligation(sentence: string): boolean {
   const s = normalizeForRole(sentence);
+  if (isContingentBalanceStatement(s)) {
+    return true;
+  }
   if (/\bmay\s+be\s+withdrawn\b/i.test(s)) {
     return false;
   }
@@ -572,7 +587,7 @@ function isStructuralSettlement(sentence: string): boolean {
     /\bnot\s+to\s+charge\b/i.test(s) ||
     /\babsorbed\s+this\s+amount\b/i.test(s) ||
     closesObligation(s);
-  return completed || dutyNegated || disregard || closed;
+  return completed || dutyNegated || disregard || closed || isCompletedDisposition(s);
 }
 
 function isPositiveCurrentBalance(sentence: string): boolean {
@@ -1065,7 +1080,6 @@ function walkCurrentBalances(text: string): {
   const acceptedAt = new Map<number, number[]>();
   const lastReinstatement = new Map<number, number>();
   const injectedBlockedSentences = new Set<number>();
-  const positiveBeforeRetirement = new Set<number>();
   const seen = new Set<number>();
   let forwardBlock = false;
   let forwardInjectedBlock = false;
@@ -1163,14 +1177,8 @@ function walkCurrentBalances(text: string): {
       }
       if (amounts.length === 0) {
         lastUnscopedRetirement = index;
-        for (const amount of lastPositive.keys()) {
-          positiveBeforeRetirement.add(amount);
-        }
       } else {
         for (const amount of amounts) {
-          if (lastPositive.has(amount)) {
-            positiveBeforeRetirement.add(amount);
-          }
           lastScopedRetirement.set(amount, index);
         }
       }
@@ -1213,20 +1221,16 @@ function walkCurrentBalances(text: string): {
         }
         return;
       }
-      const freshAssessment = /\boutstanding\s+balance\s+(?:is|of|now)\b/i.test(sentence);
       for (const amount of nonFeeAmountValues(sentence)) {
         const retiredAt = lastScopedRetirement.get(amount);
         const sameAmountRetired = retiredAt !== undefined && retiredAt < index;
-        const wasPositiveBefore = positiveBeforeRetirement.has(amount);
         if (accountClosed && !distinctNew && !isReinstatement(sentence)) {
           continue;
         }
-        if (
-          sameAmountRetired &&
-          !distinctNew &&
-          (wasPositiveBefore || !freshAssessment || deniesNew) &&
-          !isReinstatement(sentence)
-        ) {
+        // Repeating a retired amount, including "please pay the outstanding
+        // balance of £…", is not a new demand. Only an explicit reinstatement
+        // or a genuinely distinct new charge can put that amount back.
+        if (sameAmountRetired && !distinctNew && !isReinstatement(sentence)) {
           continue;
         }
         rememberPositive(acceptedAt, amount, index, lastPositive);
@@ -1315,6 +1319,13 @@ export function isPositiveIssueDateEvidence(
   }
   const match = ISSUE_DATE_LABEL_PREFIX.exec(trimmed);
   if (!match?.[1]) {
+    return false;
+  }
+  const genericDate = /^date\s*:/i.test(trimmed) && !/^(?:issue|notice|letter|statement)\s+date\b/i.test(trimmed);
+  if (
+    genericDate &&
+    genericDateRowIsNotIssueDate(trimmed, options?.precedingHeaderLine)
+  ) {
     return false;
   }
   return parseCalendarDate(normalizeDateToken(match[1])) !== null;
@@ -1878,6 +1889,41 @@ export function analyseNoticeEligibility(text: string): NoticeEligibility {
   }
   const verifiedIssueIso = distinctIssueIsos.length === 1 ? distinctIssueIsos[0]! : null;
 
+  // Same figure, different named bills: not one verified total. K9 repeated
+  // mentions have no distinct bill labels and stay one claim.
+  const independentAmounts = new Set<number>();
+  const eligibleBalanceDecisions = decisions.filter(
+    (item) => item.status === "ELIGIBLE" && item.amount !== null && BALANCE_REASONS.has(item.reason)
+  );
+  const balancesByAmount = new Map<number, EligibilityDecision[]>();
+  for (const decision of eligibleBalanceDecisions) {
+    const group = balancesByAmount.get(decision.amount!) ?? [];
+    group.push(decision);
+    balancesByAmount.set(decision.amount!, group);
+  }
+  for (const [amount, group] of balancesByAmount) {
+    const labels = group.map((decision) => {
+      const span = sentenceSpans.find((item) => item.sentenceIndex === decision.evidence.sentenceIndex);
+      return span ? independentBillLabel(span.norm) : null;
+    });
+    const distinctLabels = new Set(labels.filter((label): label is string => label !== null));
+    if (distinctLabels.size < 2) {
+      continue;
+    }
+    independentAmounts.add(amount);
+    for (const decision of group) {
+      const span = sentenceSpans.find((item) => item.sentenceIndex === decision.evidence.sentenceIndex);
+      if (!span || !independentBillLabel(span.norm)) {
+        continue;
+      }
+      decision.status = "NEEDS_REVIEW";
+      decision.reason = "conflicting_balances";
+      decision.paymentActionSupported = false;
+      decision.deadlineSupported = false;
+      decision.deadlineIso = null;
+    }
+  }
+
   // Resolve correspondence deadlines (excluding any date equal to the verified issueDate).
   const activeCorr = correspondenceCandidates.filter((item) => item.iso !== verifiedIssueIso);
   const distinctCorrIsos = [...new Set(activeCorr.map((item) => item.iso))].sort();
@@ -1923,6 +1969,9 @@ export function analyseNoticeEligibility(text: string): NoticeEligibility {
       TERMINAL_ACCOUNT_ROLES.has(role) ||
       role === "historical_payment"
     ) {
+      return true;
+    }
+    if (introducesHistoricalCopy(outside) || introducesHistoricalCopy(span.precedingHeaderLine ?? "")) {
       return true;
     }
     return decisions.some(
@@ -1999,6 +2048,16 @@ export function analyseNoticeEligibility(text: string): NoticeEligibility {
         continue;
       }
 
+      const previousSpan =
+        sentenceSpans.find((item) => item.sentenceIndex === sentenceIndex - 1) ?? null;
+      const ownsBalance = instructionOwnsSelectedBalance(
+        norm,
+        previousSpan?.norm ?? null,
+        previousSpan?.sentenceIndex === claimSentenceIndex
+      );
+      if (!ownsBalance) {
+        continue;
+      }
       const actionOk = hasPositiveBalancePaymentSyntax(norm);
       const due = extractPaymentDeadlineIso(raw);
       if (actionOk) {
@@ -2087,7 +2146,13 @@ export function analyseNoticeEligibility(text: string): NoticeEligibility {
   const eligibleAmountValues = uniqueAmounts(eligibleClaims.map((item) => item.amount ?? 0));
   const reviewAmounts = uniqueAmounts(
     decisions
-      .filter((item) => item.status === "NEEDS_REVIEW" && item.reason === "conflicting_balances" && item.amount !== null)
+      .filter(
+        (item) =>
+          item.status === "NEEDS_REVIEW" &&
+          item.reason === "conflicting_balances" &&
+          item.amount !== null &&
+          !independentAmounts.has(item.amount)
+      )
       .map((item) => item.amount ?? 0)
   );
   const eligibleAmountsGBP = eligibleAmountValues.length > 0 ? eligibleAmountValues : reviewAmounts;

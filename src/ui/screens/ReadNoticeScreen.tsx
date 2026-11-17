@@ -1,12 +1,16 @@
 import { useState } from "react";
 import type { ChromeCapabilityReport } from "../../ai/capability";
 import {
+  amountFactPresentation,
   claimSupportLabel,
+  deadlineFactPresentation,
   displayVerifiedAmount,
   displayVerifiedIssueDate,
+  issueDateFactPresentation,
   verifiedResponseDeadlineIso,
   type GroundedNoticeViewModel,
 } from "../../adapters/groundNoticeFacts";
+import { NOTICE_TOO_LONG_MESSAGE, noticeExceedsSupportedSize } from "../../domain/noticeInputLimit";
 import { formatGbp } from "../format";
 
 function amountSupportLabel(
@@ -59,9 +63,12 @@ export function ReadNoticeScreen(props: {
   const amount = displayVerifiedAmount(props.grounded);
   const issueDateStated = displayVerifiedIssueDate(props.grounded);
   const verifiedDeadlineIso = verifiedResponseDeadlineIso(props.grounded);
+  const amountPresentation = amountFactPresentation(props.grounded);
+  const issuePresentation = issueDateFactPresentation(props.grounded);
+  const deadlinePresentation = deadlineFactPresentation(props.grounded);
+  const tooLong = noticeExceedsSupportedSize(props.text);
   const deadlineNeedsReview =
-    props.grounded.responseDeadlines.conflicting ||
-    (props.grounded.responseDeadlines.allStated.length > 0 && verifiedDeadlineIso === null);
+    deadlinePresentation === "conflicting" || deadlinePresentation === "needs_review";
 
   return (
     <section className="stack" data-testid="screen-read">
@@ -79,6 +86,11 @@ export function ReadNoticeScreen(props: {
           {props.grounded.categoryDecision.needsConfirmation
             ? "The notice does not confirm one category, so specialist guidance was not selected."
             : "The on-device category did not match the notice text. Guidance follows the notice text."}
+        </div>
+      ) : null}
+      {tooLong ? (
+        <div className="banner" data-testid="notice-too-long" role="status">
+          {NOTICE_TOO_LONG_MESSAGE}
         </div>
       ) : null}
       {limited ? (
@@ -100,10 +112,20 @@ export function ReadNoticeScreen(props: {
         <article className="fact-tile">
           <span className="fact-label">Balance</span>
           <strong className={`fact-value${amount === null ? " is-missing" : ""}`} data-testid="read-amount">
-            {amount === null ? "Not stated" : formatGbp(amount)}
+            {tooLong
+              ? "Needs review"
+              : amountPresentation === "verified" && amount !== null
+                ? formatGbp(amount)
+                : amountPresentation === "conflicting"
+                  ? "Conflicting"
+                  : amountPresentation === "needs_review"
+                    ? "Needs review"
+                    : "Not stated"}
           </strong>
           <span className="fact-pill fact-pill-warning" data-testid="read-amount-support">
-            {amountSupportLabel(props.grounded.amount.support, amount, amount !== null)}
+            {tooLong
+              ? "Needs review"
+              : amountSupportLabel(props.grounded.amount.support, amount, amount !== null)}
           </span>
           {props.grounded.amount.conflict ? (
             <span className="fact-pill fact-pill-warning" data-testid="read-amount-conflict">
@@ -122,9 +144,17 @@ export function ReadNoticeScreen(props: {
         <article className="fact-tile">
           <span className="fact-label">Notice date</span>
           <strong className={`fact-value${issueDateStated ? "" : " is-missing"}`} data-testid="read-issue-date">
-            {props.grounded.issueDate.conflicting ? "Multiple dates" : issueDateStated ?? "Not stated"}
+            {tooLong
+              ? "Needs review"
+              : issuePresentation === "conflicting"
+                ? "Multiple dates"
+                : issuePresentation === "verified"
+                  ? issueDateStated
+                  : issuePresentation === "needs_review"
+                    ? "Needs review"
+                    : "Not stated"}
           </strong>
-          {props.grounded.issueDate.conflicting ? (
+          {tooLong || issuePresentation === "conflicting" || issuePresentation === "needs_review" ? (
             <span className="fact-pill fact-pill-warning" data-testid="read-issue-support">
               Needs review
             </span>
@@ -138,13 +168,17 @@ export function ReadNoticeScreen(props: {
             }`}
             data-testid="read-deadline"
           >
-            {props.grounded.responseDeadlines.conflicting
-              ? "Multiple dates"
-              : verifiedDeadlineIso
-                ? props.grounded.responseDeadlines.stated ?? verifiedDeadlineIso
-                : "Not stated"}
+            {tooLong
+              ? "Needs review"
+              : deadlinePresentation === "conflicting"
+                ? "Multiple dates"
+                : deadlinePresentation === "verified" && verifiedDeadlineIso
+                  ? props.grounded.responseDeadlines.stated ?? verifiedDeadlineIso
+                  : deadlinePresentation === "needs_review"
+                    ? "Needs review"
+                    : "Not stated"}
           </strong>
-          {deadlineNeedsReview ? (
+          {tooLong || deadlineNeedsReview ? (
             <span className="fact-pill fact-pill-warning" data-testid="read-deadline-support">
               Needs review
             </span>

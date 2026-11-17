@@ -7,6 +7,7 @@ import {
 import { parseBillingWindow, parseCalendarDate } from "../domain/dates";
 import type { NoticeEligibility } from "../domain/eligibility";
 import { decideNoticeCategory } from "../domain/noticeCategory";
+import { noticeExceedsSupportedSize } from "../domain/noticeInputLimit";
 import { analyseNoticeEligibility } from "../domain/sourceGrounding";
 import {
   ALLOWED_ACTION_SUMMARIES,
@@ -93,6 +94,11 @@ export function buildClosedCloudBrief(input: {
   if (typeof view?.rawText !== "string") {
     throw new ClosedCloudBriefValidationError([
       "closed brief safety gate: missing authoritative notice context",
+    ]);
+  }
+  if (noticeExceedsSupportedSize(view.rawText)) {
+    throw new ClosedCloudBriefValidationError([
+      "closed brief safety gate: notice exceeds the supported input size",
     ]);
   }
   const authority = analyseNoticeEligibility(view.rawText);

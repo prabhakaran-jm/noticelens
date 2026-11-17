@@ -305,12 +305,16 @@ describe("approval confirmation bound to the exact payload", () => {
     fireEvent.click(screen.getByTestId("nav-read"));
     const notice = screen.getByTestId("notice-text") as HTMLTextAreaElement;
     replaceNotice(`${notice.value}\nKeeper token JONES-1001`);
-    expect(exactPayload()).toBe(before);
+    await waitFor(() => {
+      expect(exactPayload()).toBe(before);
+    }, { timeout: 2000 });
     expect(screen.getByRole("checkbox", { name: "I have reviewed this exact payload" })).not.toBeChecked();
     clickApproveEvenIfDisabled();
     expect(screen.queryByTestId("privacy-approved")).not.toBeInTheDocument();
     replaceNotice(original);
-    expect(exactPayload()).toBe(before);
+    await waitFor(() => {
+      expect(exactPayload()).toBe(before);
+    }, { timeout: 2000 });
     expect(screen.getByRole("checkbox", { name: "I have reviewed this exact payload" })).not.toBeChecked();
     expect(screen.queryByTestId("privacy-approved")).not.toBeInTheDocument();
   });

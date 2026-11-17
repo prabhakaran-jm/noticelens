@@ -18,10 +18,15 @@ import {
   REGEX_REDACTION_LIMITATIONS,
   type RedactAndBriefResult,
 } from "../domain/redactAndBrief";
+import { NOTICE_TOO_LONG_MESSAGE, noticeExceedsSupportedSize } from "../domain/noticeInputLimit";
 import { GUIDANCE_IDS_BY_CATEGORY, type CircumstanceFlag, type ResponseGoal } from "../domain/types";
 import {
+  amountFactPresentation,
   briefSourceFromGrounded,
+  deadlineFactPresentation,
   isObligationVerifiedForCloud,
+  issueDateFactPresentation,
+  type FactPresentation,
   type GroundedNoticeViewModel,
 } from "./groundNoticeFacts";
 
@@ -50,6 +55,16 @@ function formatPoint(value: string): string {
   }
   const asDay = parseCalendarDate(`${value}-01`);
   return asDay ? formatDisplayDate(asDay).replace(/^\d+\s/, "") : value;
+}
+
+function omittedCloudField(presentation: FactPresentation): string {
+  if (presentation === "needs_review") {
+    return "Needs review. A candidate was in the notice and was withheld. The cloud field is empty because it was not verified, not because the notice said it was absent.";
+  }
+  if (presentation === "conflicting") {
+    return "Conflicting. Incompatible candidates were withheld. The cloud field is empty because they were not verified, not because the notice said the fact was absent.";
+  }
+  return "Not stated";
 }
 
 function formatGbp(amount: number): string {
@@ -84,7 +99,9 @@ export function readableRowsFromClosedBrief(
     { label: "Notice category", value: payload.noticeCategory },
     {
       label: "Issue date",
-      value: payload.issueDate ? formatPoint(payload.issueDate) : "Not stated",
+      value: payload.issueDate
+        ? formatPoint(payload.issueDate)
+        : omittedCloudField(issueDateFactPresentation(view)),
     },
     {
       label: "Billing period",
@@ -119,7 +136,7 @@ export function readableRowsFromClosedBrief(
       label: "Response deadlines",
       value:
         payload.responseDeadlines.length === 0
-          ? "Not stated"
+          ? omittedCloudField(deadlineFactPresentation(view))
           : payload.responseDeadlines.map((date) => formatPoint(date)).join("; "),
     },
     { label: "Response goal", value: payload.responseGoal }
@@ -191,7 +208,7 @@ function amountRowValue(payload: ClosedCloudBrief, view: GroundedNoticeViewModel
   if (listed) {
     return `No supported outstanding balance. ${listed} is unverified. amountsGBP is empty because no outstanding balance is supported, not because the notice states no amounts.`;
   }
-  return "Not stated";
+  return omittedCloudField(amountFactPresentation(view));
 }
 
 /**
@@ -206,6 +223,87 @@ export function buildClosedCloudInspection(input: {
   circumstanceFlags?: readonly CircumstanceFlag[];
   extraKnownIdentifiers?: readonly string[];
 }): ClosedCloudInspection {
+  const noticeText = input.view?.rawText;
+  if (
+    (typeof noticeText === "string" && noticeExceedsSupportedSize(noticeText)) ||
+    noticeExceedsSupportedSize(input.rawNoticeText ?? "")
+  ) {
+    const redaction = redactAndBuildBrief({
+      rawNoticeText: "",
+      extraction: {
+        noticeCategory: "other_household_notice",
+        issueDate: null,
+        billingPeriod: null,
+        amountGBP: null,
+        responseDeadline: null,
+        obligations: [],
+      },
+      responseGoal: input.responseGoal,
+      guidanceIds: [],
+      circumstanceFlags: input.circumstanceFlags,
+      extraKnownIdentifiers: input.extraKnownIdentifiers,
+    });
+    return {
+      redaction,
+      canonical: null,
+      violations: [NOTICE_TOO_LONG_MESSAGE],
+      readableRows: [],
+      exactSerialized: null,
+      formattedInspectionJson: null,
+      guardOptions: cloudGuardOptionsFromPrivateIdentifiers({
+        rawNoticeText: "",
+        localRawValues: [],
+        extraKnownIdentifiers: input.extraKnownIdentifiers,
+      }),
+      limitations: [
+        ...REGEX_REDACTION_LIMITATIONS,
+        CLOUD_PAYLOAD_REDACTION_LIMITATION,
+        STRUCTURAL_VALIDATION_DOES_NOT_ESTABLISH_PAYMENT_CORRECTNESS,
+      ],
+      declaredComplete: false,
+    };
+  }
+  if (typeof noticeText !== "string" || input.rawNoticeText !== noticeText) {
+    const redaction = redactAndBuildBrief({
+      rawNoticeText: typeof noticeText === "string" ? noticeText : "",
+      extraction: input.view ? briefSourceFromGrounded(input.view) : {
+        noticeCategory: "other_household_notice",
+        issueDate: null,
+        billingPeriod: null,
+        amountGBP: null,
+        responseDeadline: null,
+        obligations: [],
+      },
+      responseGoal: input.responseGoal,
+      guidanceIds: [],
+      circumstanceFlags: input.circumstanceFlags,
+      extraKnownIdentifiers: input.extraKnownIdentifiers,
+    });
+    const guardOptions = cloudGuardOptionsFromPrivateIdentifiers({
+      rawNoticeText: typeof noticeText === "string" ? noticeText : "",
+      localRawValues: redaction.ok
+        ? redaction.localIdentifierMap.entries.map((entry) => entry.rawValue)
+        : [],
+      extraKnownIdentifiers: input.extraKnownIdentifiers,
+    });
+    return {
+      redaction,
+      canonical: null,
+      violations: [
+        "closed brief safety gate: rawNoticeText does not match the grounded notice",
+      ],
+      readableRows: [],
+      exactSerialized: null,
+      formattedInspectionJson: null,
+      guardOptions,
+      limitations: [
+        ...REGEX_REDACTION_LIMITATIONS,
+        CLOUD_PAYLOAD_REDACTION_LIMITATION,
+        STRUCTURAL_VALIDATION_DOES_NOT_ESTABLISH_PAYMENT_CORRECTNESS,
+      ],
+      declaredComplete: false,
+    };
+  }
   const redaction = redactAndBuildBrief({
     rawNoticeText: input.rawNoticeText,
     extraction: briefSourceFromGrounded(input.view),

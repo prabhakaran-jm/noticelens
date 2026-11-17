@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   briefSourceFromGrounded,
   groundNoticeFacts,
+  isObligationVerifiedForCloud,
 } from "../../src/adapters/groundNoticeFacts";
 import { redactAndBuildBrief } from "../../src/domain/redactAndBrief";
 import { groundMonetaryAmount, groundObligation } from "../../src/domain/sourceGrounding";
@@ -293,9 +294,11 @@ describe("groundNoticeFacts", () => {
     });
     expect(grounded.obligations[0]?.headingSupport).not.toBe("supports_claim");
     expect(grounded.obligations[0]?.verifiedForDisplay).toBeNull();
-    expect(grounded.obligations[1]?.headingSupport).toBe("supports_claim");
+    expect(grounded.amount.verifiedForDisplay).toBeNull();
+    expect(isObligationVerifiedForCloud(grounded, grounded.obligations[1]!)).toBe(false);
     const source = briefSourceFromGrounded(grounded);
-    expect(source.obligations.map((item) => item.sourceQuote)).toEqual([genuine]);
+    expect(source.obligations.map((item) => item.sourceQuote)).toEqual([]);
+    expect(source.obligations.map((item) => item.sourceQuote)).not.toContain(genuine);
     expect(source.obligations.map((item) => item.sourceQuote)).not.toContain(cancelled);
 
     const onlyCancelled = redactAndBuildBrief({

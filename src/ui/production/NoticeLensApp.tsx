@@ -75,6 +75,19 @@ export function NoticeLensApp() {
     };
   }, []);
 
+  const [settledText, setSettledText] = useState(originalText);
+  useEffect(() => {
+    if (originalText === settledText) {
+      return;
+    }
+    // A goal, checkbox, or on-device result bumps the approval generation
+    // without changing the notice text. That must not abandon this timer.
+    // A later text edit clears it through the effect cleanup.
+    const handle = window.setTimeout(() => {
+      setSettledText(noticeTextRef.current);
+    }, 300);
+    return () => window.clearTimeout(handle);
+  }, [originalText, settledText]);
   const grounded = useMemo(
     () =>
       groundNoticeFacts({
@@ -84,17 +97,24 @@ export function NoticeLensApp() {
       }),
     [originalText, extraction, today]
   );
-  const inspection = useMemo(
-    () =>
-      buildClosedCloudInspection({
-        rawNoticeText: originalText,
+  const inspection = useMemo(() => {
+    if (settledText !== originalText) {
+      return buildClosedCloudInspection({
+        rawNoticeText: settledText,
         view: grounded,
         responseGoal,
         circumstanceFlags: flags,
         extraKnownIdentifiers: [],
-      }),
-    [originalText, grounded, responseGoal, flags]
-  );
+      });
+    }
+    return buildClosedCloudInspection({
+      rawNoticeText: originalText,
+      view: grounded,
+      responseGoal,
+      circumstanceFlags: flags,
+      extraKnownIdentifiers: [],
+    });
+  }, [settledText, originalText, grounded, responseGoal, flags]);
   const privacy = useMemo(
     () =>
       privacyApprovalView({

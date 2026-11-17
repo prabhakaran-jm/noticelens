@@ -1,5 +1,5 @@
 import { createElement } from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { App } from "../../src/App";
 import { buildClosedCloudBrief } from "../../src/adapters/buildClosedCloudBrief";
@@ -715,7 +715,11 @@ describe("Phase 3G final cloud-fact safety gate", () => {
       expect(screen.getByTestId("plan-deadline-support")).toHaveTextContent("Needs review");
 
       fireEvent.click(screen.getByTestId("nav-reply"));
-      const exact = screen.getByTestId("exact-json").textContent ?? "";
+      let exact = "";
+      await waitFor(() => {
+        exact = screen.getByTestId("exact-json").textContent ?? "";
+        expect(exact.trim().startsWith("{")).toBe(true);
+      }, { timeout: 2000 });
       const parsed = JSON.parse(exact);
       expect(parsed.amountsGBP).toEqual([520]);
       expect(parsed.responseDeadlines).toEqual([]);
