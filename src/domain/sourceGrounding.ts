@@ -8,13 +8,14 @@ import type { ActionSummaryId, QuoteVerificationResult } from "./types";
 import type { EligibilityDecision, NoticeEligibility } from "./eligibility";
 import {
   genericDateRowIsNotIssueDate,
-  independentBillLabel,
+  independentClaimLabel,
   instructionOwnsSelectedBalance,
   introducesHistoricalCopy,
   isCompletedDisposition,
   isContingentBalanceStatement,
   isModelOrParserDirected,
 } from "./supportedNoticePolicy";
+import { introducesParagraphFrame, introducesUntrustedFrame, matchesSupportedBalanceStructure } from "./supportedStructures";
 import { verifyQuoteInSource } from "./verifyQuotes";
 
 export type ClaimSupport =
@@ -604,22 +605,7 @@ function isPositiveCurrentBalance(sentence: string): boolean {
   if (/\bowe(?:\s+us)?\s+nothing\b/i.test(s)) {
     return false;
   }
-  return (
-    /\boutstanding\s+balance\b/i.test(s) ||
-    /\bamount\s+due\b/i.test(s) ||
-    /\bbalance\s+due\b/i.test(s) ||
-    /\bamount\s+payable\b/i.test(s) ||
-    /\bbalance\s+now\s+requested\b/i.test(s) ||
-    /\btotal\s+to\s+pay\b/i.test(s) ||
-    /\byou\s+owe\s+£/i.test(s) ||
-    /\bplease\s+pay\s+the\s+(?:outstanding\s+)?balance\b/i.test(s) ||
-    /\bplease\s+pay\s+£/i.test(s) ||
-    (/\bmust\s+pay\b/i.test(s) && !/\bmust\s+pay\s+nothing\b/i.test(s) && !/\bif\b/i.test(s)) ||
-    /\bpayment\s+is\s+due\b/i.test(s) ||
-    /\bby\s+paying\s+£/i.test(s) ||
-    (/\bcurrent\s+balance\b/i.test(s) && !/\bprevious\b/i.test(s)) ||
-    (namesDistinctNewCharge(s) && amountValuesIn(s).some((amount) => amount > 0))
-  );
+  return matchesSupportedBalanceStructure(s);
 }
 
 function detectBlockingRole(sentence: string): PaymentSentenceRole | null {
@@ -1061,19 +1047,52 @@ function rememberPositive(acceptedAt: Map<number, number[]>, amount: number, ind
   }
 }
 
+function untrustedSentenceIndexes(text: string, spans: readonly NoticeSentenceSpan[]): Set<number> {
+  const flagged = new Set<number>();
+  let carry = false;
+  for (let i = 0; i < spans.length; i += 1) {
+    const span = spans[i]!;
+    if (i > 0) {
+      const gap = text.slice(spans[i - 1]!.end, span.start);
+      if (/\n\s*\n/.test(gap)) {
+        carry = false;
+      }
+    }
+    const header = span.precedingHeaderLine ?? "";
+    const headerIsLabel = header.length > 0 && !/[.!?]$/.test(header.trim());
+    if (headerIsLabel && (introducesParagraphFrame(span.norm) || introducesParagraphFrame(header))) {
+      carry = true;
+    } else if (introducesParagraphFrame(span.norm)) {
+      carry = true;
+    }
+    if (
+      carry ||
+      introducesUntrustedFrame(span.norm) ||
+      (headerIsLabel && introducesUntrustedFrame(header))
+    ) {
+      flagged.add(span.sentenceIndex);
+    }
+  }
+  return flagged;
+}
+
 function walkCurrentBalances(text: string): {
   current: number[];
   acceptedAt: Map<number, number[]>;
   reinstatedAt: Map<number, number>;
   injectedBlockedSentences: Set<number>;
+  untrustedSentences: Set<number>;
 } {
-  const sentences = noticeSentences(text);
+  const spans = noticeSentenceSpans(text);
+  const sentences = spans.map((span) => span.norm);
+  const untrustedSentences = untrustedSentenceIndexes(text, spans);
   let lastUnscopedTerminal = -1;
   let accountClosed = false;
   const introducedAtTerminal = new Set<number>();
   const lastScopedTerminal = new Map<number, number>();
   let lastUnscopedRetirement = -1;
   const lastScopedRetirement = new Map<number, number>();
+  const retiredLabels = new Map<number, Set<string>>();
   let lastUnscopedHistorical = -1;
   const lastScopedHistorical = new Map<number, number>();
   const lastPositive = new Map<number, number>();
@@ -1086,6 +1105,9 @@ function walkCurrentBalances(text: string): {
   let pendingReissue = false;
 
   sentences.forEach((sentence, index) => {
+    if (untrustedSentences.has(index)) {
+      return;
+    }
     const amounts = amountValuesIn(sentence);
     const role = paymentSentenceRole(sentence);
     if (role === "injected_command") {
@@ -1175,11 +1197,17 @@ function walkCurrentBalances(text: string): {
       if (pointsAtAmountBelow(sentence, amounts)) {
         forwardBlock = true;
       }
+      const retiredLabel = independentClaimLabel(sentence);
       if (amounts.length === 0) {
         lastUnscopedRetirement = index;
       } else {
         for (const amount of amounts) {
           lastScopedRetirement.set(amount, index);
+          if (retiredLabel) {
+            const labels = retiredLabels.get(amount) ?? new Set<string>();
+            labels.add(retiredLabel);
+            retiredLabels.set(amount, labels);
+          }
         }
       }
       return;
@@ -1230,7 +1258,14 @@ function walkCurrentBalances(text: string): {
         // Repeating a retired amount, including "please pay the outstanding
         // balance of £…", is not a new demand. Only an explicit reinstatement
         // or a genuinely distinct new charge can put that amount back.
-        if (sameAmountRetired && !distinctNew && !isReinstatement(sentence)) {
+        const claimLabel = independentClaimLabel(sentence);
+        const earlierLabels = retiredLabels.get(amount);
+        const differentDebt =
+          claimLabel !== null &&
+          earlierLabels !== undefined &&
+          earlierLabels.size > 0 &&
+          !earlierLabels.has(claimLabel);
+        if (sameAmountRetired && !distinctNew && !isReinstatement(sentence) && !differentDebt) {
           continue;
         }
         rememberPositive(acceptedAt, amount, index, lastPositive);
@@ -1275,6 +1310,7 @@ function walkCurrentBalances(text: string): {
     acceptedAt,
     reinstatedAt: lastReinstatement,
     injectedBlockedSentences,
+    untrustedSentences,
   };
 }
 
@@ -1287,6 +1323,10 @@ const ISSUE_DATE_LABEL_PREFIX =
 
 const DISQUALIFYING_PRECEDING_DATE_LABEL =
   /\b(?:due\s+date|payment\s+due|payment\s+deadline|response\s+deadline|deadline|pay\s+by|respond\s+by|meter\s+reading|last\s+payment|previous\s+payment|effective\s+date|cancellation\s+date|period\s+(?:start|end|from|to)|billing\s+period|supply\s+period|closing\s+date|expiry\s+date|final\s+date)\s*:?$/i;
+
+/** A preamble date under one of these headings is not the notice issue date. */
+const NON_ISSUE_SECTION =
+  /\b(?:activity|readings|telephone|phone\s+call|call\s+with|new\s+price|service\s+table|direct\s+debit)\b/i;
 
 function normalizeDateToken(token: string): string {
   return token.replace(/(\d{1,2})(?:st|nd|rd|th)\b/i, "$1");
@@ -1309,7 +1349,8 @@ export function isPositiveIssueDateEvidence(
     return false;
   }
   if (/^\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+\s+\d{4}\.?$/.test(trimmed)) {
-    if (options?.precedingHeaderLine && DISQUALIFYING_PRECEDING_DATE_LABEL.test(options.precedingHeaderLine)) {
+    const header = options?.precedingHeaderLine ?? "";
+    if (header && (DISQUALIFYING_PRECEDING_DATE_LABEL.test(header) || NON_ISSUE_SECTION.test(header))) {
       return false;
     }
     if (options?.inHeaderPreamble === false) {
@@ -1322,11 +1363,13 @@ export function isPositiveIssueDateEvidence(
     return false;
   }
   const genericDate = /^date\s*:/i.test(trimmed) && !/^(?:issue|notice|letter|statement)\s+date\b/i.test(trimmed);
-  if (
-    genericDate &&
-    genericDateRowIsNotIssueDate(trimmed, options?.precedingHeaderLine)
-  ) {
-    return false;
+  if (genericDate) {
+    if (options?.inHeaderPreamble !== true) {
+      return false;
+    }
+    if (genericDateRowIsNotIssueDate(trimmed, options?.precedingHeaderLine)) {
+      return false;
+    }
   }
   return parseCalendarDate(normalizeDateToken(match[1])) !== null;
 }
@@ -1672,7 +1715,12 @@ export function analyseNoticeEligibility(text: string): NoticeEligibility {
     const { sentenceIndex, start, end, raw, norm } = span;
     const evidence = { sentenceIndex, start, end };
     const blockedByInjection = walk.injectedBlockedSentences.has(sentenceIndex);
-    const role: PaymentSentenceRole = blockedByInjection ? "injected_command" : paymentSentenceRole(raw);
+    const inUntrustedFrame = walk.untrustedSentences.has(sentenceIndex);
+    const role: PaymentSentenceRole = blockedByInjection
+      ? "injected_command"
+      : inUntrustedFrame
+        ? "unsupported"
+        : paymentSentenceRole(raw);
 
     if (
       role === "cancelled_demand" ||
@@ -1784,7 +1832,7 @@ export function analyseNoticeEligibility(text: string): NoticeEligibility {
       }
     }
 
-    if (dated) {
+    if (dated && !inUntrustedFrame) {
       const issueCandidate = extractIssueDateCandidateInSpan(text, span, blockedByInjection);
       if (issueCandidate) {
         const issueEvidence = {
@@ -1904,7 +1952,7 @@ export function analyseNoticeEligibility(text: string): NoticeEligibility {
   for (const [amount, group] of balancesByAmount) {
     const labels = group.map((decision) => {
       const span = sentenceSpans.find((item) => item.sentenceIndex === decision.evidence.sentenceIndex);
-      return span ? independentBillLabel(span.norm) : null;
+      return span ? independentClaimLabel(span.norm) : null;
     });
     const distinctLabels = new Set(labels.filter((label): label is string => label !== null));
     if (distinctLabels.size < 2) {
@@ -1913,7 +1961,7 @@ export function analyseNoticeEligibility(text: string): NoticeEligibility {
     independentAmounts.add(amount);
     for (const decision of group) {
       const span = sentenceSpans.find((item) => item.sentenceIndex === decision.evidence.sentenceIndex);
-      if (!span || !independentBillLabel(span.norm)) {
+      if (!span || !independentClaimLabel(span.norm)) {
         continue;
       }
       decision.status = "NEEDS_REVIEW";
@@ -1959,6 +2007,9 @@ export function analyseNoticeEligibility(text: string): NoticeEligibility {
   ]);
 
   function closesAmountFreeClaimWindow(span: NoticeSentenceSpan): boolean {
+    if (walk.untrustedSentences.has(span.sentenceIndex)) {
+      return false;
+    }
     const outside = outsideQuotes(span.norm).trim();
     if (!outside) {
       return false;
@@ -2001,7 +2052,7 @@ export function analyseNoticeEligibility(text: string): NoticeEligibility {
       if (start >= nextEligibleClaimStart) {
         break;
       }
-      if (walk.injectedBlockedSentences.has(sentenceIndex)) {
+      if (walk.injectedBlockedSentences.has(sentenceIndex) || walk.untrustedSentences.has(sentenceIndex)) {
         continue;
       }
       if (sentenceIndex > claimSentenceIndex && closesAmountFreeClaimWindow(span)) {
@@ -2103,7 +2154,7 @@ export function analyseNoticeEligibility(text: string): NoticeEligibility {
   if (!paymentDeadlineConflict && eligibleClaims.length > 0) {
     const allNoticePaymentDeadlines = new Set<string>(claimDeadlines);
     for (const span of sentenceSpans) {
-      if (walk.injectedBlockedSentences.has(span.sentenceIndex)) {
+      if (walk.injectedBlockedSentences.has(span.sentenceIndex) || walk.untrustedSentences.has(span.sentenceIndex)) {
         continue;
       }
       const role = paymentSentenceRole(span.raw);
@@ -2486,10 +2537,13 @@ export function groundObligation(
   if (role === "ambiguous") {
     return grounded(summary, quote, "ambiguous", verification);
   }
+  const disposition = obligationDisposition(quote);
+  if (disposition === "ambiguous") {
+    return grounded(summary, quote, disposition, verification);
+  }
   if (role === "conditional_fee" || (role !== "current_balance" && role !== "reinstated_demand" && role !== "unsupported")) {
     return grounded(summary, quote, "substring_only", verification);
   }
-  const disposition = obligationDisposition(quote);
   if (disposition) {
     return grounded(summary, quote, disposition, verification);
   }

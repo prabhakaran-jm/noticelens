@@ -7,24 +7,18 @@
  * definition of a supported notice. Arbitrary natural-language notices are
  * not supported.
  *
- * Supported current balance: a present statement that the recipient currently
- * owes a named outstanding balance, amount due, balance due, total to pay, or
- * an explicit "you owe £…", and that statement is not a settlement, a
- * cancellation, a prediction, or a directive to a model or parser.
- * Unsupported: "was covered by", "met in full", "taken care of", "zeroed",
- * "nothing further is required", "nothing is owed", "has been resolved",
- * "expected to be", "could be", "likely to be", "when the review finishes".
- * A later "outstanding balance is £…" or "please pay the outstanding balance
- * of £…" does not override a cancellation of that same amount. An explicit
- * reinstatement or a genuinely distinct new charge can. Unknown settlement,
- * conditional, and injection wording can still be admitted: acceptance is
- * positive keyword admission plus known rejection patterns, not default-deny.
+ * A current balance starts unverified. It is admitted only by a construction
+ * in supportedStructures.ts: a present named balance with an explicit amount,
+ * a direct "you owe £" / "please pay £" demand, or a revised "balance now
+ * requested is £". A later restatement does not override a cancellation of
+ * that same amount. An explicit reinstatement or a distinct new charge can.
+ * Helpers below remain extra withholds. They are not the acceptance rule.
  *
- * Supported issue date: a header bare date, or an explicit issue, notice,
- * letter, statement, Issued, or Dated label. Unsupported: a generic Date:
- * row under a meter-reading, payment-history, or similar unpunctuated
- * section heading, and a Date: line whose own words name an effective date,
- * tariff, meter reading, or cancellation.
+ * Supported issue date: a bare date in the header preamble, or an explicit
+ * Issued, Issue date, Notice date, Letter date, Statement date, or Dated
+ * label. A generic Date: line is an issue date only in that header preamble,
+ * and not under a payment, meter, activity, telephone, service, price, or
+ * table heading. A date is not the issue date merely because it appears first.
  *
  * Supported payment instruction: it names the selected outstanding balance
  * or that claim's exact amount, and no other account, product, or copied
@@ -102,23 +96,25 @@ export function introducesHistoricalCopy(sentence: string): boolean {
 }
 
 /**
- * Generic `Date:` is an issue date only as letterhead, not as a field in a
- * meter or payment table and not when the line itself names another date role.
- * A previous full sentence (it ends with punctuation) does not turn the
- * following Date: line into a table row.
+ * Generic `Date:` is letterhead only when it is not after a full sentence and
+ * the section heading does not name another date role.
  */
 export function genericDateRowIsNotIssueDate(
   line: string,
   precedingHeaderLine: string | null | undefined
 ): boolean {
-  if (/\b(?:effective|tariff|meter\s+reading|cancellation|correspondence)\b/i.test(line)) {
+  if (
+    /\b(?:effective|tariff|meter\s+reading|cancellation|correspondence|payment|activity|telephone|price)\b/i.test(
+      line
+    )
+  ) {
     return true;
   }
   const header = (precedingHeaderLine ?? "").trim();
   if (!header || /[.!?]["'”’]?$/.test(header)) {
-    return false;
+    return header.length > 0;
   }
-  return /\b(?:meter|reading|payment|paid|effective|tariff|history|received|reference|period)\b/i.test(
+  return /\b(?:meter|reading|payment|paid|effective|tariff|history|received|reference|period|activity|telephone|phone|service|price|table|call|correspondence)\b/i.test(
     header
   );
 }
@@ -178,4 +174,40 @@ export function independentBillLabel(sentence: string): string | null {
   ).exec(sentence);
   const label = match?.[1] ?? match?.[2];
   return label ? label.toLowerCase() : null;
+}
+
+/**
+ * Identity of a current claim. Amount is not an identity. A token is used
+ * only when it distinguishes a debt (a digit, or a single invoice letter).
+ * One sentence still yields one label.
+ */
+export function independentClaimLabel(sentence: string): string | null {
+  const invoice = /\b(?:invoice|inv)\s*[-#:.]?\s*([a-z0-9]+)\b/i.exec(sentence);
+  if (invoice && (/\d/.test(invoice[1]!) || /^[a-z]$/i.test(invoice[1]!))) {
+    return `invoice:${invoice[1]!.toLowerCase()}`;
+  }
+  const account =
+    /\baccount\s+(?:reference|number|no\.?)?\s*[:#-]?\s*([a-z0-9]+(?:-[a-z0-9]+)?)\b/i.exec(sentence);
+  if (account && /\d/.test(account[1]!)) {
+    return `account:${account[1]!.toLowerCase()}`;
+  }
+  const quarter = /\b(?:q([1-4])|quarter\s+([1-4])|(first|second|third|fourth)\s+quarter)\b/i.exec(
+    sentence
+  );
+  if (quarter) {
+    const part = (quarter[1] ?? quarter[2] ?? quarter[3] ?? "").toLowerCase();
+    return `quarter:${part}`;
+  }
+  const product = /\b(electricity|gas|water|council\s+tax)\b/i.exec(sentence);
+  const month = independentBillLabel(sentence);
+  if (month && product) {
+    return `${product[1]!.toLowerCase()}:${month}`;
+  }
+  if (month) {
+    return `month:${month}`;
+  }
+  if (product) {
+    return `product:${product[1]!.toLowerCase()}`;
+  }
+  return null;
 }

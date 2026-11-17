@@ -498,14 +498,13 @@ describe("Phase 3G final cloud-fact safety gate", () => {
       expect(k13c.built.payload.issueDate).toBe("2026-11-01");
       expect(displayVerifiedIssueDate(k13c.view)).toBe("1 November 2026");
 
-      // k13d: same date appears first in historical line, then in genuine Date: line
+      // A Date: row after a payment sentence is not an issue-date heading.
       const k13d = evaluate(
         "Your last payment on 1 November 2026 was received.\nDate: 1 November 2026\n" + BAL,
         ex({ issueDate: "1 November 2026" })
       );
-      expect(k13d.built.payload.issueDate).toBe("2026-11-01");
-      expect(displayVerifiedIssueDate(k13d.view)).toBe("1 November 2026");
-      expect(k13d.view.issueDate.verification?.startOffset).toBeGreaterThan(45);
+      expect(k13d.built.payload.issueDate).toBeNull();
+      expect(displayVerifiedIssueDate(k13d.view)).toBeNull();
     });
 
     it("withholds conflicting plausible issue dates cleanly without guessing", () => {
@@ -541,7 +540,10 @@ describe("Phase 3G final cloud-fact safety gate", () => {
         PAY9;
       const base = groundNoticeFacts({ rawNoticeText: text, today: TODAY });
       expect(displayVerifiedAmount(base)).toBe(520);
-      expect(displayVerifiedIssueDate(base)).toBe("18 November 2026");
+      expect(displayVerifiedIssueDate(base)).toBeNull();
+      expect(
+        buildClosedCloudBrief({ view: base, responseGoal: "request_billing_review" }).payload.issueDate
+      ).toBeNull();
 
       const badVerifications = [
         null,
@@ -563,8 +565,8 @@ describe("Phase 3G final cloud-fact safety gate", () => {
 
       const badIssueVerifications = [
         null,
-        { ...base.issueDate.verification!, startOffset: null, endOffset: 80 },
-        { ...base.issueDate.verification!, startOffset: 21, endOffset: 37 }, // historical date
+        { startOffset: null, endOffset: 80, mode: "exact" as const },
+        { startOffset: 21, endOffset: 37, mode: "exact" as const },
       ];
 
       for (const verification of badIssueVerifications) {
