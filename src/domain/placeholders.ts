@@ -31,11 +31,12 @@ export function isCanonicalPlaceholder(token: string): boolean {
 
 /** Digits still attached to a canonical placeholder are an incomplete identifier. */
 export function hasPartialPlaceholderIdentifier(text: string): boolean {
+  const visible = text.normalize("NFKC").replace(/\p{Cf}/gu, "");
   const pattern = new RegExp(
-    `\\[(?:${BASE_PATTERN})(?:_[1-9]\\d*)?\\](?!\\s+[A-Za-z])\\s*[-/_.#:]?\\s*\\d`,
-    "i"
+    `\\[(?:${BASE_PATTERN})(?:_[1-9]\\d*)?\\](?:(?!\\s+\\p{L})\\s*[-/_.#:,+~*\u2044\u2215]?\\s*\\d|[\\p{L}\\p{N}])`,
+    "iu"
   );
-  return pattern.test(text);
+  return pattern.test(visible);
 }
 
 function isOpener(ch: string): boolean {

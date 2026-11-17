@@ -44,6 +44,21 @@ export interface PatternProjection {
   endAt: number[];
 }
 
+function projectedPiece(raw: string): string {
+  if (isRealDash(raw)) {
+    return "-";
+  }
+  const separator = projectedSeparator(raw);
+  if (separator) {
+    return separator;
+  }
+  const compatible = raw.normalize("NFKC");
+  if (compatible !== raw && /^[\p{L}\p{N}]+$/u.test(compatible)) {
+    return compatible;
+  }
+  return raw;
+}
+
 function isRealDash(raw: string): boolean {
   UNICODE_DASH.lastIndex = 0;
   const matched = UNICODE_DASH.test(raw);
@@ -73,7 +88,12 @@ export function projectIdentifierPattern(value: string): PatternProjection {
       index = next;
       continue;
     }
-    const piece = isRealDash(raw) ? "-" : projectedSeparator(raw) ?? raw;
+    if (/\p{M}/u.test(raw) && endAt.length > 0) {
+      endAt[endAt.length - 1] = next;
+      index = next;
+      continue;
+    }
+    const piece = projectedPiece(raw);
     for (let unit = 0; unit < piece.length; unit += 1) {
       text += piece[unit];
       startAt.push(index);
@@ -144,10 +164,26 @@ function projectedSeparator(raw: string): string | null {
       return "#";
     case "\uFF3F":
       return "_";
+    case "\u2044":
+    case "\u2215":
+    case "\uFF0F":
+      return "/";
+    case "\uFF0B":
+      return "+";
+    case "\uFF5E":
+    case "\u223C":
+      return "~";
+    case "\uFF0A":
+      return "*";
+    case "\uFF0C":
+      return ",";
     default:
       return null;
   }
 }
+
+/** Punctuation that also joins ordinary prose. A dictionary word beside it is not an account. */
+const PROSE_JOINERS = new Set([",", "+", "~", "*"]);
 
 const ORDINARY_YEAR_WORDS = new Set([
   "account",
@@ -193,6 +229,28 @@ export interface AccountTokenSpan {
   raw: string;
 }
 
+const IDENTIFIER_SEPARATOR = "[-/_.#:,+~*]";
+const TOKEN_EDGE_BEFORE = "(?<![\\p{L}\\p{M}\\p{N}_])";
+const TOKEN_EDGE_AFTER = "(?![\\p{L}\\p{M}\\p{N}_])";
+
+function isOrdinaryLabelWord(letters: string): boolean {
+  return isMonthName(letters) || ORDINARY_YEAR_WORDS.has(letters.toLowerCase());
+}
+
+/**
+ * A one- or two-digit tail is an identifier only when the letters are not
+ * ordinary notice vocabulary. Lowercase prose such as "pay12" stays.
+ */
+function skipShortUnlabelledTail(letters: string, digits: string, letterRaw: string): boolean {
+  if (digits.length >= 3) {
+    return false;
+  }
+  if (isOrdinaryLabelWord(letters)) {
+    return true;
+  }
+  return !/\p{Lu}/u.test(letterRaw.normalize("NFKC"));
+}
+
 /** Letter-digit references, including joined forms and the supported separators. */
 export function suspiciousAccountSpans(value: string): AccountTokenSpan[] {
   const projected = projectIdentifierPattern(value);
@@ -214,9 +272,16 @@ export function suspiciousAccountSpans(value: string): AccountTokenSpan[] {
       raw: value.slice(origin.start, origin.end),
     });
   };
-  const separated = /\b([A-Za-z]{2,12})([-/_.#:])(\d{3,12})\b/g;
+  const letterRaw = (start: number, length: number): string => {
+    const origin = mapProjectedSpan(projected, start, start + length);
+    return origin ? value.slice(origin.start, origin.end) : "";
+  };
+  const separated = new RegExp(
+    `${TOKEN_EDGE_BEFORE}(\\p{L}{2,12})(${IDENTIFIER_SEPARATOR})(\\d{1,12})${TOKEN_EDGE_AFTER}`,
+    "gu"
+  );
   for (const match of projected.text.matchAll(separated)) {
-    if (!match[1] || match[3] === undefined || match.index === undefined) {
+    if (!match[1] || !match[2] || match[3] === undefined || match.index === undefined) {
       continue;
     }
     if (match[2] === "-" && isMonthName(match[1])) {
@@ -225,9 +290,21 @@ export function suspiciousAccountSpans(value: string): AccountTokenSpan[] {
     if (isOrdinaryProseYear(match[1], match[3])) {
       continue;
     }
+    if (
+      PROSE_JOINERS.has(match[2]) &&
+      isOrdinaryLabelWord(match[1])
+    ) {
+      continue;
+    }
+    if (skipShortUnlabelledTail(match[1], match[3], letterRaw(match.index, match[1].length))) {
+      continue;
+    }
     push(match.index, match.index + match[0].length);
   }
-  const joined = /\b([A-Za-z]{2,12})(\d{3,12})\b/g;
+  const joined = new RegExp(
+    `${TOKEN_EDGE_BEFORE}(\\p{L}{2,12})(\\d{1,12})${TOKEN_EDGE_AFTER}`,
+    "gu"
+  );
   for (const match of projected.text.matchAll(joined)) {
     if (!match[1] || match[2] === undefined || match.index === undefined) {
       continue;
@@ -235,7 +312,91 @@ export function suspiciousAccountSpans(value: string): AccountTokenSpan[] {
     if (isOrdinaryProseYear(match[1], match[2])) {
       continue;
     }
+    if (skipShortUnlabelledTail(match[1], match[2], letterRaw(match.index, match[1].length))) {
+      continue;
+    }
     push(match.index, match.index + match[0].length);
+  }
+  const spaced = new RegExp(
+    `${TOKEN_EDGE_BEFORE}(\\p{Lu}{2,8})[ \\t]+(\\d{2,8})${TOKEN_EDGE_AFTER}`,
+    "gu"
+  );
+  for (const match of projected.text.matchAll(spaced)) {
+    if (!match[1] || match[2] === undefined || match.index === undefined) {
+      continue;
+    }
+    if (isOrdinaryLabelWord(match[1]) || isOrdinaryProseYear(match[1], match[2])) {
+      continue;
+    }
+    if (skipShortUnlabelledTail(match[1], match[2], letterRaw(match.index, match[1].length))) {
+      continue;
+    }
+    push(match.index, match.index + match[0].length);
+  }
+  return found;
+}
+
+const LABELLED_IDENTIFIER = new RegExp(
+  `${TOKEN_EDGE_BEFORE}(?:(?:account|tenancy|customer|meter)\\s*(?:reference|ref\\.?|number|no\\.?|id)|(?:invoice|payment)\\s*(?:reference|ref\\.?|number|no\\.?|id)|council\\s*tax\\s*(?:reference|ref\\.?|number|no\\.?|id)?|ref(?:erence)?)\\s*[:#.\\-]?\\s*`,
+  "giu"
+);
+
+const LABELLED_TOKEN =
+  /^(?:[\p{L}\p{N}]+(?:[ \t]*[-/_.#:,+~*][ \t]*[\p{L}\p{N}]+)+|\p{L}{1,12}\p{N}{1,12}|\p{N}{2,12}|\p{L}{1,12}[ \t]+\p{N}{1,12})/u;
+
+function readLabelledToken(text: string, start: number): { start: number; end: number } | null {
+  const match = LABELLED_TOKEN.exec(text.slice(start));
+  if (!match) {
+    return null;
+  }
+  const token = match[0];
+  if (!/\d/.test(token)) {
+    return null;
+  }
+  if (/^(?:19|20)\d{2}$/.test(token)) {
+    return null;
+  }
+  const end = start + token.length;
+  if (/^\d{1,4}$/.test(token)) {
+    const month = /^\s+(\p{L}+)/u.exec(text.slice(end));
+    if (month?.[1] && isMonthName(month[1])) {
+      return null;
+    }
+  }
+  const monthYear = /^(\p{L}+)[-/]((?:19|20)\d{2})$/u.exec(token);
+  if (monthYear?.[1] && monthYear[2] && isOrdinaryLabelWord(monthYear[1])) {
+    return null;
+  }
+  return { start, end };
+}
+
+/** A reference that follows an account, customer, meter, invoice, payment, or reference label. */
+export function labelledIdentifierSpans(value: string): AccountTokenSpan[] {
+  const projected = projectIdentifierPattern(value);
+  const found: AccountTokenSpan[] = [];
+  const seen = new Set<string>();
+  for (const match of projected.text.matchAll(LABELLED_IDENTIFIER)) {
+    if (match.index === undefined) {
+      continue;
+    }
+    const token = readLabelledToken(projected.text, match.index + match[0].length);
+    if (!token) {
+      continue;
+    }
+    const origin = mapProjectedSpan(projected, token.start, token.end);
+    if (!origin) {
+      continue;
+    }
+    const key = `${origin.start}:${origin.end}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    found.push({
+      start: origin.start,
+      end: origin.end,
+      raw: value.slice(origin.start, origin.end),
+    });
   }
   return found;
 }
@@ -243,7 +404,7 @@ export function suspiciousAccountSpans(value: string): AccountTokenSpan[] {
 /** A letter-digit token whose original span hid a format character inside it. */
 export function containsFormatJoinedAccountToken(value: string): boolean {
   const projected = projectIdentifierPattern(value);
-  const pattern = /\b[A-Z]{2,12}\d{3,12}\b/gi;
+  const pattern = new RegExp(`${TOKEN_EDGE_BEFORE}\\p{L}{2,12}\\d{3,12}${TOKEN_EDGE_AFTER}`, "giu");
   for (const match of projected.text.matchAll(pattern)) {
     const index = match.index ?? 0;
     const origin = mapProjectedSpan(projected, index, index + match[0].length);
@@ -263,7 +424,11 @@ export function containsFormatJoinedAccountToken(value: string): boolean {
  * letters to the digits count as the same token.
  */
 export function containsAlphanumericAccountReference(value: string): boolean {
-  return containsFormatJoinedAccountToken(value) || suspiciousAccountSpans(value).length > 0;
+  return (
+    containsFormatJoinedAccountToken(value) ||
+    suspiciousAccountSpans(value).length > 0 ||
+    labelledIdentifierSpans(value).length > 0
+  );
 }
 
 export interface IdentifierFold {
@@ -447,6 +612,100 @@ function mapFoldedMatch(folded: IdentifierFold, foldedStart: number, foldedEnd: 
   return { start, end };
 }
 
+const SALUTATION_GAP = "[\\t\\n\\r \\u00a0\\u202f\\u2000-\\u200a\\u3000]+";
+const ORDINARY_SALUTATION_WORDS = new Set([
+  "account",
+  "bill",
+  "billing",
+  "bills",
+  "council",
+  "customer",
+  "department",
+  "electricity",
+  "energy",
+  "gas",
+  "notice",
+  "service",
+  "supplier",
+  "support",
+  "tax",
+  "team",
+  "water",
+]);
+
+function bareSalutationWord(part: string): string {
+  return part.replace(/['’\-]/g, "");
+}
+
+/**
+ * A Dear/Mr/Mrs/Ms/Miss/Dr greeting with at least two name parts.
+ * A greeting made only of ordinary notice words, such as "Dear Energy Billing",
+ * is not a person. Names that are not in a greeting stay undetected.
+ */
+export function salutationNameSpans(value: string): AccountTokenSpan[] {
+  // A zero-width mark between the greeting and the name is a gap.
+  // The same mark inside a name still joins, so the fold below is unchanged.
+  const aligned = value.replace(
+    /((?:^|[^\p{L}\p{M}])(?:Dear|Mr|Mrs|Ms|Miss|Dr))[\u200B\u200C\uFEFF]+/giu,
+    (match, title: string) => `${title}${" ".repeat(match.length - title.length)}`
+  );
+  const folded = foldIdentifierText(aligned);
+  const pattern = new RegExp(
+    `${TOKEN_EDGE_BEFORE}(?:dear|mr|mrs|ms|miss|dr)${SALUTATION_GAP}((?:\\p{L}[\\p{L}\\p{M}'’\\-]*)(?:${SALUTATION_GAP}\\p{L}[\\p{L}\\p{M}'’\\-]*){1,2})${TOKEN_EDGE_AFTER}`,
+    "gu"
+  );
+  const found: AccountTokenSpan[] = [];
+  for (const match of folded.folded.matchAll(pattern)) {
+    const name = match[1];
+    if (!name || match.index === undefined) {
+      continue;
+    }
+    const parts = name.trim().split(new RegExp(SALUTATION_GAP, "u")).filter((part) => part.length > 0);
+    let kept = parts.length;
+    while (kept > 2 && ORDINARY_SALUTATION_WORDS.has(bareSalutationWord(parts[kept - 1] ?? ""))) {
+      kept -= 1;
+    }
+    const keptParts = parts.slice(0, kept);
+    const significant = keptParts.filter((part) => {
+      const bare = bareSalutationWord(part);
+      return bare.length >= 3 && !NAME_PARTICLES.has(bare);
+    });
+    if (significant.length === 0) {
+      continue;
+    }
+    if (significant.every((part) => ORDINARY_SALUTATION_WORDS.has(bareSalutationWord(part)))) {
+      continue;
+    }
+    let cursor = 0;
+    for (const part of keptParts) {
+      const at = name.indexOf(part, cursor);
+      if (at < 0) {
+        cursor = -1;
+        break;
+      }
+      cursor = at + part.length;
+    }
+    if (cursor <= 0) {
+      continue;
+    }
+    const nameStart = match.index + match[0].lastIndexOf(name);
+    const origin = mapFoldedMatch(folded, nameStart, nameStart + cursor);
+    if (!origin) {
+      continue;
+    }
+    found.push({
+      start: origin.start,
+      end: origin.end,
+      raw: value.slice(origin.start, origin.end),
+    });
+  }
+  return found;
+}
+
+export function containsPersonalSalutation(value: string): boolean {
+  return salutationNameSpans(value).length > 0;
+}
+
 function spanInsideDetectedAccount(
   span: OriginalSpan,
   accountOccurrences: readonly OriginalSpan[]
@@ -623,8 +882,22 @@ export function replacePersonalName(
  */
 export function identifierLeaks(text: string, rawId: string): boolean {
   const clean = rawId.trim();
-  if (clean.length < 3) {
+  if (clean.length < 2) {
     return false;
+  }
+  if (clean.length < 3) {
+    if (!/\d/.test(clean)) {
+      return false;
+    }
+    const needle = prepareForMatch(clean);
+    if (needle.length < 2) {
+      return false;
+    }
+    const pattern = new RegExp(
+      `${TOKEN_EDGE_BEFORE}${escapeRegExp(needle)}${TOKEN_EDGE_AFTER}`,
+      "u"
+    );
+    return pattern.test(prepareForMatch(text));
   }
   if (isPersonalName(clean)) {
     if (personalNameSpans(text, clean).length > 0) {

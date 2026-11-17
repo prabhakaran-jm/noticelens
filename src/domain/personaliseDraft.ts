@@ -1,4 +1,5 @@
 import { isCanonicalPlaceholder, listPlaceholderTokens } from "./placeholders";
+import { foldIdentifierText } from "./textNormalize";
 import type { LocalIdentifierMap } from "./types";
 
 export interface PlaceholderBinding {
@@ -36,12 +37,20 @@ export function applyPlaceholderBindings(
   bindings: readonly PlaceholderBinding[]
 ): { personalised: string; unresolvedPlaceholders: string[] } {
   const table = new Map<string, string>();
+  const blocked = new Set<string>();
   for (const binding of bindings) {
     const key = binding.placeholder.trim();
-    if (!isCanonicalPlaceholder(key) || table.has(key)) {
+    if (!isCanonicalPlaceholder(key) || binding.localValue.trim().length === 0) {
       continue;
     }
-    table.set(key, binding.localValue);
+    const existing = table.get(key);
+    if (existing === undefined) {
+      table.set(key, binding.localValue);
+      continue;
+    }
+    if (foldIdentifierText(existing).folded !== foldIdentifierText(binding.localValue).folded) {
+      blocked.add(key);
+    }
   }
 
   let cursor = 0;
@@ -60,7 +69,12 @@ export function applyPlaceholderBindings(
     }
     const token = cloudTemplate.slice(start, end + 1);
     const replacement = table.get(token);
-    if (isCanonicalPlaceholder(token) && replacement !== undefined && replacement.trim().length > 0) {
+    if (
+      isCanonicalPlaceholder(token) &&
+      !blocked.has(token) &&
+      replacement !== undefined &&
+      replacement.trim().length > 0
+    ) {
       personalised += replacement;
     } else {
       personalised += token;

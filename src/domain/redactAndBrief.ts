@@ -1,15 +1,17 @@
 import { readAmount } from "./amounts";
 import {
   containsAlphanumericAccountReference,
+  containsPersonalSalutation,
   findFoldedOccurrences,
+  foldIdentifierText,
   hasLongNumericIdentifier,
   identifierLeaks,
   isCalendarToken,
-  mapProjectedSpan,
+  labelledIdentifierSpans,
   meaningfulNameComponents,
+  salutationNameSpans,
   suspiciousAccountSpans,
   normalizeDashes,
-  projectIdentifierPattern,
   replaceNameComponent,
   replacePersonalName,
 } from "./textNormalize";
@@ -21,6 +23,8 @@ import { parseBillingWindow, parseCalendarDate } from "./dates";
 import {
   formatCanonicalPlaceholder,
   hasPartialPlaceholderIdentifier,
+  isCanonicalPlaceholder,
+  listPlaceholderTokens,
   type CanonicalPlaceholderBase,
 } from "./placeholders";
 import {
@@ -183,21 +187,6 @@ function digitCount(value: string): number {
   return value.replace(/\D/g, "").length;
 }
 
-function pushProjectedToken(
-  spans: Span[],
-  rawNoticeText: string,
-  projected: ReturnType<typeof projectIdentifierPattern>,
-  start: number,
-  length: number,
-  kind: LocalIdentifierKind
-): void {
-  const origin = mapProjectedSpan(projected, start, start + length);
-  if (!origin) {
-    return;
-  }
-  pushMatch(spans, kind, origin.start, rawNoticeText.slice(origin.start, origin.end));
-}
-
 function detectSpans(rawNoticeText: string): Span[] {
   const spans: Span[] = [];
   const normalized = normalizeDashes(rawNoticeText);
@@ -242,28 +231,14 @@ function detectSpans(rawNoticeText: string): Span[] {
     const kind: LocalIdentifierKind = /^(?:\+|0)/.test(rawValue.trim()) ? "phone" : "other";
     pushMatch(spans, kind, start, rawValue);
   }
-  const projected = projectIdentifierPattern(rawNoticeText);
-  const account =
-    /\b(?:Account|Tenancy|Customer|Council\s*Tax)\s*(?:reference|ref|number|no\.?)\s*[:#-]?\s*([A-Z0-9][A-Z0-9/-]{2,20})|\bRef(?:erence)?\s*[:#-]?\s*([A-Za-z]{2,12}-\d{3,12})/gi;
-  for (const match of projected.text.matchAll(account)) {
-    const token = match[1] ?? match[2];
-    if (!token || match.index === undefined) {
-      continue;
-    }
-    const tokenStart = match.index + match[0].lastIndexOf(token);
-    pushProjectedToken(spans, rawNoticeText, projected, tokenStart, token.length, "account_ref");
+  for (const token of labelledIdentifierSpans(rawNoticeText)) {
+    pushMatch(spans, "account_ref", token.start, token.raw);
   }
   for (const token of suspiciousAccountSpans(rawNoticeText)) {
     pushMatch(spans, "account_ref", token.start, token.raw);
   }
-  const salutation = /\bDear\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b/g;
-  for (const match of projected.text.matchAll(salutation)) {
-    const name = match[1];
-    if (!name || match.index === undefined) {
-      continue;
-    }
-    const nameStart = match.index + match[0].indexOf(name);
-    pushProjectedToken(spans, rawNoticeText, projected, nameStart, name.length, "recipient_name");
+  for (const token of salutationNameSpans(rawNoticeText)) {
+    pushMatch(spans, "recipient_name", token.start, token.raw);
   }
   for (const match of normalized.matchAll(nino)) {
     const start = match.index ?? -1;
@@ -301,7 +276,8 @@ function createPlaceholderAllocator(): (span: Span) => string {
   const counts = new Map<string, number>();
   const byRaw = new Map<string, string>();
   return (span) => {
-    const existing = byRaw.get(span.rawValue.toLowerCase());
+    const key = foldIdentifierText(span.rawValue).folded;
+    const existing = byRaw.get(key);
     if (existing) {
       span.placeholder = existing;
       return existing;
@@ -316,7 +292,7 @@ function createPlaceholderAllocator(): (span: Span) => string {
       family === "nino" ? "NINO" : PLACEHOLDER_BASE[span.kind];
     const placeholder = formatCanonicalPlaceholder(base, count);
     span.placeholder = placeholder;
-    byRaw.set(span.rawValue.toLowerCase(), placeholder);
+    byRaw.set(key, placeholder);
     return placeholder;
   };
 }
@@ -342,7 +318,7 @@ function residualPattern(text: string): string | null {
   if (/(?:\+44\s?\d{3,4}|\(?0\d{3,4}\)?)\s?\d{3}\s?\d{3,4}\b(?![\s-]*\d)/.test(visible)) {
     return "A telephone pattern remained in the structural brief";
   }
-  if (/\b(?:Dear|Mr|Mrs|Ms|Miss|Dr)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b/.test(visible)) {
+  if (containsPersonalSalutation(visible)) {
     return "A personal name pattern remained in the structural brief";
   }
   if (
@@ -396,6 +372,13 @@ export function redactAndBuildBrief(input: RedactAndBriefInput): RedactAndBriefR
       excludedUnverifiedQuotes
     );
   }
+  if (listPlaceholderTokens(input.rawNoticeText).some((token) => isCanonicalPlaceholder(token))) {
+    return failure(
+      ["The notice contains a placeholder-like token, so redaction markers cannot be separated from the source"],
+      emptyMap(),
+      excludedUnverifiedQuotes
+    );
+  }
 
   const detected = detectSpans(input.rawNoticeText);
   for (const extra of input.extraKnownIdentifiers ?? []) {
@@ -436,8 +419,10 @@ export function redactAndBuildBrief(input: RedactAndBriefInput): RedactAndBriefR
   const replacements: Replacement[] = [];
   const seenRaw = new Set<string>();
   const remember = (rawValue: string, placeholder: string, wholeWord = false) => {
-    const key = rawValue.toLowerCase();
-    const existing = replacements.find((item) => item.rawValue.toLowerCase() === key);
+    const key = foldIdentifierText(rawValue).folded;
+    const existing = replacements.find(
+      (item) => foldIdentifierText(item.rawValue).folded === key
+    );
     if (existing) {
       if (wholeWord) {
         existing.wholeWord = true;

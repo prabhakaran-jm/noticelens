@@ -247,10 +247,10 @@ describe("review probes — unicode dashes, name parts, long numbers, delivery, 
   });
 
   it.each([
-    ["Ref SMITH-44", "Ref SMITH-44", "SMITH-44", "John Smith", "Ref [RECIPIENT_NAME]-44"],
-    ["Smith/7", "See Smith/7 before you reply.", "Smith/7", "John Smith", "[RECIPIENT_NAME]/7"],
-    ["Sarah-1", "See Sarah-1 before you reply.", "Sarah-1", "Sarah Example", "[RECIPIENT_NAME]-1"],
-    ["Example-12", "See Example-12 before you reply.", "Example-12", "Sarah Example", "[RECIPIENT_NAME]-12"],
+    ["Ref SMITH-44", "Ref SMITH-44", "SMITH-44", "John Smith", "Ref [ACCOUNT_REF]"],
+    ["Smith/7", "See Smith/7 before you reply.", "Smith/7", "John Smith", "See [ACCOUNT_REF] before you reply."],
+    ["Sarah-1", "See Sarah-1 before you reply.", "Sarah-1", "Sarah Example", "See [ACCOUNT_REF] before you reply."],
+    ["Example-12", "See Example-12 before you reply.", "Example-12", "Sarah Example", "See [ACCOUNT_REF] before you reply."],
   ])(
     "R5-1 keeps %s from escaping redaction and the final guard",
     (_label, line, token, recipient, redactedToken) => {
@@ -284,7 +284,7 @@ describe("review probes — unicode dashes, name parts, long numbers, delivery, 
           clausePayload(`Please review ${redactedToken} before the response date.`),
           { forbiddenIdentifiers: [recipient, ...forbidden] }
         )
-      ).toThrow(/partial identifier/);
+      ).not.toThrow();
 
       const edited = {
         ...result.structuralBrief,
