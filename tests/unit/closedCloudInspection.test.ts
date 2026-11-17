@@ -352,6 +352,7 @@ describe("production v2 inspection and approval", () => {
     const approval = recordClosedBriefApproval(serialized, serialized, 4, inspection.guardOptions);
     expect(approval.serialized).toBe(serialized);
     expect(approval.identifierContext).toBe(identifierContextKey(inspection.guardOptions));
+    expect(approval.boundContext).toBeDefined();
     expect(
       privacyApprovalView({
         serialized,
@@ -359,8 +360,17 @@ describe("production v2 inspection and approval", () => {
         approval,
         generation: 4,
         guardOptions: inspection.guardOptions,
+        context: approval.boundContext,
       }).matchesCurrentPayload
     ).toBe(true);
+    expect(
+      privacyApprovalView({
+        serialized,
+        limitations: inspection.limitations,
+        approval,
+        generation: 4,
+      }).matchesCurrentPayload
+    ).toBe(false);
     expect(
       privacyApprovalView({
         serialized,

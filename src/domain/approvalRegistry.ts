@@ -17,16 +17,25 @@ import {
  * In-memory approval authority for one page session.
  *
  * Lifecycle: NO_APPROVAL → PENDING_APPROVAL → APPROVED → INVALIDATED.
- * An invalidated record stays invalidated. Matching bytes do not approve it
- * again. The registry does not read storage, does not send, and does not
- * change whether a grounded fact is verified.
+ * A future submission consumes one approved handle: APPROVED → CONSUMED.
+ * Invalidated and consumed are terminal. Matching bytes do not approve
+ * them again, and nothing restores a consumed handle after a failed send.
+ * The strong list keeps current pending and approved records. Terminal
+ * records can be released. A held handle still reports its terminal status.
+ * The registry does not read storage, does not send, and does not change
+ * whether a grounded fact is verified.
+ *
+ * `isPayloadApproved` is not send authorisation. It is true only when exactly
+ * one approved record matches. A future send must pass one handle to
+ * `authoriseExactApproval`.
  */
 
 export type ApprovalLifecycle =
   | "NO_APPROVAL"
   | "PENDING_APPROVAL"
   | "APPROVED"
-  | "INVALIDATED";
+  | "INVALIDATED"
+  | "CONSUMED";
 
 export type ApprovalSchema = "noticelens.cloud-brief.v2" | "noticelens.cloud-brief.v1";
 
@@ -55,7 +64,7 @@ export type RegisterResult =
   | { readonly ok: false; readonly lifecycle: "NO_APPROVAL"; readonly reason: ApprovalRejection };
 
 interface StoredRecord {
-  status: "PENDING_APPROVAL" | "APPROVED" | "INVALIDATED";
+  status: "PENDING_APPROVAL" | "APPROVED" | "INVALIDATED" | "CONSUMED";
   schema: ApprovalSchema;
   canonicalBytes: string;
   noticeGeneration: number;
@@ -67,15 +76,52 @@ interface StoredRecord {
 }
 
 const handleBrand = Symbol("noticelens.approval-handle");
-const records = new WeakMap<object, StoredRecord>();
-const handles: object[] = [];
+
+interface RegistryState {
+  records: WeakMap<object, StoredRecord>;
+  handles: object[];
+}
+
+function freshRegistryState(): RegistryState {
+  return { records: new WeakMap(), handles: [] };
+}
+
+let registryState = freshRegistryState();
 
 const OPAQUE_ID = /^(?:ie-\d+|idctx-\d+|legacy-doc-\d+|sess-\d+-doc-\d+)$/;
 const RESPONSE_GOALS = new Set<string>(ALLOWED_RESPONSE_GOALS);
 const CIRCUMSTANCE_FLAGS = new Set<string>(ALLOWED_CIRCUMSTANCE_FLAGS);
 
-export function resetApprovalRegistryForTests(): void {
-  handles.length = 0;
+/**
+ * Test isolation only. Replaces the registry so a discarded handle cannot
+ * become authoritative again. Application code and any future send path
+ * must not call this.
+ */
+export const approvalRegistryTestIsolation = {
+  reset(): void {
+    registryState = freshRegistryState();
+  },
+};
+
+export function retainedApprovalCount(): number {
+  return registryState.handles.length;
+}
+
+export function activeApprovalCount(): number {
+  return registryState.handles.filter((handle) => {
+    const record = registryState.records.get(handle);
+    return record?.status === "PENDING_APPROVAL" || record?.status === "APPROVED";
+  }).length;
+}
+
+/** Drops invalidated and consumed records from the strong list. A held handle still resolves to its terminal status. */
+export function releaseInvalidatedApprovals(): number {
+  const before = registryState.handles.length;
+  registryState.handles = registryState.handles.filter((handle) => {
+    const record = registryState.records.get(handle);
+    return record !== undefined && record.status !== "INVALIDATED" && record.status !== "CONSUMED";
+  });
+  return before - registryState.handles.length;
 }
 
 function lookup(handle: unknown): StoredRecord | null {
@@ -85,7 +131,7 @@ function lookup(handle: unknown): StoredRecord | null {
   if (!Object.prototype.hasOwnProperty.call(handle, handleBrand)) {
     return null;
   }
-  return records.get(handle) ?? null;
+  return registryState.records.get(handle) ?? null;
 }
 
 function flagsKey(flags: readonly CircumstanceFlag[]): string {
@@ -291,8 +337,8 @@ export function registerApprovablePayload(binding: ApprovalBinding): RegisterRes
     enumerable: true,
   });
   Object.freeze(handle);
-  records.set(handle, record);
-  handles.push(handle);
+  registryState.records.set(handle, record);
+  registryState.handles.push(handle);
   return { ok: true, handle: handle as ApprovalHandle, lifecycle: "PENDING_APPROVAL" };
 }
 
@@ -310,22 +356,47 @@ export function approvePending(handle: unknown, binding: ApprovalBinding): boole
   if (record.status !== "PENDING_APPROVAL") {
     return false;
   }
+  for (const other of registryState.handles) {
+    if (other === handle) {
+      continue;
+    }
+    const existing = registryState.records.get(other);
+    if (existing && existing.status === "APPROVED" && matches(existing, normalized.value)) {
+      return false;
+    }
+  }
   record.status = "APPROVED";
   return true;
 }
 
+/** True only when this handle is the approved record for this exact binding. */
+export function isHandleApproved(handle: unknown, binding: ApprovalBinding): boolean {
+  const record = lookup(handle);
+  const normalized = normalize(binding);
+  if (!record || !normalized.ok || record.status !== "APPROVED") {
+    return false;
+  }
+  return matches(record, normalized.value);
+}
+
+/**
+ * Not send authorisation. True only when exactly one approved record matches.
+ * Two matches are ambiguous and fail closed. A future send must call
+ * `authoriseExactApproval` with the specific handle.
+ */
 export function isPayloadApproved(binding: ApprovalBinding): boolean {
   const normalized = normalize(binding);
   if (!normalized.ok) {
     return false;
   }
-  for (const handle of handles) {
-    const record = records.get(handle);
+  let approved = 0;
+  for (const handle of registryState.handles) {
+    const record = registryState.records.get(handle);
     if (record && record.status === "APPROVED" && matches(record, normalized.value)) {
-      return true;
+      approved += 1;
     }
   }
-  return false;
+  return approved === 1;
 }
 
 export function bindingLifecycle(binding: ApprovalBinding): ApprovalLifecycle {
@@ -333,21 +404,27 @@ export function bindingLifecycle(binding: ApprovalBinding): ApprovalLifecycle {
   if (!normalized.ok) {
     return "NO_APPROVAL";
   }
+  let approved = 0;
   let sawPending = false;
   let sawInvalidated = false;
-  for (const handle of handles) {
-    const record = records.get(handle);
+  for (const handle of registryState.handles) {
+    const record = registryState.records.get(handle);
     if (!record || !matches(record, normalized.value)) {
       continue;
     }
     if (record.status === "APPROVED") {
-      return "APPROVED";
-    }
-    if (record.status === "PENDING_APPROVAL") {
+      approved += 1;
+    } else if (record.status === "PENDING_APPROVAL") {
       sawPending = true;
-    } else {
+    } else if (record.status === "INVALIDATED") {
       sawInvalidated = true;
     }
+  }
+  if (approved === 1) {
+    return "APPROVED";
+  }
+  if (approved > 1) {
+    return "NO_APPROVAL";
   }
   if (sawPending) {
     return "PENDING_APPROVAL";
@@ -362,21 +439,64 @@ export function approvalLifecycle(handle: unknown): ApprovalLifecycle {
   return lookup(handle)?.status ?? "NO_APPROVAL";
 }
 
+export type AuthorisationRejection =
+  | "missing-handle"
+  | "stale-handle"
+  | "invalidated"
+  | "mismatched"
+  | "already-consumed"
+  | "not-approved";
+
+export type AuthorisationResult = { readonly ok: true } | { readonly ok: false; readonly reason: AuthorisationRejection };
+
+/**
+ * Consumes one approved handle for one exact binding. Success is single-use.
+ * There is no restore. If a later network request fails, this handle stays
+ * consumed and a new submission requires a new explicit approval.
+ * This does not send and does not open a network request.
+ */
+export function authoriseExactApproval(handle: unknown, binding: ApprovalBinding): AuthorisationResult {
+  const record = lookup(handle);
+  if (!record) {
+    return { ok: false, reason: "missing-handle" };
+  }
+  if (record.status === "CONSUMED") {
+    return { ok: false, reason: "already-consumed" };
+  }
+  if (record.status === "INVALIDATED") {
+    return { ok: false, reason: "invalidated" };
+  }
+  const normalized = normalize(binding);
+  if (!normalized.ok || !matches(record, normalized.value)) {
+    return { ok: false, reason: record.status === "APPROVED" ? "mismatched" : "stale-handle" };
+  }
+  if (record.status !== "APPROVED") {
+    return { ok: false, reason: "not-approved" };
+  }
+  record.status = "CONSUMED";
+  registryState.handles = registryState.handles.filter((item) => item !== handle);
+  return { ok: true };
+}
+
 export function revokeApproval(handle: unknown): boolean {
   const record = lookup(handle);
-  if (!record || record.status === "INVALIDATED") {
+  if (!record || record.status === "INVALIDATED" || record.status === "CONSUMED") {
     return false;
   }
   record.status = "INVALIDATED";
   return true;
 }
 
-/** Drops every pending or approved record. Invalidated records stay invalidated. */
+/**
+ * Drops every pending or approved record to invalidated, then releases
+ * terminal records from the strong list. A held handle stays invalidated.
+ */
 export function invalidateActiveApprovals(): void {
-  for (const handle of handles) {
-    const record = records.get(handle);
-    if (record && record.status !== "INVALIDATED") {
+  for (const handle of registryState.handles) {
+    const record = registryState.records.get(handle);
+    if (record && record.status !== "INVALIDATED" && record.status !== "CONSUMED") {
       record.status = "INVALIDATED";
     }
   }
+  releaseInvalidatedApprovals();
 }

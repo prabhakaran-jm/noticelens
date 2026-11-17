@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CLOUD_SUBMISSION_ENABLED, requestCloudSubmission } from "../../src/adapters/cloudApprovalSession";
@@ -272,5 +273,60 @@ describe("production approval registry", () => {
     expect(readFileSync("src/adapters/cloudApprovalSession.ts", "utf8")).toContain(
       "export const CLOUD_SUBMISSION_ENABLED = false as const;"
     );
+  });
+
+  it("keeps one approval across a strict remount of effects and does not restore it after an edit", async () => {
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    openAndApprove();
+    expect(screen.getByTestId("privacy-approved")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review privacy approval" }));
+    expect(screen.getByTestId("privacy-approved")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    setNotice(`${original}\nKeeper token JONES-1001`);
+    await advance(300);
+    fireEvent.click(screen.getByTestId("nav-reply"));
+    const sameBytes = replyJson();
+    expect(sameBytes.startsWith("{")).toBe(true);
+    expect(screen.queryByTestId("privacy-current")).not.toBeInTheDocument();
+    setNotice(original);
+    await advance(300);
+    fireEvent.click(screen.getByTestId("nav-reply"));
+    expect(replyJson()).toBe(sameBytes);
+    expect(screen.queryByTestId("privacy-current")).not.toBeInTheDocument();
+    openAndApprove();
+    expect(screen.getByTestId("privacy-approved")).toBeInTheDocument();
+    expect(screen.getByTestId("cloud-send-button")).toBeDisabled();
+    expect(network).toEqual([]);
+  });
+
+  it("settles a goal and checkbox change made inside the debounce window as a new unapproved payload", async () => {
+    await boot();
+    openAndApprove();
+    const approved = (screen.getByTestId("privacy-exact-json").textContent ?? "").trim();
+    setNotice(`${original} `);
+    await advance(100);
+    fireEvent.click(screen.getByTestId("nav-plan"));
+    fireEvent.change(screen.getByLabelText("What you want the reply to ask"), {
+      target: { value: "request_breakdown_and_hold" },
+    });
+    fireEvent.click(screen.getByRole("checkbox", { name: "The usage period may be longer than 12 months" }));
+    fireEvent.click(screen.getByTestId("nav-reply"));
+    expect(replyJson()).toBe("No exact payload is available.");
+    await advance(300);
+    const settled = replyJson();
+    expect(settled).toContain("request_breakdown_and_hold");
+    expect(settled).toContain("usage_billed_over_12_months");
+    expect(settled).not.toBe(approved);
+    expect(screen.queryByTestId("privacy-current")).not.toBeInTheDocument();
+    expect(screen.getByTestId("cloud-send-button")).toBeDisabled();
   });
 });

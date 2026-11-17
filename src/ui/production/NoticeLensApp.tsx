@@ -13,10 +13,12 @@ import {
   approvalBindingsEqual,
   approvePending,
   invalidateActiveApprovals,
-  isPayloadApproved,
+  isHandleApproved,
   registerApprovablePayload,
+  releaseInvalidatedApprovals,
   revokeApproval,
   type ApprovalBinding,
+  type ApprovalHandle,
 } from "../../domain/approvalRegistry";
 import { groundNoticeFacts } from "../../adapters/groundNoticeFacts";
 import { compareNoticeTexts } from "../../domain/compareNotices";
@@ -55,7 +57,7 @@ export function NoticeLensApp() {
   const [responseGoal, setResponseGoal] = useState<ResponseGoal>("request_billing_review");
   const [flags, setFlags] = useState<CircumstanceFlag[]>([]);
   const [privacyOpen, setPrivacyOpen] = useState(false);
-  const [approvalEpoch, setApprovalEpoch] = useState(0);
+  const [activeHandle, setActiveHandle] = useState<ApprovalHandle | null>(null);
   const [editGeneration, setEditGeneration] = useState(0);
   const [extractionGeneration, setExtractionGeneration] = useState(0);
   const [documentEpoch, setDocumentEpoch] = useState(0);
@@ -66,12 +68,17 @@ export function NoticeLensApp() {
   const noticeTextRef = useRef(originalText);
   const generationRef = useRef(0);
   const requestIdRef = useRef(0);
+  const liveBindingRef = useRef<ApprovalBinding | null>(null);
+  const dropApproval = () => {
+    invalidateActiveApprovals();
+    setActiveHandle(null);
+  };
   const bumpGeneration = () => {
     generationRef.current += 1;
     setEditGeneration(generationRef.current);
   };
   const replaceNoticeText = (text: string) => {
-    invalidateActiveApprovals();
+    dropApproval();
     noticeTextRef.current = normalizeNewlines(text);
     setOriginalText(noticeTextRef.current);
     setExtraction(null);
@@ -134,14 +141,25 @@ export function NoticeLensApp() {
     });
   }, [settledText, originalText, grounded, responseGoal, flags]);
   const identifierKey = identifierContextKey(inspection.guardOptions);
-  const identifierWatch = useRef<{ key: string; epoch: number } | null>(null);
-  if (identifierWatch.current === null) {
-    identifierWatch.current = { key: identifierKey, epoch: 1 };
-  } else if (identifierWatch.current.key !== identifierKey) {
-    identifierWatch.current = { key: identifierKey, epoch: identifierWatch.current.epoch + 1 };
-    invalidateActiveApprovals();
+  const [identifierEpoch, setIdentifierEpoch] = useState(1);
+  const [trackedIdentifierKey, setTrackedIdentifierKey] = useState(identifierKey);
+  const identifierChanging = trackedIdentifierKey !== identifierKey;
+  if (identifierChanging) {
+    setTrackedIdentifierKey(identifierKey);
+    setIdentifierEpoch((epoch) => epoch + 1);
   }
-  const identifierEpoch = identifierWatch.current.epoch;
+  const seenIdentifierKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (seenIdentifierKey.current === null) {
+      seenIdentifierKey.current = trackedIdentifierKey;
+      return;
+    }
+    if (seenIdentifierKey.current !== trackedIdentifierKey) {
+      seenIdentifierKey.current = trackedIdentifierKey;
+      invalidateActiveApprovals();
+      setActiveHandle(null);
+    }
+  }, [trackedIdentifierKey]);
   const inspectionSettled = settledText === originalText && inspection.exactSerialized !== null;
   const approvalBinding: ApprovalBinding | null = inspectionSettled
     ? {
@@ -155,8 +173,13 @@ export function NoticeLensApp() {
         documentContextId: `${sessionNonce}-doc-${documentEpoch}`,
       }
     : null;
+  liveBindingRef.current = approvalBinding;
   const privacy = useMemo<PrivacyApprovalView>(() => {
-    const approved = approvalBinding !== null && approvalEpoch >= 0 && isPayloadApproved(approvalBinding);
+    const approved =
+      !identifierChanging &&
+      approvalBinding !== null &&
+      activeHandle !== null &&
+      isHandleApproved(activeHandle, approvalBinding);
     return {
       serialized: inspection.exactSerialized,
       limitations: inspection.limitations,
@@ -165,7 +188,7 @@ export function NoticeLensApp() {
       cloudSendEnabled: false,
       blockedReason: CLOUD_SUBMISSION_BLOCKED_REASON,
     };
-  }, [approvalBinding, approvalEpoch, inspection.exactSerialized, inspection.limitations]);
+  }, [activeHandle, approvalBinding, identifierChanging, inspection.exactSerialized, inspection.limitations]);
   const session = useMemo(
     () =>
       createCloudApprovalSession({
@@ -234,7 +257,7 @@ export function NoticeLensApp() {
                   setReceipts((current) => [...current, receipt]);
                   setExtraction(record.output);
                   setExtractionGeneration((current) => current + 1);
-                  invalidateActiveApprovals();
+                  dropApproval();
                   bumpGeneration();
                 })
                 .catch((error: unknown) => {
@@ -261,13 +284,13 @@ export function NoticeLensApp() {
             identifiers={identifiers}
             responseGoal={responseGoal}
             onResponseGoal={(goal) => {
-              invalidateActiveApprovals();
+              dropApproval();
               setResponseGoal(goal);
               bumpGeneration();
             }}
             flags={flags}
             onFlags={(next) => {
-              invalidateActiveApprovals();
+              dropApproval();
               setFlags(next);
               bumpGeneration();
             }}
@@ -286,7 +309,7 @@ export function NoticeLensApp() {
             originalText={originalText}
             revisedText={revisedText}
             onRevisedText={(text) => {
-              invalidateActiveApprovals();
+              dropApproval();
               setDocumentEpoch((current) => current + 1);
               setRevisedText(normalizeNewlines(text));
               bumpGeneration();
@@ -310,12 +333,11 @@ export function NoticeLensApp() {
           actionLabels={actionLabels}
           onClose={() => setPrivacyOpen(false)}
           onApprove={(serialized) => {
-            const binding = approvalBinding;
+            const binding = liveBindingRef.current;
             if (
               binding === null ||
-              inspection.exactSerialized === null ||
-              serialized !== inspection.exactSerialized ||
-              serialized !== binding.canonicalBytes
+              serialized !== binding.canonicalBytes ||
+              generationRef.current !== binding.noticeGeneration
             ) {
               return;
             }
@@ -323,20 +345,27 @@ export function NoticeLensApp() {
             if (!registered.ok) {
               return;
             }
-            const latest = approvalBinding;
+            const latest = liveBindingRef.current;
             if (
-              generationRef.current !== binding.noticeGeneration ||
               latest === null ||
+              latest.canonicalBytes !== serialized ||
+              latest.noticeGeneration !== binding.noticeGeneration ||
+              latest.identifierContextId !== binding.identifierContextId ||
+              latest.documentContextId !== binding.documentContextId ||
+              latest.extractionGeneration !== binding.extractionGeneration ||
+              latest.responseGoal !== binding.responseGoal ||
               !approvalBindingsEqual(latest, binding)
             ) {
               revokeApproval(registered.handle);
+              releaseInvalidatedApprovals();
               return;
             }
-            if (!approvePending(registered.handle, binding)) {
+            if (!approvePending(registered.handle, latest)) {
               revokeApproval(registered.handle);
+              releaseInvalidatedApprovals();
               return;
             }
-            setApprovalEpoch((current) => current + 1);
+            setActiveHandle(registered.handle);
           }}
         />
       ) : null}

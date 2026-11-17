@@ -11,9 +11,11 @@ import {
 import { CloudSendSafetyError } from "../domain/cloudSendApproval";
 import {
   approvalLifecycle,
+  approvalRegistryTestIsolation,
   approvePending,
+  authoriseExactApproval,
   registerApprovablePayload,
-  resetApprovalRegistryForTests,
+  releaseInvalidatedApprovals,
   revokeApproval,
   type ApprovalBinding,
   type ApprovalHandle,
@@ -39,6 +41,16 @@ export interface UserPayloadApproval {
   /** Sorted identifier list captured with this approval. Not notice prose. */
   readonly identifierContext: string;
   readonly cloudSendEnabled: false;
+  /** Context captured at approval. A later check must pass the current context; this copy is not authority by itself. */
+  readonly boundContext?: ApprovalCheckContext;
+}
+
+export interface ApprovalCheckContext {
+  readonly guardOptions: CloudPayloadGuardOptions;
+  readonly responseGoal: ResponseGoal;
+  readonly circumstanceFlags: readonly CircumstanceFlag[];
+  readonly extractionGeneration: number;
+  readonly documentContextId: string;
 }
 
 export interface PrivacyApprovalView {
@@ -59,8 +71,7 @@ const opaqueByIdentifierKey = new Map<string, string>();
 interface ApprovalLink {
   handle: ApprovalHandle;
   identifierKey: string;
-  canonicalBytes: string;
-  noticeGeneration: number;
+  binding: ApprovalBinding;
 }
 
 const links = new Map<string, ApprovalLink>();
@@ -72,7 +83,7 @@ export function resetUserApprovalStateForTests(): void {
   consumedApprovalIds.clear();
   opaqueByIdentifierKey.clear();
   links.clear();
-  resetApprovalRegistryForTests();
+  approvalRegistryTestIsolation.reset();
 }
 
 function opaqueIdentifierContext(key: string): string {
@@ -99,7 +110,8 @@ function retainApproved(input: {
   identifierKey: string;
   responseGoal: ResponseGoal;
   circumstanceFlags: readonly CircumstanceFlag[];
-}): void {
+  guardOptions: CloudPayloadGuardOptions;
+}): ApprovalCheckContext {
   legacyDocumentCounter += 1;
   const binding: ApprovalBinding = {
     schema: input.schema,
@@ -115,15 +127,22 @@ function retainApproved(input: {
   if (!registered.ok || !approvePending(registered.handle, binding)) {
     if (registered.ok) {
       revokeApproval(registered.handle);
+      releaseInvalidatedApprovals();
     }
     throw new CloudSendSafetyError("Approval payload failed canonical validation");
   }
   links.set(input.id, {
     handle: registered.handle,
     identifierKey: input.identifierKey,
-    canonicalBytes: input.canonicalBytes,
-    noticeGeneration: input.noticeGeneration,
+    binding,
   });
+  return {
+    guardOptions: input.guardOptions,
+    responseGoal: binding.responseGoal,
+    circumstanceFlags: [...binding.circumstanceFlags],
+    extractionGeneration: binding.extractionGeneration,
+    documentContextId: binding.documentContextId,
+  };
 }
 
 function collectStrings(value: unknown, found: string[]): void {
@@ -216,7 +235,7 @@ export function recordUserPayloadApproval(
   const id = `user-approval-${nextApprovalId}`;
   nextApprovalId += 1;
   const identifierContext = identifierContextKey(guardOptions);
-  retainApproved({
+  const boundContext = retainApproved({
     id,
     schema: "noticelens.cloud-brief.v1",
     canonicalBytes: canonical.serialized,
@@ -224,6 +243,7 @@ export function recordUserPayloadApproval(
     identifierKey: identifierContext,
     responseGoal: canonical.payload.responseGoal,
     circumstanceFlags: canonical.payload.circumstanceFlags ?? [],
+    guardOptions,
   });
   return {
     kind: "user-canonical-snapshot",
@@ -233,6 +253,7 @@ export function recordUserPayloadApproval(
     guardOptions,
     identifierContext,
     cloudSendEnabled: false,
+    boundContext,
   };
 }
 
@@ -278,7 +299,7 @@ export function recordClosedBriefApproval(
   const id = `user-approval-${nextApprovalId}`;
   nextApprovalId += 1;
   const identifierContext = identifierContextKey(guardOptions);
-  retainApproved({
+  const boundContext = retainApproved({
     id,
     schema: "noticelens.cloud-brief.v2",
     canonicalBytes: canonical.serialized,
@@ -286,6 +307,7 @@ export function recordClosedBriefApproval(
     identifierKey: identifierContext,
     responseGoal: canonical.payload.responseGoal,
     circumstanceFlags: canonical.payload.circumstanceFlags ?? [],
+    guardOptions,
   });
   return {
     kind: "user-canonical-snapshot",
@@ -295,26 +317,83 @@ export function recordClosedBriefApproval(
     guardOptions,
     identifierContext,
     cloudSendEnabled: false,
+    boundContext,
   };
 }
 
+function explicitIdentifierKey(options: CloudPayloadGuardOptions | undefined): string | null {
+  if (!options || !Array.isArray(options.forbiddenIdentifiers)) {
+    return null;
+  }
+  return identifierContextKey(options);
+}
+
+function flagsKey(flags: readonly CircumstanceFlag[]): string {
+  return [...flags].sort().join("\n");
+}
+
+function completeCheckContext(context: ApprovalCheckContext | undefined): ApprovalCheckContext | null {
+  if (!context) {
+    return null;
+  }
+  const identifierKey = explicitIdentifierKey(context.guardOptions);
+  if (identifierKey === null) {
+    return null;
+  }
+  if (typeof context.responseGoal !== "string" || context.responseGoal.length === 0) {
+    return null;
+  }
+  if (!Array.isArray(context.circumstanceFlags)) {
+    return null;
+  }
+  if (
+    typeof context.extractionGeneration !== "number" ||
+    !Number.isSafeInteger(context.extractionGeneration) ||
+    context.extractionGeneration < 0
+  ) {
+    return null;
+  }
+  if (typeof context.documentContextId !== "string" || context.documentContextId.length === 0) {
+    return null;
+  }
+  for (const flag of context.circumstanceFlags) {
+    if (typeof flag !== "string") {
+      return null;
+    }
+  }
+  return context;
+}
+
 /**
- * True only for the same generation, the same canonical bytes, and an unused id.
- * Reverting an edit does not restore a match, because the generation has moved on.
+ * True only when the unused approval handle is still approved for these exact
+ * bytes and the full current context. Omitted or partial context fails closed.
+ * Matching JSON bytes alone is not approval.
  */
 export function approvalStillMatches(
   approval: UserPayloadApproval | null,
   serialized: string | null,
-  generation: number
+  generation: number,
+  context?: ApprovalCheckContext
 ): boolean {
-  if (!approval || serialized === null || consumedApprovalIds.has(approval.id)) {
+  const current = completeCheckContext(context);
+  if (!approval || serialized === null || !current || consumedApprovalIds.has(approval.id)) {
     return false;
   }
   const link = links.get(approval.id);
   if (!link || approvalLifecycle(link.handle) !== "APPROVED") {
     return false;
   }
-  return link.canonicalBytes === serialized && link.noticeGeneration === generation;
+  const presentedKey = explicitIdentifierKey(current.guardOptions);
+  return (
+    link.binding.canonicalBytes === serialized &&
+    link.binding.noticeGeneration === generation &&
+    presentedKey === link.identifierKey &&
+    approval.identifierContext === link.identifierKey &&
+    current.responseGoal === link.binding.responseGoal &&
+    flagsKey(current.circumstanceFlags) === flagsKey(link.binding.circumstanceFlags) &&
+    current.extractionGeneration === link.binding.extractionGeneration &&
+    current.documentContextId === link.binding.documentContextId
+  );
 }
 
 export function privacyApprovalView(input: {
@@ -323,15 +402,16 @@ export function privacyApprovalView(input: {
   approval: UserPayloadApproval | null;
   generation: number;
   guardOptions?: CloudPayloadGuardOptions;
+  context?: ApprovalCheckContext;
 }): PrivacyApprovalView {
+  const presentedGuard = explicitIdentifierKey(input.guardOptions);
+  const contextGuard = explicitIdentifierKey(input.context?.guardOptions);
+  const guardsAgree = presentedGuard !== null && contextGuard !== null && presentedGuard === contextGuard;
   const link = input.approval ? links.get(input.approval.id) : undefined;
-  const contextMatches =
-    input.guardOptions === undefined ||
-    (link !== undefined && link.identifierKey === identifierContextKey(input.guardOptions));
   const identityMatches = link !== undefined && input.approval?.identifierContext === link.identifierKey;
   const matches =
-    approvalStillMatches(input.approval, input.serialized, input.generation) &&
-    contextMatches &&
+    guardsAgree &&
+    approvalStillMatches(input.approval, input.serialized, input.generation, input.context) &&
     (input.approval === null || identityMatches);
   return {
     serialized: input.serialized,
@@ -363,10 +443,10 @@ export function requestApprovedCloudSend(approval: UserPayloadApproval): never {
       link !== undefined &&
       approvalLifecycle(link.handle) === "APPROVED" &&
       canonical.serialized === approval.serialized &&
-      canonical.serialized === link.canonicalBytes &&
+      canonical.serialized === link.binding.canonicalBytes &&
       presentedKey === link.identifierKey &&
       approval.identifierContext === link.identifierKey &&
-      approval.generation === link.noticeGeneration;
+      approval.generation === link.binding.noticeGeneration;
   } catch (error) {
     if (!(error instanceof CloudPayloadValidationError) && !(error instanceof SyntaxError)) {
       throw error;
@@ -374,10 +454,17 @@ export function requestApprovedCloudSend(approval: UserPayloadApproval): never {
     revalidated = false;
   }
   consumedApprovalIds.add(approval.id);
-  if (link) {
-    revokeApproval(link.handle);
+  if (!revalidated || !link) {
+    if (link) {
+      revokeApproval(link.handle);
+      releaseInvalidatedApprovals();
+    }
+    throw new CloudSendSafetyError("Approval payload failed canonical validation");
   }
-  if (!revalidated) {
+  const authorised = authoriseExactApproval(link.handle, link.binding);
+  if (!authorised.ok) {
+    revokeApproval(link.handle);
+    releaseInvalidatedApprovals();
     throw new CloudSendSafetyError("Approval payload failed canonical validation");
   }
   throw new CloudSendSafetyError(CLOUD_SUBMISSION_BLOCKED_REASON);
@@ -401,10 +488,10 @@ export function requestClosedBriefSend(approval: UserPayloadApproval): never {
       link !== undefined &&
       approvalLifecycle(link.handle) === "APPROVED" &&
       canonical.serialized === approval.serialized &&
-      canonical.serialized === link.canonicalBytes &&
+      canonical.serialized === link.binding.canonicalBytes &&
       presentedKey === link.identifierKey &&
       approval.identifierContext === link.identifierKey &&
-      approval.generation === link.noticeGeneration;
+      approval.generation === link.binding.noticeGeneration;
   } catch (error) {
     if (!(error instanceof ClosedCloudBriefValidationError) && !(error instanceof SyntaxError)) {
       throw error;
@@ -412,10 +499,17 @@ export function requestClosedBriefSend(approval: UserPayloadApproval): never {
     revalidated = false;
   }
   consumedApprovalIds.add(approval.id);
-  if (link) {
-    revokeApproval(link.handle);
+  if (!revalidated || !link) {
+    if (link) {
+      revokeApproval(link.handle);
+      releaseInvalidatedApprovals();
+    }
+    throw new CloudSendSafetyError("Approval payload failed canonical validation");
   }
-  if (!revalidated) {
+  const authorised = authoriseExactApproval(link.handle, link.binding);
+  if (!authorised.ok) {
+    revokeApproval(link.handle);
+    releaseInvalidatedApprovals();
     throw new CloudSendSafetyError("Approval payload failed canonical validation");
   }
   throw new CloudSendSafetyError(CLOUD_SUBMISSION_BLOCKED_REASON);

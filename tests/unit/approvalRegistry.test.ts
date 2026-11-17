@@ -13,7 +13,7 @@ import {
   invalidateActiveApprovals,
   isPayloadApproved,
   registerApprovablePayload,
-  resetApprovalRegistryForTests,
+  approvalRegistryTestIsolation,
   revokeApproval,
   type ApprovalBinding,
   type ApprovalHandle,
@@ -71,7 +71,7 @@ function approve(value: ApprovalBinding): ApprovalHandle {
 
 describe("immutable approval registry", () => {
   beforeEach(() => {
-    resetApprovalRegistryForTests();
+    approvalRegistryTestIsolation.reset();
     resetUserApprovalStateForTests();
   });
 
