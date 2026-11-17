@@ -75,6 +75,20 @@ export function NoticeLensApp() {
     };
   }, []);
 
+  const [settledText, setSettledText] = useState(originalText);
+  useEffect(() => {
+    if (originalText === settledText) {
+      return;
+    }
+    const generation = generationRef.current;
+    const handle = window.setTimeout(() => {
+      if (generation !== generationRef.current) {
+        return;
+      }
+      setSettledText(noticeTextRef.current);
+    }, 300);
+    return () => window.clearTimeout(handle);
+  }, [originalText, settledText]);
   const grounded = useMemo(
     () =>
       groundNoticeFacts({
@@ -84,17 +98,24 @@ export function NoticeLensApp() {
       }),
     [originalText, extraction, today]
   );
-  const inspection = useMemo(
-    () =>
-      buildClosedCloudInspection({
-        rawNoticeText: originalText,
+  const inspection = useMemo(() => {
+    if (settledText !== originalText) {
+      return buildClosedCloudInspection({
+        rawNoticeText: settledText,
         view: grounded,
         responseGoal,
         circumstanceFlags: flags,
         extraKnownIdentifiers: [],
-      }),
-    [originalText, grounded, responseGoal, flags]
-  );
+      });
+    }
+    return buildClosedCloudInspection({
+      rawNoticeText: originalText,
+      view: grounded,
+      responseGoal,
+      circumstanceFlags: flags,
+      extraKnownIdentifiers: [],
+    });
+  }, [settledText, originalText, grounded, responseGoal, flags]);
   const privacy = useMemo(
     () =>
       privacyApprovalView({

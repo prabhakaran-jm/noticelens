@@ -1,5 +1,5 @@
 import { createElement } from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { buildClosedCloudBrief } from "../../src/adapters/buildClosedCloudBrief";
 import { CLOUD_SUBMISSION_ENABLED } from "../../src/adapters/cloudApprovalSession";
@@ -393,7 +393,7 @@ describe("Phase 3D unified eligibility", () => {
         reading: false,
       })
     );
-    expect(screen.getByTestId("read-amount")).toHaveTextContent("Not stated");
+    expect(screen.getByTestId("read-amount")).toHaveTextContent("Needs review");
     expect(screen.getByTestId("read-amount-support")).toHaveTextContent("Needs review");
     expect(screen.getByTestId("read-amount-support")).not.toHaveTextContent("Verified");
     render(
@@ -459,7 +459,11 @@ describe("Phase 3D production App", () => {
       expect(chip).not.toHaveTextContent("Verified");
     }
     fireEvent.click(screen.getByTestId("nav-reply"));
-    const excluded = screen.getByTestId("exact-json").textContent ?? "";
+    let excluded = "";
+    await waitFor(() => {
+      excluded = screen.getByTestId("exact-json").textContent ?? "";
+      expect(excluded.trim().startsWith("{")).toBe(true);
+    }, { timeout: 2000 });
     expect(excluded).toContain('"amountsGBP":[]');
     expect(excluded).not.toContain("sourceQuote");
     expect(excluded).not.toContain("1280");
@@ -473,7 +477,11 @@ describe("Phase 3D production App", () => {
       },
     });
     fireEvent.click(screen.getByTestId("nav-reply"));
-    const dated = screen.getByTestId("exact-json").textContent ?? "";
+    let dated = "";
+    await waitFor(() => {
+      dated = screen.getByTestId("exact-json").textContent ?? "";
+      expect(dated.trim().startsWith("{")).toBe(true);
+    }, { timeout: 2000 });
     expect(dated).toContain('"issueDate":null');
     expect(dated).toContain("1280");
     expect(dated).not.toContain("2026-12-24");
@@ -485,7 +493,11 @@ describe("Phase 3D production App", () => {
     });
     expect(screen.getByTestId("read-amount-support")).toHaveTextContent("Needs review");
     fireEvent.click(screen.getByTestId("nav-reply"));
-    const conflict = screen.getByTestId("exact-json").textContent ?? "";
+    let conflict = "";
+    await waitFor(() => {
+      conflict = screen.getByTestId("exact-json").textContent ?? "";
+      expect(conflict.trim().startsWith("{")).toBe(true);
+    }, { timeout: 2000 });
     expect(conflict).toContain('"amountsGBP":[]');
     expect(conflict).not.toContain("sourceQuote");
     expect(screen.getByTestId("cloud-send-button")).toBeDisabled();

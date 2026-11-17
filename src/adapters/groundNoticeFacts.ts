@@ -18,6 +18,7 @@ import {
 } from "../domain/dates";
 import type { BriefSource, BriefSourceObligation } from "../domain/redactAndBrief";
 import { EMPTY_ELIGIBILITY, type EligibilityDecision, type NoticeEligibility } from "../domain/eligibility";
+import { noticeExceedsSupportedSize } from "../domain/noticeInputLimit";
 import {
   actionSummaryFromQuote,
   analyseNoticeEligibility,
@@ -281,6 +282,90 @@ export function verifiedResponseDeadlineIso(
     return null;
   }
   return view.responseDeadlines.verifiedForDisplay === authoritativeIso ? authoritativeIso : null;
+}
+
+/** Not stated: nothing was found. Needs review: a candidate was withheld. Conflicting: incompatible candidates. */
+export type FactPresentation = "verified" | "not_stated" | "needs_review" | "conflicting";
+
+export function amountFactPresentation(view: GroundedNoticeViewModel): FactPresentation {
+  if (noticeExceedsSupportedSize(view.rawText)) {
+    return "needs_review";
+  }
+  if (displayVerifiedAmount(view) !== null) {
+    return "verified";
+  }
+  if (
+    view.amount.conflict ||
+    view.eligibility.decisions.some(
+      (item) => item.status === "NEEDS_REVIEW" && item.reason === "conflicting_balances" && item.amount !== null
+    )
+  ) {
+    const withheldSameFigure = view.eligibility.decisions.filter(
+      (item) => item.status === "NEEDS_REVIEW" && item.reason === "conflicting_balances" && item.amount !== null
+    );
+    const distinct = new Set(withheldSameFigure.map((item) => item.amount));
+    if (view.amount.conflict && distinct.size > 1) {
+      return "conflicting";
+    }
+    if (withheldSameFigure.length > 0 || view.amount.conflict) {
+      return view.amount.conflict && (view.amount.amountsGBP.length > 1) ? "conflicting" : "needs_review";
+    }
+  }
+  const sawBalanceCandidate = view.eligibility.decisions.some(
+    (item) =>
+      item.amount !== null &&
+      item.reason !== "included_fee" &&
+      item.reason !== "conditional_fee" &&
+      item.reason !== "waived_fee" &&
+      item.reason !== "refunded_fee"
+  );
+  return sawBalanceCandidate ? "needs_review" : "not_stated";
+}
+
+export function issueDateFactPresentation(view: GroundedNoticeViewModel): FactPresentation {
+  if (noticeExceedsSupportedSize(view.rawText)) {
+    return "needs_review";
+  }
+  if (view.issueDate.conflicting || view.eligibility.issueDateConflict) {
+    return "conflicting";
+  }
+  if (verifiedIssueDateIso(view) !== null) {
+    return "verified";
+  }
+  const sawCandidate = view.eligibility.decisions.some((item) => {
+    if (item.reason === "issue_date" || item.reason === "conflicting_issue_dates") {
+      return true;
+    }
+    if (item.reason !== "wrong_date_role") {
+      return false;
+    }
+    const slice = view.rawText.slice(item.evidence.start, item.evidence.end);
+    return /\bdate\s*:|\b(?:issued|dated|meter|last\s+payment|effective)\b/i.test(slice);
+  });
+  return sawCandidate ? "needs_review" : "not_stated";
+}
+
+export function deadlineFactPresentation(view: GroundedNoticeViewModel): FactPresentation {
+  if (noticeExceedsSupportedSize(view.rawText)) {
+    return "needs_review";
+  }
+  if (view.responseDeadlines.conflicting || view.eligibility.paymentDeadlineConflict || view.eligibility.correspondenceDeadlineConflict) {
+    return "conflicting";
+  }
+  if (verifiedResponseDeadlineIso(view) !== null) {
+    return "verified";
+  }
+  const sawCandidate = view.eligibility.decisions.some((item) => {
+    if (item.deadlineSupported && item.status === "ELIGIBLE") {
+      return false;
+    }
+    if (item.reason === "payment_deadline" || item.reason === "conflicting_deadlines" || item.deadlineIso !== null) {
+      return true;
+    }
+    const slice = view.rawText.slice(item.evidence.start, item.evidence.end);
+    return /\bpay\b/i.test(slice) && /\b(?:\d{1,2}\s+[A-Za-z]+\s+\d{4}|\d{4}-\d{2}-\d{2})\b/.test(slice);
+  });
+  return sawCandidate ? "needs_review" : "not_stated";
 }
 
 export function displayVerifiedBillingPeriod(
@@ -1032,7 +1117,7 @@ export function groundNoticeFacts(input: {
     input.noticeCategory
   );
   const noticeCategory = categoryDecision.noticeCategory;
-  if (rawText.trim().length === 0) {
+  if (rawText.trim().length === 0 || noticeExceedsSupportedSize(rawText)) {
     return deepFreeze({
       rawText,
       noticeCategory,

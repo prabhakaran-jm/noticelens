@@ -81,6 +81,10 @@ export function PrivacyApprovalModal(props: {
         <p role="note" data-testid="privacy-structural-warning">
           {STRUCTURAL_VALIDATION_DOES_NOT_ESTABLISH_PAYMENT_CORRECTNESS}
         </p>
+        <p data-testid="privacy-omitted-field-note">
+          A null field in the JSON was withheld or not found. It does not mean the notice stated
+          that the fact was absent.
+        </p>
         {props.actionLabels && props.actionLabels.length > 0 ? (
           <>
             <p>These are fixed labels, not quotations from the notice.</p>

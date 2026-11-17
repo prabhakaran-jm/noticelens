@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { actionSummaryLabel } from "../../adapters/cloudBriefBuilder";
 import {
+  amountFactPresentation,
   claimSupportLabel,
+  deadlineFactPresentation,
   displayVerifiedAmount,
   displayVerifiedBillingPeriod,
   displayVerifiedIssueDate,
@@ -16,6 +18,7 @@ import {
   type CircumstanceFlag,
   type ResponseGoal,
 } from "../../domain/types";
+import { NOTICE_TOO_LONG_MESSAGE, noticeExceedsSupportedSize } from "../../domain/noticeInputLimit";
 import { formatGbp } from "../format";
 import { SourceNoticeReader, type NoticeMark } from "../shared/SourceNoticeReader";
 
@@ -89,9 +92,11 @@ export function ActionPlanScreen(props: {
   const period = displayVerifiedBillingPeriod(props.view);
   const deadlines = props.view.responseDeadlines.assessment;
   const verifiedDeadlineIso = verifiedResponseDeadlineIso(props.view);
+  const amountPresentation = amountFactPresentation(props.view);
+  const deadlinePresentation = deadlineFactPresentation(props.view);
+  const tooLong = noticeExceedsSupportedSize(props.view.rawText);
   const deadlineNeedsReview =
-    deadlines.dates.length > 0 &&
-    (props.view.responseDeadlines.conflicting || verifiedDeadlineIso === null);
+    tooLong || deadlinePresentation === "conflicting" || deadlinePresentation === "needs_review";
 
   return (
     <section data-testid="screen-plan">
@@ -99,11 +104,17 @@ export function ActionPlanScreen(props: {
         <p className="screen-eyebrow">Screen 2</p>
         <h1 className="screen-title">Action plan</h1>
         <p className="screen-lead">
-          A figure is shown as verified only when the quoted passage supports it. An unsupported
-          amount stays “Not stated”. Each action heading is the summary those words support.
+          A figure is shown as verified only when the quoted passage supports it. A missing figure
+          stays “Not stated”. A figure that was found and withheld stays “Needs review”. Conflicting
+          figures stay “Conflicting” or “Multiple dates”. Each action heading is the summary those words support.
           Finding the quotation in the notice does not verify any extra wording.
         </p>
       </header>
+      {tooLong ? (
+        <div className="banner" data-testid="notice-too-long" role="status">
+          {NOTICE_TOO_LONG_MESSAGE}
+        </div>
+      ) : null}
       <div className="mobile-pane-switcher" aria-label="Choose a pane">
         <button type="button" className="btn secondary" onClick={() => setPane("facts")}>
           Facts
@@ -133,7 +144,15 @@ export function ActionPlanScreen(props: {
                 className={`fact-value${amount === null ? " is-missing" : ""}`}
                 data-testid="plan-amount"
               >
-                {amount === null ? "Not stated" : formatGbp(amount)}
+                {tooLong
+                  ? "Needs review"
+                  : amountPresentation === "verified" && amount !== null
+                    ? formatGbp(amount)
+                    : amountPresentation === "conflicting"
+                      ? "Conflicting"
+                      : amountPresentation === "needs_review"
+                        ? "Needs review"
+                        : "Not stated"}
               </strong>
               {props.view.amount.conflict ? (
                 <span className="fact-pill fact-pill-warning" data-testid="plan-amount-conflict">
@@ -152,7 +171,7 @@ export function ActionPlanScreen(props: {
             <article className="fact-tile">
               <span className="fact-label">Billing period</span>
               <strong className={`fact-value${period ? "" : " is-missing"}`} data-testid="plan-period">
-                {period ?? "Not stated"}
+                {tooLong ? "Needs review" : period ?? "Not stated"}
               </strong>
               {props.view.billingPeriod.gap.note ? (
                 <span className="fact-pill fact-pill-warning">{props.view.billingPeriod.gap.note}</span>
@@ -164,9 +183,15 @@ export function ActionPlanScreen(props: {
                 className={`fact-value${deadlines.dates.length === 0 ? " is-missing" : ""}`}
                 data-testid="plan-deadline"
               >
-                {deadlines.dates.length === 0
-                  ? "Not stated"
-                  : deadlines.dates.map((item) => item.displayLabel).join(" ")}
+                {tooLong
+                  ? "Needs review"
+                  : deadlinePresentation === "conflicting"
+                    ? "Multiple dates"
+                    : deadlinePresentation === "verified"
+                      ? deadlines.dates.map((item) => item.displayLabel).join(" ") || verifiedDeadlineIso
+                      : deadlinePresentation === "needs_review"
+                        ? "Needs review"
+                        : "Not stated"}
               </strong>
               {deadlineNeedsReview ? (
                 <span className="fact-pill fact-pill-warning" data-testid="plan-deadline-support">

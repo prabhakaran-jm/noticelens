@@ -33,6 +33,10 @@ export function PrepareReplyScreen(props: {
       <p className="banner block" role="note" data-testid="structural-validation-warning">
         {STRUCTURAL_VALIDATION_DOES_NOT_ESTABLISH_PAYMENT_CORRECTNESS}
       </p>
+      <p data-testid="omitted-field-note">
+        An empty amount, date, or deadline in the brief was withheld or not found. It does not mean
+        the notice stated that the fact was absent.
+      </p>
       <ul>
         {props.inspection.limitations.map((item) => (
           <li key={item}>{item}</li>
