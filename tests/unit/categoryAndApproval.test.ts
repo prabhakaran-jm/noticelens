@@ -123,7 +123,9 @@ describe("privacy approval is exact, local, and cannot send", () => {
     expect(CLOUD_SUBMISSION_ENABLED).toBe(false);
     expect(approval.cloudSendEnabled).toBe(false);
     expect(approval.generation).toBe(1);
-    expect(approvalStillMatches(approval, canonical.serialized, 1)).toBe(true);
+    expect(approval.boundContext).toBeDefined();
+    expect(approvalStillMatches(approval, canonical.serialized, 1, approval.boundContext)).toBe(true);
+    expect(approvalStillMatches(approval, canonical.serialized, 1)).toBe(false);
     expect(approvalStillMatches(approval, canonical.serialized.replace("1280", "520"), 1)).toBe(false);
     expect(approvalStillMatches(approval, canonical.serialized, 2)).toBe(false);
     expect(() =>
