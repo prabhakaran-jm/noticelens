@@ -1,4 +1,5 @@
 import type { CanonicalCloudPayload } from "../domain/cloudPayloadGuard";
+import { approvalLifecycle } from "../domain/approvalRegistry";
 import { CloudSendSafetyError } from "../domain/cloudSendApproval";
 
 /**
@@ -38,7 +39,11 @@ export function createCloudApprovalSession(input: {
   };
 }
 
-/** Always refuses. There is no approved snapshot to send. */
-export function requestCloudSubmission(_session: CloudApprovalSession): never {
+/**
+ * Always refuses. A registry record is not permission to send, whether it is
+ * missing, pending, approved, or invalidated.
+ */
+export function requestCloudSubmission(session: CloudApprovalSession): never {
+  void approvalLifecycle(session.approval);
   throw new CloudSendSafetyError(CLOUD_SUBMISSION_BLOCKED_REASON);
 }

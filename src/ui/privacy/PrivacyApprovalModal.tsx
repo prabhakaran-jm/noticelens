@@ -47,19 +47,21 @@ export function PrivacyApprovalModal(props: {
 }) {
   const [confirmation, setConfirmation] = useState<PayloadConfirmation | null>(null);
   const serialized = props.view.serialized;
-  const confirmed = payloadConfirmationMatches(
+  const locallyConfirmed = payloadConfirmationMatches(
     confirmation,
     serialized,
     props.generation,
     props.identifierContext
   );
-  if (confirmation !== null && !confirmed) {
+  if (confirmation !== null && !locallyConfirmed) {
     setConfirmation(null);
   }
   if (!props.open) {
     return null;
   }
-  const canRecord = confirmed && !props.view.matchesCurrentPayload;
+  const registryApproved = props.view.matchesCurrentPayload;
+  const checked = locallyConfirmed || registryApproved;
+  const canRecord = locallyConfirmed && !registryApproved;
 
   return (
     <div className="privacy-backdrop" role="presentation" onClick={props.onClose}>
@@ -106,7 +108,7 @@ export function PrivacyApprovalModal(props: {
         <label className="field">
           <input
             type="checkbox"
-            checked={confirmed}
+            checked={checked}
             onChange={(event) => {
               if (!event.target.checked || serialized === null) {
                 setConfirmation(null);
@@ -138,7 +140,8 @@ export function PrivacyApprovalModal(props: {
                   props.generation,
                   props.identifierContext
                 ) ||
-                serialized === null
+                serialized === null ||
+                props.view.matchesCurrentPayload
               ) {
                 return;
               }

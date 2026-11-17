@@ -4,13 +4,20 @@ import revisedSample from "../../../examples/energy-backbill-revised.txt?raw";
 import { runOnDeviceNoticeExtraction } from "../../ai/onDeviceExtractor";
 import { probeChromeLanguageModelAvailability, type ChromeCapabilityReport } from "../../ai/capability";
 import { buildClosedCloudInspection } from "../../adapters/closedCloudInspection";
-import { createCloudApprovalSession } from "../../adapters/cloudApprovalSession";
 import {
-  identifierContextKey,
-  privacyApprovalView,
-  recordClosedBriefApproval,
-  type UserPayloadApproval,
-} from "../../adapters/privacyApproval";
+  CLOUD_SUBMISSION_BLOCKED_REASON,
+  createCloudApprovalSession,
+} from "../../adapters/cloudApprovalSession";
+import { identifierContextKey } from "../../adapters/privacyApproval";
+import {
+  approvalBindingsEqual,
+  approvePending,
+  invalidateActiveApprovals,
+  isPayloadApproved,
+  registerApprovablePayload,
+  revokeApproval,
+  type ApprovalBinding,
+} from "../../domain/approvalRegistry";
 import { groundNoticeFacts } from "../../adapters/groundNoticeFacts";
 import { compareNoticeTexts } from "../../domain/compareNotices";
 import { isoDateFromClock } from "../../domain/dates";
@@ -26,7 +33,10 @@ import { CompareUpdateScreen } from "../screens/CompareUpdateScreen";
 import { PrepareReplyScreen } from "../screens/PrepareReplyScreen";
 import { ReadNoticeScreen } from "../screens/ReadNoticeScreen";
 import { PrivacyApprovalModal } from "../privacy/PrivacyApprovalModal";
+import type { PrivacyApprovalView } from "../../adapters/privacyApproval";
 import { receiptForOnDeviceCall } from "./onDeviceSession";
+
+let sessionCounter = 0;
 
 const ORIGINAL_SAMPLE = normalizeNewlines(originalSample);
 const REVISED_SAMPLE = normalizeNewlines(revisedSample);
@@ -45,8 +55,14 @@ export function NoticeLensApp() {
   const [responseGoal, setResponseGoal] = useState<ResponseGoal>("request_billing_review");
   const [flags, setFlags] = useState<CircumstanceFlag[]>([]);
   const [privacyOpen, setPrivacyOpen] = useState(false);
-  const [userApproval, setUserApproval] = useState<UserPayloadApproval | null>(null);
+  const [approvalEpoch, setApprovalEpoch] = useState(0);
   const [editGeneration, setEditGeneration] = useState(0);
+  const [extractionGeneration, setExtractionGeneration] = useState(0);
+  const [documentEpoch, setDocumentEpoch] = useState(0);
+  const [sessionNonce] = useState(() => {
+    sessionCounter += 1;
+    return `sess-${sessionCounter}`;
+  });
   const noticeTextRef = useRef(originalText);
   const generationRef = useRef(0);
   const requestIdRef = useRef(0);
@@ -55,9 +71,11 @@ export function NoticeLensApp() {
     setEditGeneration(generationRef.current);
   };
   const replaceNoticeText = (text: string) => {
+    invalidateActiveApprovals();
     noticeTextRef.current = normalizeNewlines(text);
     setOriginalText(noticeTextRef.current);
     setExtraction(null);
+    setExtractionGeneration((current) => current + 1);
     setReceipts([]);
     setDeviceMessage(null);
     bumpGeneration();
@@ -115,17 +133,39 @@ export function NoticeLensApp() {
       extraKnownIdentifiers: [],
     });
   }, [settledText, originalText, grounded, responseGoal, flags]);
-  const privacy = useMemo(
-    () =>
-      privacyApprovalView({
-        serialized: inspection.exactSerialized,
-        limitations: inspection.limitations,
-        approval: userApproval,
-        generation: editGeneration,
-        guardOptions: inspection.guardOptions,
-      }),
-    [inspection, userApproval, editGeneration]
-  );
+  const identifierKey = identifierContextKey(inspection.guardOptions);
+  const identifierWatch = useRef<{ key: string; epoch: number } | null>(null);
+  if (identifierWatch.current === null) {
+    identifierWatch.current = { key: identifierKey, epoch: 1 };
+  } else if (identifierWatch.current.key !== identifierKey) {
+    identifierWatch.current = { key: identifierKey, epoch: identifierWatch.current.epoch + 1 };
+    invalidateActiveApprovals();
+  }
+  const identifierEpoch = identifierWatch.current.epoch;
+  const inspectionSettled = settledText === originalText && inspection.exactSerialized !== null;
+  const approvalBinding: ApprovalBinding | null = inspectionSettled
+    ? {
+        schema: "noticelens.cloud-brief.v2",
+        canonicalBytes: inspection.exactSerialized as string,
+        noticeGeneration: editGeneration,
+        identifierContextId: `ie-${identifierEpoch}`,
+        responseGoal,
+        circumstanceFlags: flags,
+        extractionGeneration,
+        documentContextId: `${sessionNonce}-doc-${documentEpoch}`,
+      }
+    : null;
+  const privacy = useMemo<PrivacyApprovalView>(() => {
+    const approved = approvalBinding !== null && approvalEpoch >= 0 && isPayloadApproved(approvalBinding);
+    return {
+      serialized: inspection.exactSerialized,
+      limitations: inspection.limitations,
+      approval: null,
+      matchesCurrentPayload: approved,
+      cloudSendEnabled: false,
+      blockedReason: CLOUD_SUBMISSION_BLOCKED_REASON,
+    };
+  }, [approvalBinding, approvalEpoch, inspection.exactSerialized, inspection.limitations]);
   const session = useMemo(
     () =>
       createCloudApprovalSession({
@@ -193,6 +233,8 @@ export function NoticeLensApp() {
                   }
                   setReceipts((current) => [...current, receipt]);
                   setExtraction(record.output);
+                  setExtractionGeneration((current) => current + 1);
+                  invalidateActiveApprovals();
                   bumpGeneration();
                 })
                 .catch((error: unknown) => {
@@ -219,11 +261,13 @@ export function NoticeLensApp() {
             identifiers={identifiers}
             responseGoal={responseGoal}
             onResponseGoal={(goal) => {
+              invalidateActiveApprovals();
               setResponseGoal(goal);
               bumpGeneration();
             }}
             flags={flags}
             onFlags={(next) => {
+              invalidateActiveApprovals();
               setFlags(next);
               bumpGeneration();
             }}
@@ -241,7 +285,12 @@ export function NoticeLensApp() {
           <CompareUpdateScreen
             originalText={originalText}
             revisedText={revisedText}
-            onRevisedText={(text) => setRevisedText(normalizeNewlines(text))}
+            onRevisedText={(text) => {
+              invalidateActiveApprovals();
+              setDocumentEpoch((current) => current + 1);
+              setRevisedText(normalizeNewlines(text));
+              bumpGeneration();
+            }}
             comparison={comparison}
           />
         ) : null}
@@ -257,21 +306,37 @@ export function NoticeLensApp() {
           open
           view={privacy}
           generation={editGeneration}
-          identifierContext={identifierContextKey(inspection.guardOptions)}
+          identifierContext={`ie-${identifierEpoch}-doc-${documentEpoch}-ex-${extractionGeneration}`}
           actionLabels={actionLabels}
           onClose={() => setPrivacyOpen(false)}
           onApprove={(serialized) => {
-            if (inspection.exactSerialized === null || serialized !== inspection.exactSerialized) {
+            const binding = approvalBinding;
+            if (
+              binding === null ||
+              inspection.exactSerialized === null ||
+              serialized !== inspection.exactSerialized ||
+              serialized !== binding.canonicalBytes
+            ) {
               return;
             }
-            setUserApproval(
-              recordClosedBriefApproval(
-                serialized,
-                inspection.exactSerialized,
-                editGeneration,
-                inspection.guardOptions
-              )
-            );
+            const registered = registerApprovablePayload(binding);
+            if (!registered.ok) {
+              return;
+            }
+            const latest = approvalBinding;
+            if (
+              generationRef.current !== binding.noticeGeneration ||
+              latest === null ||
+              !approvalBindingsEqual(latest, binding)
+            ) {
+              revokeApproval(registered.handle);
+              return;
+            }
+            if (!approvePending(registered.handle, binding)) {
+              revokeApproval(registered.handle);
+              return;
+            }
+            setApprovalEpoch((current) => current + 1);
           }}
         />
       ) : null}
