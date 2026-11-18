@@ -81,10 +81,14 @@ describe("compareNotices — £1,280 original against £520 revised", () => {
     expect(comparison.billingPeriod.status).toBe("not_stated");
   });
 
-  it("keeps a stated zero distinct from a missing amount", () => {
-    const facts = extractComparableFacts("The outstanding balance of £0 is shown here.");
-    expect(facts.amountGBP).toBe(0);
-    expect(facts.amountConflict).toBe(false);
+  it("does not treat a stated zero as a verified current balance", () => {
+    const stated = extractComparableFacts("The outstanding balance of £0 is shown here.");
+    const missing = extractComparableFacts("No figures are stated.");
+    expect(stated.amountGBP).toBeNull();
+    expect(stated.amountAuthority).not.toBe("verified");
+    expect(stated.amountConflict).toBe(false);
+    expect(missing.amountGBP).toBeNull();
+    expect(missing.amountAuthority).toBe("not_stated");
   });
 
   it("does not pick one date when the revised notice states two deadlines", () => {

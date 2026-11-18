@@ -1,4 +1,3 @@
-import { distinctAmountValues, findExplicitGbpAmounts } from "./amounts";
 import {
   assessIssueDate,
   classifyDeadline,
@@ -12,7 +11,9 @@ import {
   groundCalendarDate,
   groundMonetaryAmount,
   groundObligation,
+  verifiedBalanceForSource,
   type ClaimSupport,
+  type SourceAmountAuthority,
 } from "./sourceGrounding";
 import type { QuoteVerificationResult } from "./types";
 import { verifyQuoteInSource } from "./verifyQuotes";
@@ -34,6 +35,7 @@ export interface ComparableNoticeFacts {
   amountQuote: string | null;
   amountConflict: boolean;
   amountRejected: boolean;
+  amountAuthority: SourceAmountAuthority;
   responseDeadline: string | null;
   responseDeadlines: string[];
   deadlineQuote: string | null;
@@ -61,6 +63,8 @@ export interface NoticeComparison {
     revisedVerification: QuoteVerificationResult | null;
     differenceGBP: number | null;
     status: ComparisonStatus;
+    originalAuthority: SourceAmountAuthority;
+    revisedAuthority: SourceAmountAuthority;
   };
   responseDeadline: VerifiedSide<string> & {
     revised: string | null;
@@ -124,34 +128,16 @@ function extractAmount(text: string): {
   amountQuote: string | null;
   amountConflict: boolean;
   amountRejected: boolean;
+  amountAuthority: SourceAmountAuthority;
 } {
-  const found = findExplicitGbpAmounts(text);
-  const distinct = distinctAmountValues(found.amounts);
-  const first = found.amounts[0];
-  if (distinct.length === 1 && first && found.rejected === 0) {
-    return {
-      amountGBP: distinct[0] ?? null,
-      amountsGBP: distinct,
-      amountQuote: lineContaining(text, first.raw),
-      amountConflict: false,
-      amountRejected: false,
-    };
-  }
-  if (distinct.length > 1 || found.rejected > 0) {
-    return {
-      amountGBP: null,
-      amountsGBP: distinct,
-      amountQuote: first ? lineContaining(text, first.raw) : null,
-      amountConflict: distinct.length > 1,
-      amountRejected: found.rejected > 0,
-    };
-  }
+  const verified = verifiedBalanceForSource(text);
   return {
-    amountGBP: null,
-    amountsGBP: [],
-    amountQuote: null,
-    amountConflict: false,
-    amountRejected: false,
+    amountGBP: verified.amountGBP,
+    amountsGBP: verified.amountGBP === null ? [] : [verified.amountGBP],
+    amountQuote: verified.quote,
+    amountConflict: verified.authority === "conflicting",
+    amountRejected: verified.authority === "needs_review",
+    amountAuthority: verified.authority,
   };
 }
 
@@ -457,10 +443,12 @@ export function compareNotices(
       revisedQuote: revised.amountQuote,
       revisedVerification: verify(revised.rawText, revised.amountQuote),
       differenceGBP:
-        amountStatus === "conflicting"
-          ? null
-          : differenceGBP(original.amountGBP, revised.amountGBP),
+        original.amountAuthority === "verified" && revised.amountAuthority === "verified"
+          ? differenceGBP(original.amountGBP, revised.amountGBP)
+          : null,
       status: amountStatus,
+      originalAuthority: original.amountAuthority,
+      revisedAuthority: revised.amountAuthority,
     },
     responseDeadline: {
       value: original.deadlineConflict ? null : original.responseDeadline,

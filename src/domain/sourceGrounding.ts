@@ -15,7 +15,9 @@ import {
   isContingentBalanceStatement,
   isModelOrParserDirected,
 } from "./supportedNoticePolicy";
+import { recordsActualDispute, sentenceDisposesCurrentClaim, sentenceHasUnresolvedContext } from "./claimContext";
 import { introducesParagraphFrame, introducesUntrustedFrame, matchesSupportedBalanceStructure } from "./supportedStructures";
+import { noticeExceedsSupportedSize } from "./noticeInputLimit";
 import { verifyQuoteInSource } from "./verifyQuotes";
 
 export type ClaimSupport =
@@ -539,7 +541,25 @@ function closesObligation(sentence: string): boolean {
   if (/\bwrit(?:e|ten|ing)\b[\s\S]{0,40}\boff\b/i.test(s) && hasTarget) {
     return true;
   }
+  if (/\b(?:nothing|no\s+amount)\s+remains\s+due\b/i.test(s)) {
+    return true;
+  }
   if (/\b(?:revers(?:e|ed|ing)|credit(?:ed)?)\b/i.test(s) && hasTarget) {
+    if (/\brevers(?:e|ed|ing)\b/i.test(s)) {
+      return true;
+    }
+    // Only a future offer. "can" or "may" elsewhere does not make a
+    // completed credit possible. A credit on another account is not an
+    // exception: "not this bill" must not keep a bill that was credited.
+    const futureCredit =
+      (/\b(?:may|might)\s+receive\s+a\s+credit\b/i.test(s) || /\b(?:can|could)\s+discuss\s+a\s+credit\b/i.test(s)) &&
+      !/\b(?:was|were|has|have)\s+(?:been\s+)?(?:applied|credited|offset)\b/i.test(s) &&
+      !/\bfully\s+credited\b/i.test(s) &&
+      !/\bhas\s+offset\b/i.test(s);
+    const statedResidual = explicitCreditResidual(s).length > 0;
+    if (futureCredit || statedResidual) {
+      return false;
+    }
     return true;
   }
   if (/\bcancell?ing\b/i.test(s) && hasTarget) {
@@ -603,6 +623,9 @@ function isPositiveCurrentBalance(sentence: string): boolean {
     return false;
   }
   if (/\bowe(?:\s+us)?\s+nothing\b/i.test(s)) {
+    return false;
+  }
+  if (sentenceHasUnresolvedContext(s)) {
     return false;
   }
   return matchesSupportedBalanceStructure(s);
@@ -942,7 +965,7 @@ function namesDistinctNewCharge(sentence: string): boolean {
   ) {
     return false;
   }
-  return /\b(?:new\s+and\s+separate|separate\s+(?:charge|bill)|new\s+charge|corrected\s+bill|replacement\s+(?:charge|bill)|re-?billed|re-?issued)\b/i.test(
+  return /\b(?:new\s+and\s+separate|separate\s+(?:charge|bill)|new\s+charge|corrected\s+bill|replacement\s+(?:charge|bill))\b/i.test(
     text
   );
 }
@@ -1076,6 +1099,70 @@ function untrustedSentenceIndexes(text: string, spans: readonly NoticeSentenceSp
   return flagged;
 }
 
+function ownershipLabels(sentence: string): string[] {
+  const labels = new Set<string>();
+  for (const match of sentence.matchAll(/\b(electricity|gas|water)\b/gi)) {
+    labels.add(match[1]!.toLowerCase());
+  }
+  for (const match of sentence.matchAll(/\baccount\s+(?:number\s+)?([a-z0-9]*\d[a-z0-9]*)\b/gi)) {
+    labels.add(`account ${match[1]!.toLowerCase()}`);
+  }
+  for (const match of sentence.matchAll(/\binvoice\s+([a-z0-9]*\d[a-z0-9]*)\b/gi)) {
+    labels.add(`invoice ${match[1]!.toLowerCase()}`);
+  }
+  return [...labels];
+}
+
+/**
+ * A positive amount a sentence says remains after a credit or payment.
+ * This does not admit a balance and does not calculate a new debt.
+ * The walker may keep it only when it is the amount a supported demand
+ * already established. "Nothing remains due" is not a residual.
+ */
+function explicitCreditResidual(sentence: string): number[] {
+  if (!/\b(?:credit(?:ed)?|payment|paid)\b/i.test(sentence)) {
+    return [];
+  }
+  if (/\b(?:nothing|no\s+amount)\s+remains\s+due\b/i.test(sentence)) {
+    return [];
+  }
+  if (!/\b(?:but|although|so)\b/i.test(sentence) || !/\b(?:remains|still)\s+due\b/i.test(sentence)) {
+    return [];
+  }
+  const parts = sentence.split(/\b(?:but|although|so)\b/i);
+  const duePart = parts.find((part) => /\b(?:remains|still)\s+due\b/i.test(part));
+  if (!duePart) {
+    return [];
+  }
+  return amountValuesIn(duePart).filter((amount) => amount > 0);
+}
+
+/** A dispute of a different claim only when the sentence names that separate amount. */
+function disputeIsAboutAnotherClaim(sentence: string): boolean {
+  return /\bseparate\b/i.test(sentence) && amountValuesIn(sentence).length > 0;
+}
+
+function activeCurrentAmounts(
+  lastPositive: ReadonlyMap<number, number>,
+  lastScopedRetirement: ReadonlyMap<number, number>,
+  lastUnscopedRetirement: number,
+  lastScopedTerminal: ReadonlyMap<number, number>,
+  lastUnscopedTerminal: number,
+  lastScopedHistorical: ReadonlyMap<number, number>,
+  lastUnscopedHistorical: number
+): number[] {
+  const active: number[] = [];
+  for (const [amount, positiveAt] of lastPositive) {
+    const retiredAt = Math.max(lastScopedRetirement.get(amount) ?? -1, lastUnscopedRetirement);
+    const terminalAt = Math.max(lastScopedTerminal.get(amount) ?? -1, lastUnscopedTerminal);
+    const historicalAt = Math.max(lastScopedHistorical.get(amount) ?? -1, lastUnscopedHistorical);
+    if (positiveAt >= retiredAt && positiveAt >= terminalAt && positiveAt >= historicalAt) {
+      active.push(amount);
+    }
+  }
+  return active;
+}
+
 function walkCurrentBalances(text: string): {
   current: number[];
   acceptedAt: Map<number, number[]>;
@@ -1099,10 +1186,14 @@ function walkCurrentBalances(text: string): {
   const lastReinstatement = new Map<number, number>();
   const injectedBlockedSentences = new Set<number>();
   const seen = new Set<number>();
+  const claimLabels = new Map<number, string[]>();
+  const scopedDisputeAmounts = new Set<number>();
+  const unestablishedRemainder = new Set<number>();
+  let remainderBlocksOtherAmounts = false;
+  let disputeLabels: string[] | null = null;
+  let unlabeledDispute = false;
   let forwardBlock = false;
   let forwardInjectedBlock = false;
-  let pendingReissue = false;
-
   sentences.forEach((sentence, index) => {
     if (untrustedSentences.has(index)) {
       return;
@@ -1116,7 +1207,6 @@ function walkCurrentBalances(text: string): {
           normalizeForRole(sentence).trim()
         );
       forwardInjectedBlock = isBareOverridePreamble;
-      pendingReissue = false;
       return;
     }
     if (forwardInjectedBlock) {
@@ -1127,17 +1217,119 @@ function walkCurrentBalances(text: string): {
     for (const amount of amounts) {
       seen.add(amount);
     }
+    const statedRemainder = explicitCreditResidual(sentence);
+    if (statedRemainder.length > 0 && !namesDistinctNewCharge(sentence) && !isReinstatement(sentence)) {
+      const activeNow = activeCurrentAmounts(
+        lastPositive,
+        lastScopedRetirement,
+        lastUnscopedRetirement,
+        lastScopedTerminal,
+        lastUnscopedTerminal,
+        lastScopedHistorical,
+        lastUnscopedHistorical
+      );
+      const matchesEstablished =
+        activeNow.length > 0 &&
+        statedRemainder.every((amount) => activeNow.some((item) => sameAmount(item, amount)));
+      if (!matchesEstablished) {
+        for (const amount of activeNow) {
+          lastScopedRetirement.set(amount, index);
+        }
+        for (const amount of statedRemainder) {
+          unestablishedRemainder.add(amount);
+        }
+        remainderBlocksOtherAmounts = true;
+      }
+      return;
+    }
     if (forwardBlock && amounts.length > 0) {
       forwardBlock = false;
-      pendingReissue = false;
       for (const amount of amounts) {
         introducedAtTerminal.add(amount);
         lastScopedTerminal.set(amount, index);
       }
       return;
     }
-    if (role === "unsupported" && amounts.length === 0 && namesDistinctNewCharge(sentence)) {
-      pendingReissue = true;
+    if (
+      sentenceDisposesCurrentClaim(sentence) &&
+      !namesDistinctNewCharge(sentence) &&
+      !isReinstatement(sentence)
+    ) {
+      if (recordsActualDispute(sentence) && disputeIsAboutAnotherClaim(sentence)) {
+        for (const amount of amounts) {
+          lastScopedRetirement.set(amount, index);
+        }
+        return;
+      }
+      // Retire the current claim this sentence refers to. Fees, historical
+      // payments, and credits are not that count. A named amount retires
+      // only itself. An unlabelled "the balance" retires the one current
+      // claim. Several current claims, with no way to tell which, are all
+      // withheld. A different account is left alone. The sentence does not
+      // become a new verified amount.
+      const residual = recordsActualDispute(sentence) ? [] : explicitCreditResidual(sentence);
+      const active = activeCurrentAmounts(
+        lastPositive,
+        lastScopedRetirement,
+        lastUnscopedRetirement,
+        lastScopedTerminal,
+        lastUnscopedTerminal,
+        lastScopedHistorical,
+        lastUnscopedHistorical
+      );
+      const named = amounts.filter((amount) => !residual.some((item) => sameAmount(item, amount)));
+      const dispositionLabels = ownershipLabels(sentence);
+      let retire: number[] = [];
+      if (named.length > 0) {
+        // A named settlement retires that amount even when the balance has
+        // not been opened yet. A later restatement of the same amount does
+        // not revive it. A different amount is not in this list.
+        retire = named;
+      } else {
+        const classified = active.map((amount) => {
+          const labels = claimLabels.get(amount) ?? [];
+          if (dispositionLabels.length === 0) {
+            return { amount, ref: "unclear" as const };
+          }
+          if (labels.length === 0) {
+            return { amount, ref: "no" as const };
+          }
+          const overlap = dispositionLabels.some((label) => labels.includes(label));
+          return { amount, ref: overlap ? ("yes" as const) : ("no" as const) };
+        });
+        const yes = classified.filter((item) => item.ref === "yes");
+        const unclear = classified.filter((item) => item.ref === "unclear");
+        if (yes.length > 0) {
+          retire = yes.map((item) => item.amount);
+        } else if (unclear.length === 1) {
+          retire = [unclear[0]!.amount];
+        } else if (unclear.length > 1) {
+          retire = unclear.map((item) => item.amount);
+        }
+      }
+      for (const amount of retire) {
+        lastScopedRetirement.set(amount, index);
+      }
+      if (recordsActualDispute(sentence) && !disputeIsAboutAnotherClaim(sentence)) {
+        const labels = ownershipLabels(sentence);
+        const namedDispute = amountValuesIn(sentence);
+        if (namedDispute.length > 0) {
+          for (const amount of namedDispute) {
+            scopedDisputeAmounts.add(amount);
+          }
+        } else if (labels.length === 0) {
+          unlabeledDispute = true;
+          disputeLabels = [];
+        }
+        if (labels.length > 0 && !unlabeledDispute) {
+          disputeLabels = disputeLabels ?? [];
+          for (const label of labels) {
+            if (!disputeLabels.includes(label)) {
+              disputeLabels.push(label);
+            }
+          }
+        }
+      }
       return;
     }
     if (
@@ -1149,16 +1341,16 @@ function walkCurrentBalances(text: string): {
       return;
     }
     if (role === "reinstated_demand") {
-      pendingReissue = false;
-      const targets = amounts.length > 0 ? amounts : [...seen];
-      for (const amount of targets) {
+      if (amounts.length === 0) {
+        return;
+      }
+      for (const amount of amounts) {
         lastReinstatement.set(amount, index);
         rememberPositive(acceptedAt, amount, index, lastPositive);
       }
       return;
     }
     if (role === "historical_payment") {
-      pendingReissue = false;
       if (amounts.length === 0) {
         if (!/\b(?:previous|last|earlier|prior)\s+(?:bill|balance|statement|payment|invoice)\b/i.test(sentence)) {
           lastUnscopedHistorical = index;
@@ -1171,7 +1363,6 @@ function walkCurrentBalances(text: string): {
       return;
     }
     if (TERMINAL_ACCOUNT_ROLES.has(role)) {
-      pendingReissue = false;
       if (pointsAtAmountBelow(sentence, amounts)) {
         forwardBlock = true;
       }
@@ -1192,7 +1383,6 @@ function walkCurrentBalances(text: string): {
       return;
     }
     if (DEMAND_RETIREMENT_ROLES.has(role)) {
-      pendingReissue = false;
       if (pointsAtAmountBelow(sentence, amounts)) {
         forwardBlock = true;
       }
@@ -1206,8 +1396,6 @@ function walkCurrentBalances(text: string): {
       return;
     }
     if (role === "current_balance") {
-      const reissueHere = pendingReissue;
-      pendingReissue = false;
       if (forwardBlock) {
         forwardBlock = false;
         for (const amount of amounts) {
@@ -1224,7 +1412,7 @@ function walkCurrentBalances(text: string): {
           return retired !== undefined && retired < index;
         });
       const deniesNew = deniesDistinctNewCharge(sentence);
-      const distinctNew = namesDistinctNewCharge(sentence) || (reissueHere && !deniesNew);
+      const distinctNew = namesDistinctNewCharge(sentence);
       if (
         (settledBefore || retiredBefore) &&
         (!opensFreshBalance(sentence) || deniesNew) &&
@@ -1242,7 +1430,27 @@ function walkCurrentBalances(text: string): {
         }
         return;
       }
-      for (const amount of nonFeeAmountValues(sentence)) {
+      const labels = ownershipLabels(sentence);
+      const candidatePreview = nonFeeAmountValues(sentence);
+      const blockedByDispute =
+        unlabeledDispute ||
+        (disputeLabels !== null &&
+          disputeLabels.length > 0 &&
+          labels.some((label) => disputeLabels!.includes(label))) ||
+        candidatePreview.some((amount) => scopedDisputeAmounts.has(amount));
+      if (blockedByDispute && !distinctNew && !isReinstatement(sentence)) {
+        return;
+      }
+      const candidates = candidatePreview;
+      if (remainderBlocksOtherAmounts && !distinctNew && !isReinstatement(sentence)) {
+        const sameRemainder =
+          candidates.length > 0 &&
+          candidates.every((amount) => [...unestablishedRemainder].some((item) => sameAmount(item, amount)));
+        if (!sameRemainder) {
+          return;
+        }
+      }
+      for (const amount of candidates) {
         const retiredAt = lastScopedRetirement.get(amount);
         const sameAmountRetired = retiredAt !== undefined && retiredAt < index;
         if (accountClosed && !distinctNew && !isReinstatement(sentence)) {
@@ -1256,6 +1464,7 @@ function walkCurrentBalances(text: string): {
           continue;
         }
         rememberPositive(acceptedAt, amount, index, lastPositive);
+        claimLabels.set(amount, labels);
       }
     }
   });
@@ -1313,7 +1522,7 @@ const DISQUALIFYING_PRECEDING_DATE_LABEL =
 
 /** A preamble date under one of these headings is not the notice issue date. */
 const NON_ISSUE_SECTION =
-  /\b(?:activity|readings|telephone|phone\s+call|call\s+with|new\s+price|service\s+table|direct\s+debit)\b/i;
+  /\b(?:activity|readings|telephone|phone\s+call|call\s+with|new\s+price|service\s+table|direct\s+debit|account\s+summary|payment\s+received|next\s+collection|engineer\s+visit|price\s+change)\b/i;
 
 function normalizeDateToken(token: string): string {
   return token.replace(/(\d{1,2})(?:st|nd|rd|th)\b/i, "$1");
@@ -2206,6 +2415,48 @@ export function analyseNoticeEligibility(text: string): NoticeEligibility {
     correspondenceDeadlineConflict,
     issueDateConflict,
   });
+}
+
+export type SourceAmountAuthority = "verified" | "needs_review" | "not_stated" | "conflicting";
+
+/** The same eligible-balance decision Read Notice and v2 use for a fresh notice. */
+export function verifiedBalanceForSource(text: string): {
+  amountGBP: number | null;
+  quote: string | null;
+  authority: SourceAmountAuthority;
+} {
+  if (noticeExceedsSupportedSize(text)) {
+    return { amountGBP: null, quote: null, authority: "needs_review" };
+  }
+  const eligibility = analyseNoticeEligibility(text);
+  const conflicting = eligibility.decisions.some(
+    (item) => item.status === "NEEDS_REVIEW" && item.reason === "conflicting_balances" && item.amount !== null
+  );
+  const eligible = eligibility.decisions.filter(
+    (item) =>
+      item.status === "ELIGIBLE" &&
+      item.amount !== null &&
+      item.amount > 0 &&
+      BALANCE_REASONS.has(item.reason)
+  );
+  const distinct = [...new Set(eligible.map((item) => item.amount!))];
+  if (!conflicting && distinct.length === 1) {
+    const match = eligible.find((item) => item.amount === distinct[0]);
+    const quote = match ? text.slice(match.evidence.start, match.evidence.end) : null;
+    return { amountGBP: distinct[0]!, quote, authority: "verified" };
+  }
+  const sawAmount = eligibility.decisions.some(
+    (item) =>
+      item.amount !== null &&
+      item.reason !== "included_fee" &&
+      item.reason !== "conditional_fee" &&
+      item.reason !== "waived_fee" &&
+      item.reason !== "refunded_fee"
+  );
+  if (conflicting || distinct.length > 1) {
+    return { amountGBP: null, quote: null, authority: "conflicting" };
+  }
+  return { amountGBP: null, quote: null, authority: sawAmount ? "needs_review" : "not_stated" };
 }
 
 export function assessPaymentClaims(text: string): PaymentClaimAssessment[] {

@@ -245,7 +245,7 @@ describe("Phase 3H restricted notice acceptance", () => {
       "Dear customer,\n\nYour bill dated 2 October 2026 for £1,280 has been cancelled following our review.\n\nWe have since re-issued your bill. Your outstanding balance is £1,280.\n\n" +
         PAY
     );
-    expect(reissued.built.payload.amountsGBP).toEqual([1280]);
+    expect(reissued.built.payload.amountsGBP).toEqual([]);
 
     const withdrawn = evaluate(
       "The demand for £1,280 has been withdrawn.\nYour outstanding balance is £520. Please pay the outstanding balance by 9 December 2026."

@@ -171,8 +171,9 @@ describe("M1 security regressions", () => {
 
     const several = extractComparableFacts("Balance of £1,280 and a fee of £15.");
     expect(several.amountGBP).toBeNull();
-    expect(several.amountsGBP).toEqual([1280, 15]);
-    expect(several.amountConflict).toBe(true);
+    expect(several.amountsGBP).toEqual([]);
+    expect(several.amountAuthority).not.toBe("verified");
+    expect(several.amountConflict).toBe(false);
   });
 
   it("distinguishes a matching substring from evidence for the claimed amount", () => {

@@ -158,6 +158,30 @@ describe("Phase 5B production grounding", () => {
     expect(revised.length).toBeGreaterThan(0);
   });
 
+  it("drops a stale comparison when either notice changes", async () => {
+    await boot();
+    fireEvent.click(screen.getByTestId("nav-compare"));
+    expect(screen.getByTestId("amount-difference")).toHaveTextContent("£760 lower");
+    expect(screen.getByTestId("compare-original-amount")).toHaveTextContent("£1,280");
+    expect(screen.getByTestId("compare-revised-amount")).toHaveTextContent("£520");
+    fireEvent.change(screen.getByTestId("revised-text"), {
+      target: { value: "Our March letter said you owe £520." },
+    });
+    expect(screen.getByTestId("compare-revised-amount")).toHaveTextContent("Needs review");
+    expect(screen.getByTestId("amount-difference")).toHaveTextContent("Needs review");
+    expect(screen.getByTestId("amount-difference")).not.toHaveTextContent("£760");
+    expect(screen.getByTestId("amount-difference")).not.toHaveTextContent("£0");
+    fireEvent.click(screen.getByTestId("nav-read"));
+    fireEvent.change(screen.getByTestId("notice-text"), {
+      target: { value: "Imagine your outstanding balance is £1,280." },
+    });
+    await advance(300);
+    fireEvent.click(screen.getByTestId("nav-compare"));
+    expect(screen.getByTestId("compare-original-amount")).toHaveTextContent("Needs review");
+    expect(screen.getByTestId("compare-original-amount")).not.toHaveTextContent("£1,280");
+    expect(screen.getByTestId("amount-difference")).not.toHaveTextContent("lower");
+  });
+
   it("does not let a stale on-device result approve an unsupported notice", async () => {
     await boot();
     fireEvent.click(screen.getByTestId("nav-read"));
@@ -191,5 +215,137 @@ describe("Phase 5B production grounding", () => {
     expect(screen.getByTestId("read-amount")).not.toHaveTextContent("£0");
     fireEvent.click(screen.getByTestId("nav-reply"));
     expect(screen.getByTestId("cloud-send-button")).toBeDisabled();
+  });
+
+  it("keeps a supported balance when a later sentence only offers help", async () => {
+    await boot();
+    setNotice(
+      "Northwind Energy\n\n18 November 2026\n\nDear A Example,\n\nYour outstanding balance is £640.\nPlease pay by 30 November 2026.\nIf you are struggling to pay, our hardship fund may be able to help.\n"
+    );
+    await advance(300);
+    expect(screen.getByTestId("read-amount")).toHaveTextContent("£640");
+    expect(screen.getByTestId("read-amount")).not.toHaveTextContent("Needs review");
+    expect(screen.getByTestId("read-deadline")).toHaveTextContent("30 November 2026");
+    fireEvent.click(screen.getByTestId("nav-plan"));
+    expect(screen.getByTestId("plan-amount")).toHaveTextContent("£640");
+    fireEvent.click(screen.getByTestId("nav-reply"));
+    expect(replyJson()).toContain('"amountsGBP":[640]');
+    fireEvent.click(screen.getByTestId("nav-compare"));
+    expect(screen.getByTestId("compare-original-amount")).toHaveTextContent("£640");
+    expect(screen.getByTestId("compare-original-amount")).not.toHaveTextContent("Needs review");
+    setNotice(unsupported);
+    await advance(300);
+    fireEvent.click(screen.getByTestId("nav-read"));
+    expect(screen.getByTestId("read-amount")).toHaveTextContent("Needs review");
+    expect(screen.getByTestId("read-amount")).not.toHaveTextContent("£520");
+    fireEvent.click(screen.getByTestId("nav-reply"));
+    expect(screen.getByTestId("cloud-send-button")).toBeDisabled();
+  });
+
+  it("does not verify a balance that a later credit has cleared when a fee is also stated", async () => {
+    await boot();
+    setNotice(
+      "Northwind Energy\n\n18 November 2026\n\nDear A Example,\n\nYour outstanding balance is £640.\nPlease pay by 30 November 2026.\nA late payment fee of £15 is included.\nA hardship credit has cleared the balance.\n"
+    );
+    await advance(300);
+    expect(screen.getByTestId("read-amount")).not.toHaveTextContent("£640");
+    expect(screen.getByTestId("read-amount")).not.toHaveTextContent("Verified");
+    expect(screen.getByTestId("read-amount-support")).not.toHaveTextContent("Verified");
+    expect(screen.getByTestId("read-deadline")).not.toHaveTextContent("30 November 2026");
+    fireEvent.click(screen.getByTestId("nav-plan"));
+    expect(screen.getByTestId("plan-amount")).not.toHaveTextContent("£640");
+    expect(screen.getByTestId("plan-amount")).not.toHaveTextContent("Verified");
+    fireEvent.click(screen.getByTestId("nav-reply"));
+    expect(replyJson()).toContain('"amountsGBP":[]');
+    expect(replyJson()).not.toContain("640");
+    fireEvent.click(screen.getByTestId("nav-compare"));
+    expect(screen.getByTestId("compare-original-amount")).not.toHaveTextContent("£640");
+    expect(screen.getByTestId("amount-difference")).not.toHaveTextContent("£640");
+    expect(screen.getByTestId("amount-difference")).not.toHaveTextContent("£760");
+    fireEvent.click(screen.getByTestId("nav-reply"));
+    expect(screen.getByTestId("cloud-send-button")).toBeDisabled();
+  });
+
+  it("withholds a settlement that comes before the same amount is restated", async () => {
+    await boot();
+    setNotice(
+      "Northwind Energy\n\n18 November 2026\n\nDear A Example,\n\nCustomer services resolved the £640 charge on 2 November 2026.\nPlease pay £640 by 30 November 2026.\n"
+    );
+    await advance(300);
+    expect(screen.getByTestId("read-amount")).not.toHaveTextContent("£640");
+    expect(screen.getByTestId("read-amount-support")).not.toHaveTextContent("Verified");
+    fireEvent.click(screen.getByTestId("nav-plan"));
+    expect(screen.getByTestId("plan-amount")).not.toHaveTextContent("£640");
+    fireEvent.click(screen.getByTestId("nav-reply"));
+    expect(replyJson()).toContain('"amountsGBP":[]');
+    expect(replyJson()).not.toContain("[640]");
+    fireEvent.click(screen.getByTestId("nav-compare"));
+    expect(screen.getByTestId("compare-original-amount")).not.toHaveTextContent("£640");
+    expect(screen.getByTestId("amount-difference")).not.toHaveTextContent("£640");
+    fireEvent.click(screen.getByTestId("nav-reply"));
+    expect(screen.getByTestId("cloud-send-button")).toBeDisabled();
+    expect(network).toEqual([]);
+  });
+
+  it("withholds a bill that has been credited in full and an amount that is on hold", async () => {
+    await boot();
+    setNotice(
+      "Northwind Energy\n\n18 November 2026\n\nDear A Example,\n\nYour outstanding balance is £640.\nPlease pay by 30 November 2026.\n\nThis bill has been credited in full; the reminder was about your old account, not this bill.\n"
+    );
+    await advance(300);
+    expect(screen.getByTestId("read-amount")).not.toHaveTextContent("£640");
+    expect(screen.getByTestId("read-amount-support")).not.toHaveTextContent("Verified");
+    fireEvent.click(screen.getByTestId("nav-plan"));
+    expect(screen.getByTestId("plan-amount")).not.toHaveTextContent("£640");
+    fireEvent.click(screen.getByTestId("nav-reply"));
+    expect(replyJson()).toContain('"amountsGBP":[]');
+    fireEvent.click(screen.getByTestId("nav-compare"));
+    expect(screen.getByTestId("compare-original-amount")).not.toHaveTextContent("£640");
+    expect(screen.getByTestId("amount-difference")).not.toHaveTextContent("£640");
+    setNotice(
+      "Northwind Energy\n\n18 November 2026\n\nDear A Example,\n\nYour outstanding balance is £640.\nPlease pay by 30 November 2026.\nYou have disputed this amount and it is on hold while we investigate.\n"
+    );
+    await advance(300);
+    fireEvent.click(screen.getByTestId("nav-read"));
+    expect(screen.getByTestId("read-amount")).not.toHaveTextContent("£640");
+    expect(screen.getByTestId("read-amount-support")).not.toHaveTextContent("Verified");
+    fireEvent.click(screen.getByTestId("nav-reply"));
+    expect(replyJson()).toContain('"amountsGBP":[]');
+    expect(screen.getByTestId("cloud-send-button")).toBeDisabled();
+    expect(network).toEqual([]);
+  });
+
+  it("keeps a separate demand after a removed £30 dispute and drops approval when the text becomes unsupported", async () => {
+    await boot();
+    setNotice(
+      "Northwind Energy\n\n18 November 2026\n\nDear A Example,\n\nYou have disputed a separate £30 charge, which we have removed.\nYour outstanding balance is £640.\nPlease pay by 30 November 2026.\n"
+    );
+    await advance(300);
+    expect(screen.getByTestId("read-amount")).toHaveTextContent("£640");
+    expect(screen.getByTestId("read-amount-support")).not.toHaveTextContent("Needs review");
+    expect(screen.getByTestId("read-deadline")).toHaveTextContent("30 November 2026");
+    fireEvent.click(screen.getByTestId("nav-plan"));
+    expect(screen.getByTestId("plan-amount")).toHaveTextContent("£640");
+    fireEvent.click(screen.getByTestId("nav-reply"));
+    expect(replyJson()).toContain('"amountsGBP":[640]');
+    openAndApprove();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.getByTestId("privacy-current")).toBeInTheDocument();
+    setNotice(
+      "Northwind Energy\n\n18 November 2026\n\nDear A Example,\n\nIt is not true that £640 remains due.\n"
+    );
+    expect(screen.queryByTestId("privacy-current")).not.toBeInTheDocument();
+    await advance(300);
+    fireEvent.click(screen.getByTestId("nav-read"));
+    expect(screen.getByTestId("read-amount")).not.toHaveTextContent("£640");
+    expect(screen.getByTestId("read-amount-support")).not.toHaveTextContent("Verified");
+    fireEvent.click(screen.getByTestId("nav-compare"));
+    expect(screen.getByTestId("compare-original-amount")).not.toHaveTextContent("£640");
+    expect(screen.getByTestId("amount-difference")).not.toHaveTextContent("£640");
+    fireEvent.click(screen.getByTestId("nav-reply"));
+    expect(replyJson()).toContain('"amountsGBP":[]');
+    expect(screen.queryByTestId("privacy-current")).not.toBeInTheDocument();
+    expect(screen.getByTestId("cloud-send-button")).toBeDisabled();
+    expect(network).toEqual([]);
   });
 });

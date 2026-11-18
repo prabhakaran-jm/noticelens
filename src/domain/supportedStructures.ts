@@ -64,7 +64,7 @@ const CONDITIONAL_OPENER = /^(?:if|should|assuming|supposing|suppose|were|for\s+
 /** These two openings are not current when the same sentence is not a live demand. */
 const DUE_NOW_OPENING = /^the\s+amount\s+due\s+now\s+is\s+£|^amount\s+due\s+now\s+£/i;
 const DUE_NOW_NOT_CURRENT =
-  /\b(?:disput\w*|disagree\w*|hypothetical|example|copied|reproduced|previous\s+letter|earlier\s+letter|previously|if|should|assuming|suppose|supposing)\b/i;
+  /\b(?:disput\w*|disagree\w*|hypothetical|example|copied|reproduced|previous\s+letter|earlier\s+letter|previously|if|assuming|suppose|supposing)\b/i;
 
 export function matchesSupportedBalanceStructure(sentence: string): boolean {
   const s = sentence.replace(/\s+/g, " ").trim();
@@ -100,8 +100,12 @@ export function matchesSupportedBalanceStructure(sentence: string): boolean {
  */
 export function introducesParagraphFrame(sentence: string): boolean {
   const s = sentence.replace(/\s+/g, " ").trim();
-  return /\b(?:following\s+text\s+is\s+an\s+example|below\s+is\s+the\s+text|text\s+of\s+our\s+earlier|reproduced\s+from|extract\s+from)\b/i.test(
-    s
+  return (
+    /\b(?:following\s+text\s+is\s+an\s+example|below\s+is\s+the\s+text|text\s+of\s+our\s+earlier|reproduced\s+from|extract\s+from|copy\s+of\s+our\s+earlier|copied\s+letter|training\s+scenario)\b/i.test(
+      s
+    ) ||
+    /\bparser\s*:/i.test(s) ||
+    /^(?:imagine|appendix)\b/i.test(s)
   );
 }
 

@@ -53,9 +53,7 @@ const rows: Row[] = [
   {
     id: "B",
     text: CX + "The charge has been reinstated. Please pay £1,280 by 25 November 2026.",
-    amount: 1280,
-    pay: true,
-    deadline: "2026-11-25",
+    amount: null,
   },
   {
     id: "C",
@@ -193,9 +191,7 @@ const rows: Row[] = [
   {
     id: "p14",
     text: "You have raised a dispute. Your outstanding balance is £1,280 and remains due while we investigate.\n" + PAY,
-    amount: 1280,
-    pay: true,
-    deadline: "2026-11-25",
+    amount: null,
   },
   {
     id: "p15",

@@ -97,7 +97,7 @@ const cases: Expectation[] = [
   ["n3", "Outstanding balance at 1 October 2026: £1,280.\nOutstanding balance at 1 November 2026: £1,180.\nPlease pay by 25 November 2026.", null],
   ["n4", "Issued: 18 November 2026\nYour outstanding balance is £1,280. Please pay by 25 November 2026.", 1280, true, "2026-11-25", "2026-11-18"],
   ["n5", "Your outstanding balance is £1,280. " + PAY + " A late payment fee of £40 will be added if we do not receive payment.", 1280, true, "2026-11-25"],
-  ["n6", "You have disputed this bill. While we review your dispute, your outstanding balance of £1,280 is still due by 25 November 2026.", 1280, false, "2026-11-25"],
+  ["n6", "You have disputed this bill. While we review your dispute, your outstanding balance of £1,280 is still due by 25 November 2026.", null],
   ["n7", "Your outstanding balance is £520.\nOur earlier letter said \"Please pay £1,280 by 25 November 2026\" but that figure has been replaced.\nPlease pay the outstanding balance by 9 December 2026.", 520, true, "2026-12-09"],
   ["n8", "The £1,280 demand has been cancelled.\nPlease pay by 25 November 2026.", null],
   ["n10", "Thank you, your account has been paid in full.\n---\nPayment slip\nAmount due: £1,280", null],
