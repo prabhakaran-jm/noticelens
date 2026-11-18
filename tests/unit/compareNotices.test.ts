@@ -17,8 +17,10 @@ describe("compareNotices — £1,280 original against £520 revised", () => {
 
     expect(comparison.amount.value).toBe(1280);
     expect(comparison.amount.revised).toBe(520);
-    expect(comparison.amount.differenceGBP).toBe(-760);
-    expect(comparison.amount.status).toBe("changed");
+    expect(comparison.relationship).toBe("RELATIONSHIP_UNVERIFIED");
+    expect(comparison.relationshipReason).toBe("shared_account_only");
+    expect(comparison.amount.differenceGBP).toBeNull();
+    expect(comparison.amount.status).not.toBe("unchanged");
     expect(comparison.amount.verification?.verified).toBe(true);
     expect(comparison.amount.revisedVerification?.verified).toBe(true);
     expect(original.rawText.slice(
@@ -31,8 +33,10 @@ describe("compareNotices — £1,280 original against £520 revised", () => {
     )).toContain("£520");
 
     expect(comparison.responseDeadline.value).toBe("25 November 2026");
+    expect(comparison.responseDeadline.originalRole).toBe("payment");
     expect(comparison.responseDeadline.revised).toBe("16 December 2026");
-    expect(comparison.responseDeadline.laterByCalendarDays).toBe(21);
+    expect(comparison.responseDeadline.revisedRole).toBe("contact");
+    expect(comparison.responseDeadline.laterByCalendarDays).toBeNull();
     expect(comparison.responseDeadline.verification?.verified).toBe(true);
     expect(comparison.responseDeadline.revisedVerification?.verified).toBe(true);
     expect(comparison.responseDeadline.originalClassification?.urgency).toBe("upcoming");
@@ -99,12 +103,9 @@ describe("compareNotices — £1,280 original against £520 revised", () => {
       ),
       { today: "2026-11-13" }
     );
-    expect(comparison.responseDeadline.status).toBe("conflicting");
     expect(comparison.responseDeadline.revised).toBeNull();
-    expect(comparison.responseDeadline.revisedDates).toEqual([
-      "16 December 2026",
-      "20 December 2026",
-    ]);
+    expect(comparison.responseDeadline.revisedDates).not.toContain("20 December 2026");
+    expect(comparison.responseDeadline.revisedAuthority).not.toBe("verified");
     expect(comparison.responseDeadline.laterByCalendarDays).toBeNull();
     expect("authoritativeDeadline" in comparison.responseDeadline).toBe(false);
   });

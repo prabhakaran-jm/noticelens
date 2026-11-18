@@ -70,7 +70,9 @@ describe("production Civic Calm shell", () => {
     const comparison = compareNoticeTexts(original, revised, { today });
     expect(screen.getByTestId("compare-original-amount")).toHaveTextContent("£1,280");
     expect(screen.getByTestId("compare-revised-amount")).toHaveTextContent("£520");
-    expect(screen.getByTestId("amount-difference")).toHaveTextContent("£760 lower");
+    expect(screen.getByTestId("amount-difference")).toHaveTextContent("Needs review");
+    expect(screen.getByTestId("amount-difference")).not.toHaveTextContent("£760");
+    expect(screen.getByTestId("compare-relationship")).toHaveTextContent("needs review");
     expect(screen.getByTestId("omission-alert")).toHaveTextContent(
       comparison.billingPeriod.omissionPrompt ?? ""
     );

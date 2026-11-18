@@ -505,7 +505,8 @@ describe("Phase 3D production App", () => {
     fireEvent.click(screen.getByTestId("nav-compare"));
     expect(screen.getByTestId("compare-original-amount")).toHaveTextContent("£1,280");
     expect(screen.getByTestId("compare-revised-amount")).toHaveTextContent("£520");
-    expect(screen.getByTestId("amount-difference")).toHaveTextContent("£760 lower");
+    expect(screen.getByTestId("amount-difference")).toHaveTextContent("Needs review");
+    expect(screen.getByTestId("amount-difference")).not.toHaveTextContent("£760");
     const receipt = receiptForOnDeviceCall({
       output: {
         noticeCategory: "utility_electricity",

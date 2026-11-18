@@ -1,4 +1,4 @@
-import type { NoticeComparison } from "../../domain/compareNotices";
+import type { DeadlineRole, NoticeComparison } from "../../domain/compareNotices";
 import type { SourceAmountAuthority } from "../../domain/sourceGrounding";
 import { formatGbp, formatSignedDifference } from "../format";
 import { SourceNoticeReader } from "../shared/SourceNoticeReader";
@@ -14,19 +14,39 @@ function balanceLabel(value: number | null, authority: SourceAmountAuthority): s
 }
 
 function differenceLabel(comparison: NoticeComparison): string {
-  if (
-    comparison.amount.originalAuthority !== "verified" ||
-    comparison.amount.revisedAuthority !== "verified"
-  ) {
-    if (
-      comparison.amount.originalAuthority === "not_stated" &&
-      comparison.amount.revisedAuthority === "not_stated"
-    ) {
-      return "Not stated";
-    }
-    return "Needs review";
+  if (comparison.relationship === "COMPARABLE") {
+    return formatSignedDifference(comparison.amount.differenceGBP);
   }
-  return formatSignedDifference(comparison.amount.differenceGBP);
+  if (comparison.relationship === "NOT_COMPARABLE") {
+    return "Different liabilities";
+  }
+  if (
+    comparison.amount.originalAuthority === "not_stated" &&
+    comparison.amount.revisedAuthority === "not_stated"
+  ) {
+    return "Not stated";
+  }
+  return "Needs review";
+}
+
+function dateLabel(stated: string | null, authority: SourceAmountAuthority, role: DeadlineRole | null = null): string {
+  if (authority !== "verified" || !stated) {
+    return authority === "not_stated" ? "Not stated" : "Needs review";
+  }
+  if (role === "contact") {
+    return `Contact deadline: ${stated}`;
+  }
+  return stated;
+}
+
+function relationshipNote(comparison: NoticeComparison): string | null {
+  if (comparison.relationship === "NOT_COMPARABLE") {
+    return "These notices do not describe the same liability.";
+  }
+  if (comparison.relationship === "RELATIONSHIP_UNVERIFIED") {
+    return "The relationship between these notices needs review. No verified change is shown.";
+  }
+  return null;
 }
 
 export function CompareUpdateScreen(props: {
@@ -57,6 +77,15 @@ export function CompareUpdateScreen(props: {
           {revisedBanner.label}
         </p>
       ) : null}
+      {relationshipNote(props.comparison) ? (
+        <p className="banner" data-testid="compare-relationship" role="status">
+          {relationshipNote(props.comparison)}
+        </p>
+      ) : (
+        <p className="sr-only" data-testid="compare-relationship">
+          {props.comparison.relationship}
+        </p>
+      )}
       {props.comparison.billingPeriod.omittedInRevised && props.comparison.billingPeriod.omissionPrompt ? (
         <p className="banner" data-testid="omission-alert" role="status">
           {props.comparison.billingPeriod.omissionPrompt}
@@ -101,16 +130,28 @@ export function CompareUpdateScreen(props: {
           </tr>
           <tr>
             <th scope="row">Notice date</th>
-            <td data-label="Original">{props.comparison.issueDate.original ?? "Not stated"}</td>
-            <td data-label="Revised">{props.comparison.issueDate.revised ?? "Not stated"}</td>
+            <td data-label="Original" data-testid="compare-original-issue">
+              {dateLabel(props.comparison.issueDate.original, props.comparison.issueDate.originalAuthority)}
+            </td>
+            <td data-label="Revised" data-testid="compare-revised-issue">
+              {dateLabel(props.comparison.issueDate.revised, props.comparison.issueDate.revisedAuthority)}
+            </td>
           </tr>
           <tr>
             <th scope="row">Response date</th>
-            <td data-label="Original">
-              {props.comparison.responseDeadline.originalDates.join(", ") || "Not stated"}
+            <td data-label="Original" data-testid="compare-original-response">
+              {dateLabel(
+                props.comparison.responseDeadline.value,
+                props.comparison.responseDeadline.originalAuthority,
+                props.comparison.responseDeadline.originalRole
+              )}
             </td>
-            <td data-label="Revised">
-              {props.comparison.responseDeadline.revisedDates.join(", ") || "Not stated"}
+            <td data-label="Revised" data-testid="compare-revised-response">
+              {dateLabel(
+                props.comparison.responseDeadline.revised,
+                props.comparison.responseDeadline.revisedAuthority,
+                props.comparison.responseDeadline.revisedRole
+              )}
             </td>
           </tr>
         </tbody>

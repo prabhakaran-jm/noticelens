@@ -21,7 +21,11 @@ import {
   type ApprovalHandle,
 } from "../../domain/approvalRegistry";
 import { groundNoticeFacts } from "../../adapters/groundNoticeFacts";
-import { compareNoticeTexts } from "../../domain/compareNotices";
+import {
+  compareNotices,
+  extractComparableFacts,
+  maskUnsettledComparison,
+} from "../../domain/compareNotices";
 import { isoDateFromClock } from "../../domain/dates";
 import type { InferenceEvidenceReceipt } from "../../domain/evidenceReceipt";
 import { normalizeNewlines } from "../../domain/textNormalize";
@@ -200,10 +204,37 @@ export function NoticeLensApp() {
   const actionLabels = inspection.readableRows
     .filter((row) => row.label.startsWith("Action label"))
     .map((row) => row.value);
-  const comparison = useMemo(
-    () => compareNoticeTexts(originalText, revisedText, { today }),
-    [originalText, revisedText, today]
+  const [settledOriginal, setSettledOriginal] = useState(originalText);
+  const [settledRevised, setSettledRevised] = useState(revisedText);
+  const originalLiveRef = useRef(originalText);
+  const revisedLiveRef = useRef(revisedText);
+  originalLiveRef.current = originalText;
+  revisedLiveRef.current = revisedText;
+  useEffect(() => {
+    if (originalText === settledOriginal && revisedText === settledRevised) {
+      return;
+    }
+    const originalSnapshot = originalText;
+    const revisedSnapshot = revisedText;
+    const handle = window.setTimeout(() => {
+      if (originalLiveRef.current !== originalSnapshot || revisedLiveRef.current !== revisedSnapshot) {
+        return;
+      }
+      setSettledOriginal(originalSnapshot);
+      setSettledRevised(revisedSnapshot);
+    }, 300);
+    return () => window.clearTimeout(handle);
+  }, [originalText, revisedText, settledOriginal, settledRevised]);
+  const originalFacts = useMemo(() => extractComparableFacts(settledOriginal), [settledOriginal]);
+  const revisedFacts = useMemo(() => extractComparableFacts(settledRevised), [settledRevised]);
+  const settledComparison = useMemo(
+    () => compareNotices(originalFacts, revisedFacts, { today }),
+    [originalFacts, revisedFacts, today]
   );
+  const comparison = maskUnsettledComparison(settledComparison, {
+    original: originalText !== settledOriginal,
+    revised: revisedText !== settledRevised,
+  });
   const identifiers = inspection.redaction.ok ? inspection.redaction.localIdentifierMap.entries : [];
 
   return (
