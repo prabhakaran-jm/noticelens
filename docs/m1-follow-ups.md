@@ -706,6 +706,28 @@ R5-3, R5-2, R5-4, and R5-5 live send-time enforcement stay OPEN. A future phase 
 
 `CLOUD_SUBMISSION_ENABLED` remains `false as const`. `requestClosedBriefSend` and `requestCloudSubmission` still throw. Send stays disabled. No new outbound path and no new dependency were added. Cloud submission stays prohibited. The suite is 962 tests across 44 files. Before this change it was 939 tests across 43 files. A green suite does not close R5-3.
 
+## Phase 5C-1 secure cloud preflight
+
+This is a simulated authorisation check for a future network request. It does not call Firebase, it does not draft a reply, and it does not send. `PREFLIGHT_READY` consumes one Phase 4B approval and `authorisesSend` stays false. Live send-time enforcement is a later change. This is not general production financial-grounding safety and it is not default-deny.
+
+The preflight reads the live notice text, the numeric edit generation, the extraction generation, and the document session. It calls `assessSupportedNotice` again. Only a live `DEMO_ELIGIBLE` result can continue. A stored eligibility object is ignored. A copied notice, a quoted notice, an embedded fixture, and a one-character edit stay ineligible.
+
+Content equality is not a trusted origin. Matching the wording of a synthetic notice, or carrying an approval that was minted for that notice, does not make a different document eligible. The live source is read again.
+
+The `sg1-` value is an FNV-1a staleness marker. It is not a cryptographic authorisation token. A fabricated or previous marker fails closed as `SOURCE_CHANGED`. A marker that merely matches the hash of the text in front of the function does not grant eligibility or approval.
+
+PR #24 checked the fixture text and the root shape of a reconstructed brief. It did not bind the exact canonical bytes shown in the privacy modal to a Phase 4B handle. This preflight does. The candidate bytes and the bytes rebuilt from the live source must be the same string. Reordered keys, pretty-printed JSON, and a space after a colon are `PAYLOAD_CHANGED`.
+
+Nested obligation fields use the existing `canonicalClosedCloudBrief` validator. An extra nested property, an unknown action, a bad date, a bad type, an extra root field, raw notice text, a name, an address, or an account reference is `PAYLOAD_NONCANONICAL`. There is no second schema. Duplicate JSON object keys are rejected before `JSON.parse` can keep the last one.
+
+The only supported choice in this pull request is `responseGoal = request_billing_review` with no circumstance flags. Any other goal or flag is `UNSUPPORTED_GOAL_OR_FLAGS`. The supported goal is not substituted in.
+
+The approval handle is the Phase 4B registry. `authoriseExactApproval` is the consumption step. The binding is built from the live generation, document session, identifier epoch, extraction generation, goal, flags, and the exact rebuilt bytes. The saved `boundContext` on the older approval adapter is not consulted. A pending, missing, invalidated, consumed, other-session, or post-edit handle fails closed. A failed check does not consume and does not restore a handle. A successful simulated check is single-use.
+
+R5-3, R5-2, R5-4, and R5-5 live send-time enforcement stay OPEN. Legacy approval residuals, unsupported arbitrary analysis, and real-browser verification stay open. Compare still withholds the demo pair. A green suite does not close those items.
+
+`CLOUD_SUBMISSION_ENABLED` remains `false as const`. `requestClosedBriefSend` and `requestCloudSubmission` still throw. Send stays disabled. The production screens do not gain a submit control. No `fetch`, Firebase cloud invocation, `sendBeacon`, or `WebSocket` was added. No new dependency was added. The suite is 1041 tests across 45 files. Before this change it was 962 tests across 44 files.
+
 ## Milestone 4
 
 - Inspect network request bodies in real Chrome before the public demo. Mocked calls do not satisfy that gate.

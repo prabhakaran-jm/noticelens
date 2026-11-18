@@ -109,7 +109,7 @@ describe("Phase 5B production grounding", () => {
     expect(() => requestCloudSubmission({} as never)).toThrow();
     expect(() => requestClosedBriefSend({} as never)).toThrow();
     await boot();
-    expect(document.body.textContent ?? "").not.toMatch(/DEMO_ELIGIBLE|demo-eligible|Cloud eligible/i);
+    expect(document.body.textContent ?? "").not.toMatch(/DEMO_ELIGIBLE|demo-eligible|Cloud eligible|PREFLIGHT_READY/i);
     expect(screen.getByTestId("read-amount")).toHaveTextContent("£1,280");
     expect(screen.getByTestId("read-amount")).not.toHaveTextContent("£0");
 
