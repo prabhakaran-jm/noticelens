@@ -541,21 +541,23 @@ function closesObligation(sentence: string): boolean {
   if (/\bwrit(?:e|ten|ing)\b[\s\S]{0,40}\boff\b/i.test(s) && hasTarget) {
     return true;
   }
+  if (/\b(?:nothing|no\s+amount)\s+remains\s+due\b/i.test(s)) {
+    return true;
+  }
   if (/\b(?:revers(?:e|ed|ing)|credit(?:ed)?)\b/i.test(s) && hasTarget) {
     if (/\brevers(?:e|ed|ing)\b/i.test(s)) {
       return true;
     }
-    // Only a future offer or a credit that is explicitly not this bill.
-    // "can" or "may" elsewhere does not make a completed credit possible.
+    // Only a future offer. "can" or "may" elsewhere does not make a
+    // completed credit possible. A credit on another account is not an
+    // exception: "not this bill" must not keep a bill that was credited.
     const futureCredit =
       (/\b(?:may|might)\s+receive\s+a\s+credit\b/i.test(s) || /\b(?:can|could)\s+discuss\s+a\s+credit\b/i.test(s)) &&
       !/\b(?:was|were|has|have)\s+(?:been\s+)?(?:applied|credited|offset)\b/i.test(s) &&
       !/\bfully\s+credited\b/i.test(s) &&
       !/\bhas\s+offset\b/i.test(s);
-    const creditOnAnotherAccount =
-      /\bnot\s+this\s+(?:(?:electricity|gas|water)\s+)?(?:bill|balance|account|demand)\b/i.test(s);
     const statedResidual = explicitCreditResidual(s).length > 0;
-    if (futureCredit || creditOnAnotherAccount || statedResidual) {
+    if (futureCredit || statedResidual) {
       return false;
     }
     return true;
@@ -1112,9 +1114,10 @@ function ownershipLabels(sentence: string): string[] {
 }
 
 /**
- * A positive amount that a sentence says remains after a credit or payment.
- * This does not admit a balance. It only protects an amount a supported
- * demand already established. "Nothing remains due" is not a residual.
+ * A positive amount a sentence says remains after a credit or payment.
+ * This does not admit a balance and does not calculate a new debt.
+ * The walker may keep it only when it is the amount a supported demand
+ * already established. "Nothing remains due" is not a residual.
  */
 function explicitCreditResidual(sentence: string): number[] {
   if (!/\b(?:credit(?:ed)?|payment|paid)\b/i.test(sentence)) {
@@ -1123,10 +1126,10 @@ function explicitCreditResidual(sentence: string): number[] {
   if (/\b(?:nothing|no\s+amount)\s+remains\s+due\b/i.test(sentence)) {
     return [];
   }
-  if (!/\b(?:but|although)\b/i.test(sentence) || !/\b(?:remains|still)\s+due\b/i.test(sentence)) {
+  if (!/\b(?:but|although|so)\b/i.test(sentence) || !/\b(?:remains|still)\s+due\b/i.test(sentence)) {
     return [];
   }
-  const parts = sentence.split(/\b(?:but|although)\b/i);
+  const parts = sentence.split(/\b(?:but|although|so)\b/i);
   const duePart = parts.find((part) => /\b(?:remains|still)\s+due\b/i.test(part));
   if (!duePart) {
     return [];
@@ -1134,18 +1137,9 @@ function explicitCreditResidual(sentence: string): number[] {
   return amountValuesIn(duePart).filter((amount) => amount > 0);
 }
 
+/** A dispute of a different claim only when the sentence names that separate amount. */
 function disputeIsAboutAnotherClaim(sentence: string): boolean {
-  const named = amountValuesIn(sentence);
-  if (/\bseparate\b/i.test(sentence) && named.length > 0) {
-    return true;
-  }
-  if (/\bhad\s+disputed\b/i.test(sentence) && /\b(?:resolved|removed|last\s+year)\b/i.test(sentence)) {
-    return true;
-  }
-  return (
-    /\b(?:removed|resolved\s+last\s+year)\b/i.test(sentence) &&
-    (named.length > 0 || /\b(?:20\d{2}|last\s+year|had\s+disputed)\b/i.test(sentence))
-  );
+  return /\bseparate\b/i.test(sentence) && amountValuesIn(sentence).length > 0;
 }
 
 function activeCurrentAmounts(
@@ -1194,6 +1188,8 @@ function walkCurrentBalances(text: string): {
   const seen = new Set<number>();
   const claimLabels = new Map<number, string[]>();
   const scopedDisputeAmounts = new Set<number>();
+  const unestablishedRemainder = new Set<number>();
+  let remainderBlocksOtherAmounts = false;
   let disputeLabels: string[] | null = null;
   let unlabeledDispute = false;
   let forwardBlock = false;
@@ -1220,6 +1216,31 @@ function walkCurrentBalances(text: string): {
     }
     for (const amount of amounts) {
       seen.add(amount);
+    }
+    const statedRemainder = explicitCreditResidual(sentence);
+    if (statedRemainder.length > 0 && !namesDistinctNewCharge(sentence) && !isReinstatement(sentence)) {
+      const activeNow = activeCurrentAmounts(
+        lastPositive,
+        lastScopedRetirement,
+        lastUnscopedRetirement,
+        lastScopedTerminal,
+        lastUnscopedTerminal,
+        lastScopedHistorical,
+        lastUnscopedHistorical
+      );
+      const matchesEstablished =
+        activeNow.length > 0 &&
+        statedRemainder.every((amount) => activeNow.some((item) => sameAmount(item, amount)));
+      if (!matchesEstablished) {
+        for (const amount of activeNow) {
+          lastScopedRetirement.set(amount, index);
+        }
+        for (const amount of statedRemainder) {
+          unestablishedRemainder.add(amount);
+        }
+        remainderBlocksOtherAmounts = true;
+      }
+      return;
     }
     if (forwardBlock && amounts.length > 0) {
       forwardBlock = false;
@@ -1420,8 +1441,15 @@ function walkCurrentBalances(text: string): {
       if (blockedByDispute && !distinctNew && !isReinstatement(sentence)) {
         return;
       }
-      const residual = explicitCreditResidual(sentence);
-      const candidates = residual.length > 0 ? residual : candidatePreview;
+      const candidates = candidatePreview;
+      if (remainderBlocksOtherAmounts && !distinctNew && !isReinstatement(sentence)) {
+        const sameRemainder =
+          candidates.length > 0 &&
+          candidates.every((amount) => [...unestablishedRemainder].some((item) => sameAmount(item, amount)));
+        if (!sameRemainder) {
+          return;
+        }
+      }
       for (const amount of candidates) {
         const retiredAt = lastScopedRetirement.get(amount);
         const sameAmountRetired = retiredAt !== undefined && retiredAt < index;

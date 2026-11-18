@@ -287,10 +287,38 @@ describe("Phase 5B production grounding", () => {
     expect(network).toEqual([]);
   });
 
-  it("keeps a separate demand after a historical dispute and drops approval when the text becomes unsupported", async () => {
+  it("withholds a bill that has been credited in full and an amount that is on hold", async () => {
     await boot();
     setNotice(
-      "Northwind Energy\n\n18 November 2026\n\nDear A Example,\n\nYou had disputed your 2024 bill, which was resolved last year.\nYour outstanding balance is £640.\nPlease pay by 30 November 2026.\n"
+      "Northwind Energy\n\n18 November 2026\n\nDear A Example,\n\nYour outstanding balance is £640.\nPlease pay by 30 November 2026.\n\nThis bill has been credited in full; the reminder was about your old account, not this bill.\n"
+    );
+    await advance(300);
+    expect(screen.getByTestId("read-amount")).not.toHaveTextContent("£640");
+    expect(screen.getByTestId("read-amount-support")).not.toHaveTextContent("Verified");
+    fireEvent.click(screen.getByTestId("nav-plan"));
+    expect(screen.getByTestId("plan-amount")).not.toHaveTextContent("£640");
+    fireEvent.click(screen.getByTestId("nav-reply"));
+    expect(replyJson()).toContain('"amountsGBP":[]');
+    fireEvent.click(screen.getByTestId("nav-compare"));
+    expect(screen.getByTestId("compare-original-amount")).not.toHaveTextContent("£640");
+    expect(screen.getByTestId("amount-difference")).not.toHaveTextContent("£640");
+    setNotice(
+      "Northwind Energy\n\n18 November 2026\n\nDear A Example,\n\nYour outstanding balance is £640.\nPlease pay by 30 November 2026.\nYou have disputed this amount and it is on hold while we investigate.\n"
+    );
+    await advance(300);
+    fireEvent.click(screen.getByTestId("nav-read"));
+    expect(screen.getByTestId("read-amount")).not.toHaveTextContent("£640");
+    expect(screen.getByTestId("read-amount-support")).not.toHaveTextContent("Verified");
+    fireEvent.click(screen.getByTestId("nav-reply"));
+    expect(replyJson()).toContain('"amountsGBP":[]');
+    expect(screen.getByTestId("cloud-send-button")).toBeDisabled();
+    expect(network).toEqual([]);
+  });
+
+  it("keeps a separate demand after a removed £30 dispute and drops approval when the text becomes unsupported", async () => {
+    await boot();
+    setNotice(
+      "Northwind Energy\n\n18 November 2026\n\nDear A Example,\n\nYou have disputed a separate £30 charge, which we have removed.\nYour outstanding balance is £640.\nPlease pay by 30 November 2026.\n"
     );
     await advance(300);
     expect(screen.getByTestId("read-amount")).toHaveTextContent("£640");

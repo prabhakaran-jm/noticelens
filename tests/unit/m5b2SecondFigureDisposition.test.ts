@@ -217,6 +217,7 @@ describe("credit mentions that are not a completed closure", () => {
 
   it("keeps the stated residual after a partial credit", () => {
     expectKept(letter(`${demand}\nA £40 credit was applied, but £640 remains due.`), "residual after balance");
+    expectKept(letter(`${demand}\n\nA £40 credit was applied, but £640 remains due.`), "residual next paragraph");
     const alone = evaluate(letter("A £40 credit was applied, but £640 remains due."));
     expect(alone.payload.amountsGBP).toEqual([]);
     expect(displayVerifiedAmount(alone.view)).toBeNull();
@@ -225,10 +226,34 @@ describe("credit mentions that are not a completed closure", () => {
     );
   });
 
-  it("does not let a credit on another account close this bill", () => {
-    expectKept(
+  it("does not keep £640 when a different amount is said to remain", () => {
+    const bodies = [
+      "A £600 credit was applied, but £40 remains due.",
+      "We received a payment of £500, but £140 remains due.",
+      "Partner charity paid £200, so £440 remains due.",
+    ];
+    for (const body of bodies) {
+      expectWithheld(letter(`${demand}\n${body}`), `after ${body}`);
+      expectWithheld(letter(`${demand}\n\n${body}`), `paragraph ${body}`);
+      expectWithheld(letter(`${body}\n${demand}`), `before ${body}`);
+      const { payload } = evaluate(letter(`${demand}\n${body}`));
+      expect(payload.amountsGBP, body).not.toContain(40);
+      expect(payload.amountsGBP, body).not.toContain(140);
+      expect(payload.amountsGBP, body).not.toContain(440);
+      expect(payload.amountsGBP, body).not.toContain(600);
+      expect(payload.amountsGBP, body).not.toContain(500);
+      expect(payload.amountsGBP, body).not.toContain(200);
+    }
+  });
+
+  it("withholds this bill when a credit sentence also says not this bill", () => {
+    expectWithheld(
       letter(`${demand}\nA credit applies to your gas account, not this electricity bill.`),
       "other account"
+    );
+    expectWithheld(
+      letter(`${demand}\n\nA credit applies to your gas account, not this electricity bill.`),
+      "other account next paragraph"
     );
   });
 
@@ -241,6 +266,21 @@ describe("credit mentions that are not a completed closure", () => {
     expectWithheld(
       letter(`${demand}\nThe full £640 has been credited to your account, so nothing remains due.`),
       "nothing remains"
+    );
+    expectWithheld(letter(`${demand}\nA credit has fully cleared your bill.`), "fully cleared");
+    expectWithheld(letter(`${demand}\nA credit has offset the amount owed.`), "offset owed");
+    expectWithheld(letter(`${demand}\nNothing remains due after the adjustment.`), "adjustment");
+    expectWithheld(
+      letter(
+        `${demand}\nThis bill has been credited in full; the reminder was about your old account, not this bill.`
+      ),
+      "cr11 after"
+    );
+    expectWithheld(
+      letter(
+        `${demand}\n\nThis bill has been credited in full; the reminder was about your old account, not this bill.`
+      ),
+      "cr11 next paragraph"
     );
   });
 });
@@ -327,12 +367,27 @@ describe("a dispute about another claim does not suppress a later demand", () =>
     );
   });
 
-  it("keeps £640 after a historical dispute that was resolved", () => {
-    expectKept(
+  it("withholds £640 after an unlabelled dispute that names a past year", () => {
+    expectWithheld(
       letter(
         "You had disputed your 2024 bill, which was resolved last year.\nYour outstanding balance is £640.\nPlease pay by 30 November 2026."
       ),
       "2024 bill"
+    );
+  });
+
+  it("does not treat a current on-hold dispute as a resolved older claim", () => {
+    expectWithheld(
+      letter(
+        `${demand}\nYou had disputed this bill, which was resolved last year in our favour, and it remains on hold.`
+      ),
+      "dsK"
+    );
+    expectWithheld(
+      letter(
+        `${demand}\nYou have disputed this charge, so in November 2026 we removed it from collection while we investigate.`
+      ),
+      "dsG"
     );
   });
 
