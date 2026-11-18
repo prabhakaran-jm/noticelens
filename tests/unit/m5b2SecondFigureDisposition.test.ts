@@ -3,6 +3,7 @@ import { buildClosedCloudBrief } from "../../src/adapters/buildClosedCloudBrief"
 import { displayVerifiedAmount, groundNoticeFacts } from "../../src/adapters/groundNoticeFacts";
 import { sentenceDisposesCurrentClaim } from "../../src/domain/claimContext";
 import { compareNoticeTexts } from "../../src/domain/compareNotices";
+import { verifiedBalanceForSource } from "../../src/domain/sourceGrounding";
 
 const TODAY = "2026-11-13";
 
@@ -25,17 +26,23 @@ function withSecond(second: string, disposition: string, separateParagraph = fal
 
 function expectWithheld(text: string, name: string) {
   const { view, payload } = evaluate(text);
+  const source = verifiedBalanceForSource(text);
   expect(payload.amountsGBP, name).toEqual([]);
   expect(payload.amountsGBP, name).not.toContain(640);
   expect(displayVerifiedAmount(view), name).toBeNull();
+  expect(source.amountGBP, name).toBeNull();
+  expect(source.authority, name).not.toBe("verified");
   expect(payload.obligations.some((item) => item.actionSummary === "pay_stated_balance"), name).toBe(false);
   expect(payload.responseDeadlines, name).not.toContain("2026-11-30");
 }
 
 function expectKept(text: string, name: string) {
   const { view, payload } = evaluate(text);
+  const source = verifiedBalanceForSource(text);
   expect(payload.amountsGBP, name).toEqual([640]);
   expect(displayVerifiedAmount(view), name).toBe(640);
+  expect(source.amountGBP, name).toBe(640);
+  expect(source.authority, name).toBe("verified");
   expect(payload.responseDeadlines, name).toContain("2026-11-30");
   expect(payload.amountsGBP, name).not.toContain(15);
   expect(payload.amountsGBP, name).not.toContain(300);
@@ -211,8 +218,11 @@ describe("credit mentions that are not a completed closure", () => {
   it("keeps the stated residual after a partial credit", () => {
     expectKept(letter(`${demand}\nA £40 credit was applied, but £640 remains due.`), "residual after balance");
     const alone = evaluate(letter("A £40 credit was applied, but £640 remains due."));
-    expect(alone.payload.amountsGBP).toEqual([640]);
-    expect(displayVerifiedAmount(alone.view)).toBe(640);
+    expect(alone.payload.amountsGBP).toEqual([]);
+    expect(displayVerifiedAmount(alone.view)).toBeNull();
+    expect(verifiedBalanceForSource(letter("A £40 credit was applied, but £640 remains due.")).authority).not.toBe(
+      "verified"
+    );
   });
 
   it("does not let a credit on another account close this bill", () => {
@@ -225,5 +235,112 @@ describe("credit mentions that are not a completed closure", () => {
   it("still withholds a credit that clears this balance", () => {
     expectWithheld(letter(`${demand}\nThe balance has been credited against your account.`), "credited against");
     expectWithheld(letter(`${demand}\nA credit of £640 has cleared the balance.`), "credit cleared");
+    expectWithheld(letter(`${demand}\nWe can confirm your bill is now fully credited.`), "fully credited");
+    expectWithheld(letter(`${demand}\nYou may now see that a credit has offset your bill.`), "has offset");
+    expectWithheld(letter(`${demand}\nA credit was applied and no amount remains due.`), "no amount remains");
+    expectWithheld(
+      letter(`${demand}\nThe full £640 has been credited to your account, so nothing remains due.`),
+      "nothing remains"
+    );
+  });
+});
+
+describe("unsupported remains-due wording is not a current balance", () => {
+  const rejected = [
+    "It is not true that £640 remains due.",
+    "Do you agree that £640 remains due?",
+    "As our 2024 letter explained, £640 remains due.",
+    "Here is what our March letter stated.\n£640 remains due.",
+    "Southwind Power wrote that £640 remains due.",
+    "Account 8842: £640 remains due.",
+    "Copy of our earlier letter.\n£640 remains due.",
+    "Invoice 1001 is disputed.\n£640 remains due.",
+  ];
+
+  it.each(rejected)("does not verify %s", (body) => {
+    const text = letter(body);
+    const { view, payload } = evaluate(text);
+    const source = verifiedBalanceForSource(text);
+    expect(payload.amountsGBP).toEqual([]);
+    expect(displayVerifiedAmount(view)).toBeNull();
+    expect(source.amountGBP).toBeNull();
+    expect(source.authority).not.toBe("verified");
+    const comparison = compareNoticeTexts(text, letter("Your outstanding balance is £520."), { today: TODAY });
+    expect(comparison.amount.value).not.toBe(640);
+    expect(comparison.amount.differenceGBP).toBeNull();
+  });
+});
+
+describe("a named settlement before the demand blocks the same amount", () => {
+  const settledFirst = [
+    "Customer services resolved the £640 charge on 2 November 2026.\nPlease pay £640 by 30 November 2026.",
+    "The £640 is now covered under the hardship scheme.\nPlease pay £640.",
+    "The £640 charge is no longer enforceable.\nPlease pay £640.",
+  ];
+
+  it.each(settledFirst)("withholds the later restatement in %s", (body) => {
+    expectWithheld(letter(body), body);
+  });
+
+  it("keeps a different later debt", () => {
+    expectKept(
+      letter(
+        "Customer services resolved the £300 charge on 2 November 2026.\nYour outstanding balance is £640.\nPlease pay by 30 November 2026."
+      ),
+      "different amount"
+    );
+  });
+
+  it("keeps an explicit separate charge and an explicit reinstatement", () => {
+    const separate = evaluate(
+      letter(
+        "Customer services resolved the £640 charge on 2 November 2026.\nA new and separate charge of £640 is due.\nPlease pay by 30 November 2026."
+      )
+    );
+    expect(separate.payload.amountsGBP).toEqual([640]);
+    const reinstated = evaluate(
+      letter(
+        "Customer services resolved the £640 charge on 2 November 2026.\nThe £640 charge has been reinstated.\nPlease pay by 30 November 2026."
+      )
+    );
+    expect(reinstated.payload.amountsGBP).toEqual([640]);
+  });
+
+  it("keeps a contact obligation from becoming a payment of the settled amount", () => {
+    const { payload } = evaluate(
+      letter(
+        "The £640 charge is no longer enforceable.\nPlease contact our billing team by 1 December 2026."
+      )
+    );
+    expect(payload.amountsGBP).toEqual([]);
+    expect(payload.obligations.some((item) => item.actionSummary === "pay_stated_balance")).toBe(false);
+  });
+});
+
+describe("a dispute about another claim does not suppress a later demand", () => {
+  it("keeps £640 after a removed separate charge", () => {
+    expectKept(
+      letter(
+        "You have disputed a separate £30 charge, which we have removed.\nYour outstanding balance is £640.\nPlease pay by 30 November 2026."
+      ),
+      "separate 30"
+    );
+  });
+
+  it("keeps £640 after a historical dispute that was resolved", () => {
+    expectKept(
+      letter(
+        "You had disputed your 2024 bill, which was resolved last year.\nYour outstanding balance is £640.\nPlease pay by 30 November 2026."
+      ),
+      "2024 bill"
+    );
+  });
+
+  it("still withholds an open dispute of this amount", () => {
+    expectWithheld(
+      letter(`${demand}\nYou have disputed this amount and it is on hold while we investigate.`),
+      "this amount on hold"
+    );
+    expectWithheld(letter(`${demand}\nWe have accepted the dispute.`), "accepted dispute");
   });
 });

@@ -27,8 +27,10 @@
  * A short claim may be accepted when the sentence itself is unambiguous.
  * An actual dispute of this claim, including one that is on hold or under
  * review, is not an undisputed current obligation. A right to dispute is
- * not that dispute. A balance that remains due after a partial credit is
- * the residual claim, not a new figure created by the credit sentence.
+ * not that dispute. A historical, removed, or separate dispute binds only
+ * the claim it identifies. “£X remains due” is not, by itself, a current
+ * balance. A partial credit keeps a residual only when an earlier supported
+ * demand already established that amount.
  * Context does not transfer across a blank line unless the later claim has
  * its own supported authority.
  *

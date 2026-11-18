@@ -47,7 +47,6 @@ const BALANCE_STRUCTURES: readonly RegExp[] = [
   new RegExp(`\\b(?:corrected|replacement)\\s+(?:charge|bill)\\s+comes\\s+to\\s+${AMOUNT}`, "i"),
   new RegExp(`\\b(?:new\\s+and\\s+separate|separate|new)\\s+(?:charge|bill)\\s+of\\s+${AMOUNT}`, "i"),
   new RegExp(`\\b(?:corrected|replacement)\\s+(?:charge|bill)\\s+of\\s+${AMOUNT}`, "i"),
-  new RegExp(`${AMOUNT}[\\d,]*(?:\\.\\d{1,2})?\\s+remains\\s+due\\b`, "i"),
   // Only these two openings. A sentence that merely contains the words is not a demand.
   new RegExp(`^the\\s+amount\\s+due\\s+now\\s+is\\s+${AMOUNT}`, "i"),
   new RegExp(`^amount\\s+due\\s+now\\s+${AMOUNT}`, "i"),
