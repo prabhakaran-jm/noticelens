@@ -25,9 +25,12 @@
  * - the source occurrence covers the figure
  *
  * A short claim may be accepted when the sentence itself is unambiguous.
- * A balance that explicitly remains due is not retired merely because the
- * same sentence mentions a dispute review. Context does not transfer across
- * a blank line unless the later claim has its own supported authority.
+ * An actual dispute of this claim, including one that is on hold or under
+ * review, is not an undisputed current obligation. A right to dispute is
+ * not that dispute. A balance that remains due after a partial credit is
+ * the residual claim, not a new figure created by the credit sentence.
+ * Context does not transfer across a blank line unless the later claim has
+ * its own supported authority.
  *
  * claimContextState is the sentence-level unresolved-context check. It does
  * not admit a balance. Admission is matchesSupportedBalanceStructure, the
@@ -40,31 +43,82 @@ const UNRESOLVED_CONTEXT =
   /\b(?:imagine|training\s+scenario|hypothetical|for\s+example|suppose|supposing|appendix|treat\s+the\s+following|copy\s+of\s+(?:our|the|your|an)|copied\s+letter|earlier\s+payment\s+notice|(?:letter|notice|bill)\s+said|said\s+you\s+owe|would\s+be|once\b|if\s+confirmed|if\s+the\b|former\s+tenant)\b|\bparser\s*:/i;
 
 /**
- * A completed disposition of the debt. A mention of help, a right to
- * challenge, or a future query is not this. The topic words alone are not
- * enough: the sentence has to say the debt was paid, settled, cleared,
- * picked up, or is disputed.
+ * A right to challenge, or a future query, is not a dispute of this claim.
+ * The topic word on its own is not enough.
  */
-function statesCompletedDisposition(sentence: string): boolean {
-  if (/\bno\s+longer\s+enforceable\b/i.test(sentence)) {
+function isRightsOrFutureDispute(sentence: string): boolean {
+  return (
+    /\b(?:right|wish)\s+to\s+dispute\b/i.test(sentence) ||
+    /\bif\s+you\s+(?:have|wish|want)\b/i.test(sentence) ||
+    /\b(?:can|may|could)\s+(?:raise|make|start)\s+a\s+dispute\b/i.test(sentence) ||
+    /\b(?:if|when)\s+(?:this|it)\s+is\s+not\s+resolved\b/i.test(sentence)
+  );
+}
+
+/**
+ * The sentence records that this claim is disputed, on hold, under review,
+ * or that the dispute was accepted. It does not match an offer of help.
+ */
+export function recordsActualDispute(sentence: string): boolean {
+  if (isRightsOrFutureDispute(sentence)) {
+    return false;
+  }
+  if (/\b(?:have|has|had)\s+disputed\b/i.test(sentence)) {
     return true;
   }
-  if (/\b(?:charge|balance|amount|bill|debt|demand)\s+(?:is|was|remains|has\s+been)\s+disputed\b/i.test(sentence)) {
+  if (/\b(?:have|has)\s+raised\s+a\s+dispute\b/i.test(sentence)) {
     return true;
   }
   if (
-    /\b(?:is|was|remains)\s+disputed\b/i.test(sentence) &&
+    /\b(?:charge|balance|amount|bill|debt|demand)\s+(?:is|was|remains|has\s+been)\s+disputed\b/i.test(sentence)
+  ) {
+    return true;
+  }
+  if (
+    /\b(?:is|was|remains|has\s+been)\s+disputed\b/i.test(sentence) &&
     /\b(?:charge|balance|amount|bill|debt|demand|it)\b/i.test(sentence)
   ) {
     return true;
   }
-  if (/\b(?:has|have)\s+resolved\s+(?:this|the)\s+(?:charge|balance|demand|bill)\b/i.test(sentence)) {
+  if (/\bdisputed\s+and\s+on\s+hold\b/i.test(sentence)) {
     return true;
   }
   if (
-    /\bresolved\s+(?:this|the)\s+(?:charge|balance|demand|bill)\b/i.test(sentence) &&
-    !/\bwill\s+resolve\b/i.test(sentence)
+    /\bdispute\b/i.test(sentence) &&
+    /\b(?:on\s+hold|under\s+review|while\s+we\s+(?:investigate|review)|pending)\b/i.test(sentence)
   ) {
+    return true;
+  }
+  if (/\baccepted\s+(?:the|your|this)\s+dispute\b/i.test(sentence)) {
+    return true;
+  }
+  if (/\bdispute\b[^.]{0,48}\b(?:has\s+been|was|were)\s+accepted\b/i.test(sentence)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * A completed act that takes the debt: paid, settled, cleared, picked up
+ * and paid, covered by hardship, or resolved. An offer, a right, or a
+ * future query is not this. An amount may sit between "the" and the noun.
+ */
+const RESOLVED_NAMED_DEBT =
+  /\b(?:has|have)\s+resolved\s+(?:this|the)\s+(?:£\s?[\d,]+(?:\.\d{1,2})?\s+)?(?:charge|balance|demand|bill)\b/i;
+const RESOLVED_NAMED_DEBT_PAST =
+  /\bresolved\s+(?:this|the)\s+(?:£\s?[\d,]+(?:\.\d{1,2})?\s+)?(?:charge|balance|demand|bill)\b/i;
+
+function statesCompletedDisposition(sentence: string): boolean {
+  if (recordsActualDispute(sentence)) {
+    return true;
+  }
+  if (/\bno\s+longer\s+enforceable\b/i.test(sentence)) {
+    return true;
+  }
+  if (RESOLVED_NAMED_DEBT.test(sentence)) {
+    return true;
+  }
+  if (RESOLVED_NAMED_DEBT_PAST.test(sentence) && !/\bwill\s+resolve\b/i.test(sentence)) {
     return true;
   }
   if (
@@ -73,10 +127,19 @@ function statesCompletedDisposition(sentence: string): boolean {
   ) {
     return true;
   }
+  if (/\bpicked\s+up\s+and\s+paid\b/i.test(sentence)) {
+    return true;
+  }
+  if (/\bpaid\s+by\s+(?:the\s+)?(?:supplier|charity)\b/i.test(sentence)) {
+    return true;
+  }
   if (/\b(?:charity|hardship)\b[^.]{0,80}\bpicked\s+up\b/i.test(sentence)) {
     return true;
   }
   if (/\bpicked\s+up\s+(?:the\s+)?(?:balance|charge|amount|bill|debt|demand)\b/i.test(sentence)) {
+    return true;
+  }
+  if (/\bcovered\s+(?:under|by)\s+(?:the\s+)?(?:hardship|charity)\b/i.test(sentence)) {
     return true;
   }
   if (/\bcredit\s+offset\b[^.]{0,60}\b(?:has|have)\s+(?:cleared|offset)\b/i.test(sentence)) {

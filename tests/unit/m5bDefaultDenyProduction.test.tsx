@@ -241,4 +241,28 @@ describe("Phase 5B production grounding", () => {
     fireEvent.click(screen.getByTestId("nav-reply"));
     expect(screen.getByTestId("cloud-send-button")).toBeDisabled();
   });
+
+  it("does not verify a balance that a later credit has cleared when a fee is also stated", async () => {
+    await boot();
+    setNotice(
+      "Northwind Energy\n\n18 November 2026\n\nDear A Example,\n\nYour outstanding balance is £640.\nPlease pay by 30 November 2026.\nA late payment fee of £15 is included.\nA hardship credit has cleared the balance.\n"
+    );
+    await advance(300);
+    expect(screen.getByTestId("read-amount")).not.toHaveTextContent("£640");
+    expect(screen.getByTestId("read-amount")).not.toHaveTextContent("Verified");
+    expect(screen.getByTestId("read-amount-support")).not.toHaveTextContent("Verified");
+    expect(screen.getByTestId("read-deadline")).not.toHaveTextContent("30 November 2026");
+    fireEvent.click(screen.getByTestId("nav-plan"));
+    expect(screen.getByTestId("plan-amount")).not.toHaveTextContent("£640");
+    expect(screen.getByTestId("plan-amount")).not.toHaveTextContent("Verified");
+    fireEvent.click(screen.getByTestId("nav-reply"));
+    expect(replyJson()).toContain('"amountsGBP":[]');
+    expect(replyJson()).not.toContain("640");
+    fireEvent.click(screen.getByTestId("nav-compare"));
+    expect(screen.getByTestId("compare-original-amount")).not.toHaveTextContent("£640");
+    expect(screen.getByTestId("amount-difference")).not.toHaveTextContent("£640");
+    expect(screen.getByTestId("amount-difference")).not.toHaveTextContent("£760");
+    fireEvent.click(screen.getByTestId("nav-reply"));
+    expect(screen.getByTestId("cloud-send-button")).toBeDisabled();
+  });
 });

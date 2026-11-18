@@ -191,9 +191,7 @@ const rows: Row[] = [
   {
     id: "p14",
     text: "You have raised a dispute. Your outstanding balance is £1,280 and remains due while we investigate.\n" + PAY,
-    amount: 1280,
-    pay: true,
-    deadline: "2026-11-25",
+    amount: null,
   },
   {
     id: "p15",
