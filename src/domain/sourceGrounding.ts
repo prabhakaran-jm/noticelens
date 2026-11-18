@@ -1092,7 +1092,6 @@ function walkCurrentBalances(text: string): {
   const lastScopedTerminal = new Map<number, number>();
   let lastUnscopedRetirement = -1;
   const lastScopedRetirement = new Map<number, number>();
-  const retiredLabels = new Map<number, Set<string>>();
   let lastUnscopedHistorical = -1;
   const lastScopedHistorical = new Map<number, number>();
   const lastPositive = new Map<number, number>();
@@ -1197,17 +1196,11 @@ function walkCurrentBalances(text: string): {
       if (pointsAtAmountBelow(sentence, amounts)) {
         forwardBlock = true;
       }
-      const retiredLabel = independentClaimLabel(sentence);
       if (amounts.length === 0) {
         lastUnscopedRetirement = index;
       } else {
         for (const amount of amounts) {
           lastScopedRetirement.set(amount, index);
-          if (retiredLabel) {
-            const labels = retiredLabels.get(amount) ?? new Set<string>();
-            labels.add(retiredLabel);
-            retiredLabels.set(amount, labels);
-          }
         }
       }
       return;
@@ -1255,17 +1248,11 @@ function walkCurrentBalances(text: string): {
         if (accountClosed && !distinctNew && !isReinstatement(sentence)) {
           continue;
         }
-        // Repeating a retired amount, including "please pay the outstanding
-        // balance of £…", is not a new demand. Only an explicit reinstatement
-        // or a genuinely distinct new charge can put that amount back.
-        const claimLabel = independentClaimLabel(sentence);
-        const earlierLabels = retiredLabels.get(amount);
-        const differentDebt =
-          claimLabel !== null &&
-          earlierLabels !== undefined &&
-          earlierLabels.size > 0 &&
-          !earlierLabels.has(claimLabel);
-        if (sameAmountRetired && !distinctNew && !isReinstatement(sentence) && !differentDebt) {
+        // Repeating a retired amount is not a new debt. A different fuel,
+        // account, or invoice label does not prove a separate obligation.
+        // Only an explicit reinstatement or an explicitly separate new charge
+        // can put that same amount back.
+        if (sameAmountRetired && !distinctNew && !isReinstatement(sentence)) {
           continue;
         }
         rememberPositive(acceptedAt, amount, index, lastPositive);

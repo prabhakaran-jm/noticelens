@@ -47,6 +47,9 @@ const BALANCE_STRUCTURES: readonly RegExp[] = [
   new RegExp(`\\b(?:corrected|replacement)\\s+(?:charge|bill)\\s+comes\\s+to\\s+${AMOUNT}`, "i"),
   new RegExp(`\\b(?:new\\s+and\\s+separate|separate|new)\\s+(?:charge|bill)\\s+of\\s+${AMOUNT}`, "i"),
   new RegExp(`\\b(?:corrected|replacement)\\s+(?:charge|bill)\\s+of\\s+${AMOUNT}`, "i"),
+  // Only these two openings. A sentence that merely contains the words is not a demand.
+  new RegExp(`^the\\s+amount\\s+due\\s+now\\s+is\\s+${AMOUNT}`, "i"),
+  new RegExp(`^amount\\s+due\\s+now\\s+${AMOUNT}`, "i"),
 ];
 
 /**
@@ -57,6 +60,11 @@ const DISPOSITION_AFTER =
   /\b(?:funded\s+by|handled\s+by|sorted\s+out\s+by|quashed|suspended|cancell?ed|withdrawn|waived|written\s+off|paid\s+in\s+full|met\s+in\s+full|covered\s+by|taken\s+care\s+of|zeroed|no\s+longer\s+(?:due|owed|payable)|nothing\s+(?:further\s+is\s+required|is\s+owed)|was\s+an\s+error)\b/i;
 
 const CONDITIONAL_OPENER = /^(?:if|should|assuming|supposing|suppose|were|for\s+example)\b/i;
+
+/** These two openings are not current when the same sentence is not a live demand. */
+const DUE_NOW_OPENING = /^the\s+amount\s+due\s+now\s+is\s+£|^amount\s+due\s+now\s+£/i;
+const DUE_NOW_NOT_CURRENT =
+  /\b(?:disput\w*|disagree\w*|hypothetical|example|copied|reproduced|previous\s+letter|earlier\s+letter|previously|if|should|assuming|suppose|supposing)\b/i;
 
 export function matchesSupportedBalanceStructure(sentence: string): boolean {
   const s = sentence.replace(/\s+/g, " ").trim();
@@ -74,6 +82,9 @@ export function matchesSupportedBalanceStructure(sentence: string): boolean {
     }
     const after = s.slice(match.index + matched.length);
     if (DISPOSITION_AFTER.test(after)) {
+      continue;
+    }
+    if (DUE_NOW_OPENING.test(matched) && DUE_NOW_NOT_CURRENT.test(s)) {
       continue;
     }
     return true;

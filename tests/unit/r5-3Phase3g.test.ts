@@ -535,15 +535,24 @@ describe("Phase 3G final cloud-fact safety gate", () => {
 
     it("rejects missing, partial, negative, out-of-range, and historical offsets identically across UI and v2", () => {
       const text =
-        "Your last payment on 18 November 2026 of £520 was received.\nDate: 18 November 2026\n" +
+        "Northwind Energy\n\n18 November 2026\n\nDear A Example,\n\nYour last payment on 1 October 2026 of £40 was received.\n" +
         BAL +
         PAY9;
       const base = groundNoticeFacts({ rawNoticeText: text, today: TODAY });
+      const issueStart = text.indexOf("18 November 2026");
+      const historicalDate = text.indexOf("1 October 2026");
+      const historicalAmount = text.indexOf("£40");
+      expect(issueStart).toBeGreaterThanOrEqual(0);
+      expect(historicalDate).toBeGreaterThan(issueStart);
       expect(displayVerifiedAmount(base)).toBe(520);
-      expect(displayVerifiedIssueDate(base)).toBeNull();
+      expect(displayVerifiedIssueDate(base)).toBe("18 November 2026");
+      expect(base.issueDate.verification?.verified).toBe(true);
+      expect(text.slice(base.issueDate.verification!.startOffset!, base.issueDate.verification!.endOffset!)).toContain(
+        "18 November 2026"
+      );
       expect(
         buildClosedCloudBrief({ view: base, responseGoal: "request_billing_review" }).payload.issueDate
-      ).toBeNull();
+      ).toBe("2026-11-18");
 
       const badVerifications = [
         null,
@@ -551,7 +560,12 @@ describe("Phase 3G final cloud-fact safety gate", () => {
         { ...base.amount.verification!, startOffset: 80, endOffset: null },
         { ...base.amount.verification!, startOffset: -1, endOffset: 90 },
         { ...base.amount.verification!, startOffset: 9000, endOffset: 9010 },
-        { ...base.amount.verification!, startOffset: 41, endOffset: 45 }, // historical £520
+        {
+          ...base.amount.verification!,
+          startOffset: historicalAmount,
+          endOffset: historicalAmount + "£40".length,
+          matchedSubstring: "£40",
+        },
       ];
 
       for (const verification of badVerifications) {
@@ -563,10 +577,19 @@ describe("Phase 3G final cloud-fact safety gate", () => {
         ).toEqual([]);
       }
 
+      const issueEvidence = { ...base.issueDate.verification! };
       const badIssueVerifications = [
         null,
-        { startOffset: null, endOffset: 80, mode: "exact" as const },
-        { startOffset: 21, endOffset: 37, mode: "exact" as const },
+        { ...issueEvidence, startOffset: null, endOffset: issueStart + 17 },
+        { ...issueEvidence, startOffset: issueStart, endOffset: null },
+        { ...issueEvidence, startOffset: -1, endOffset: issueStart + 17 },
+        { ...issueEvidence, startOffset: 9000, endOffset: 9017 },
+        {
+          ...issueEvidence,
+          startOffset: historicalDate,
+          endOffset: historicalDate + "1 October 2026".length,
+          matchedSubstring: "1 October 2026",
+        },
       ];
 
       for (const verification of badIssueVerifications) {

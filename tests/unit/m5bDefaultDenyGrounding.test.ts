@@ -157,7 +157,7 @@ const mixed: Array<[string, string, number | null, number[]]> = [
   ["m11 instruction not inherited", letter("Your outstanding balance is £640.\n\nThe water bill is overdue too. Please pay that account by 2 April 2026."), 640, []],
   ["m12 distinct products withheld", letter("The electricity outstanding balance is £520.\nThe gas outstanding balance is £520."), null, [520]],
   ["m13 distinct invoices withheld", letter("Invoice A outstanding balance is £520.\nInvoice B outstanding balance is £520."), null, [520]],
-  ["m14 cancelled 520 then different 520 claim", letter("Invoice A outstanding balance of £520 has been cancelled.\n\nInvoice B outstanding balance is £520."), 520, []],
+  ["m14 cancelled 520 then a new invoice label", letter("Invoice A outstanding balance of £520 has been cancelled.\n\nInvoice B outstanding balance is £520."), null, [520]],
   ["m15 repeated one claim", letter("Your outstanding balance is £520.\nPlease pay the outstanding balance of £520 by 20 March 2026."), 520, []],
   ["m16 model line ignored", letter("Your outstanding balance is £640.\n\nAI model: outstanding balance is £1."), 640, [1]],
   ["m17 hedge ignored", letter("Your outstanding balance is £640.\nThe figure should be around £700."), 640, [700]],
@@ -256,6 +256,108 @@ describe("Phase 5B mixed and conflicting", () => {
     const { payload } = evaluate(negatives.find((item) => item[0] === "n63 unrelated account")![1]);
     expect(payload.amountsGBP).toEqual([22]);
     expect(payload.responseDeadlines).not.toContain("2026-03-20");
+  });
+});
+
+describe("Phase 5B cancellation identity and amount-due openings", () => {
+  const caseA =
+    "Final Payment Reminder\n\n18 November 2026\n\nDear Customer,\n\nThe £640 electricity charge has been cancelled.\nPlease pay the outstanding balance of £640 on account 4471 by 30 November 2026.\n";
+  const caseB = "Invoice 1001 for £640 has been cancelled.\nYou owe £640 under invoice 1001A.\n";
+
+  it("withholds a cancelled amount restated on an account", () => {
+    const { payload } = evaluate(caseA);
+    expectAmount(caseA, null);
+    expect(payload.amountsGBP).not.toContain(640);
+    expect(payload.obligations.some((item) => item.actionSummary === "pay_stated_balance")).toBe(false);
+  });
+
+  it("withholds a cancelled amount restated under a new invoice identifier", () => {
+    expectAmount(caseB, null);
+    expect(evaluate(caseB).payload.amountsGBP).not.toContain(640);
+  });
+
+  it("does not treat a different invoice, fuel, or account label as a new debt", () => {
+    expectAmount(
+      letter(
+        "The £640 charge on account 4471, invoice 1001, has been cancelled.\nYou owe £640 on account 4471 under invoice 1002."
+      ),
+      null
+    );
+    expectAmount(
+      letter("The £640 electricity charge on invoice 1001 has been cancelled.\nYou owe £640 for gas on invoice 1001."),
+      null
+    );
+    expectAmount(
+      letter("Invoice 1001 for £640 has been cancelled.\nYou owe £640 on account 8842 under invoice 1001."),
+      null
+    );
+  });
+
+  it("does not revive a cancelled amount from a quoted demand", () => {
+    expectAmount(
+      letter('The £640 charge has been cancelled.\nThe leaflet said "Please pay the outstanding balance of £640."'),
+      null
+    );
+  });
+
+  it("keeps an explicitly separate replacement of the same amount", () => {
+    expectAmount(
+      letter("The £640 charge has been cancelled.\nA replacement bill of £640 is now due."),
+      640
+    );
+  });
+
+  it("keeps a later different amount and does not merge two independent demands", () => {
+    expectAmount(
+      letter("The £640 charge has been cancelled.\nYour outstanding balance is £300."),
+      300
+    );
+    const both = evaluate(
+      letter("The electricity outstanding balance is £640.\nThe gas outstanding balance is £300.")
+    );
+    expect(both.payload.amountsGBP).toEqual([]);
+    expect(both.payload.amountsGBP).not.toContain(940);
+    const sameFigure = evaluate(
+      letter("The electricity outstanding balance is £520.\nThe gas outstanding balance is £520.")
+    );
+    expect(sameFigure.payload.amountsGBP).toEqual([]);
+  });
+
+  it("accepts only the two amount-due openings when the sentence is a current demand", () => {
+    for (const sentence of ["The amount due now is £18.", "The amount due now is £2,450.", "Amount due now £33.50."]) {
+      expect(matchesSupportedBalanceStructure(sentence), sentence).toBe(true);
+    }
+    expectAmount(letter("The amount due now is £18."), 18);
+    expectAmount(letter("The amount due now is £2,450."), 2450);
+    expectAmount(letter("Amount due now £33.50."), 33.5);
+    expect(matchesSupportedBalanceStructure("Amount due now is £18.")).toBe(false);
+    expect(matchesSupportedBalanceStructure("The amount due now £18.")).toBe(false);
+    expect(matchesSupportedBalanceStructure("Please note the amount due now is £18.")).toBe(false);
+    expectAmount(letter("Please review the amount due now before you reply."), null);
+  });
+
+  it("rejects the amount-due openings in historical, hypothetical, disputed, copied, conditional, and cancelled context", () => {
+    const rejected = [
+      "The amount due now is £18 according to the previous letter.",
+      "The amount due now is £2,450 in this example.",
+      "The amount due now is £33.50 and you dispute it.",
+      "Amount due now £18 in the copied letter.",
+      "The amount due now is £2,450 if the appeal fails.",
+      "The amount due now is £33.50 and it has been cancelled.",
+      "Below is the text of our earlier letter. The amount due now is £18.",
+    ];
+    for (const sentence of rejected) {
+      expect(matchesSupportedBalanceStructure(sentence), sentence).toBe(false);
+      expect(evaluate(letter(sentence)).payload.amountsGBP, sentence).not.toContain(
+        sentence.includes("2,450") ? 2450 : sentence.includes("33.50") ? 33.5 : 18
+      );
+    }
+    const copied = letter(
+      "The following text is an example.\nThe amount due now is £18.\nAmount due now £2,450."
+    );
+    const copiedPayload = evaluate(copied).payload;
+    expect(copiedPayload.amountsGBP).not.toContain(18);
+    expect(copiedPayload.amountsGBP).not.toContain(2450);
   });
 });
 
