@@ -166,11 +166,40 @@ function jsonHasDuplicateKeys(text: string): boolean {
     if (peek() !== "-" && (peek() < "0" || peek() > "9")) {
       throw new Error("literal");
     }
+    readNumber();
+  }
+
+  function readDigits(): void {
+    if (peek() < "0" || peek() > "9") {
+      throw new Error("number");
+    }
+    while (peek() >= "0" && peek() <= "9") {
+      index += 1;
+    }
+  }
+
+  function readNumber(): void {
     if (peek() === "-") {
       index += 1;
     }
-    while (index < text.length && /[0-9eE+.]/.test(text[index] ?? "")) {
+    if (peek() === "0") {
       index += 1;
+      if (peek() >= "0" && peek() <= "9") {
+        throw new Error("number");
+      }
+    } else {
+      readDigits();
+    }
+    if (peek() === ".") {
+      index += 1;
+      readDigits();
+    }
+    if (peek() === "e" || peek() === "E") {
+      index += 1;
+      if (peek() === "+" || peek() === "-") {
+        index += 1;
+      }
+      readDigits();
     }
   }
 
@@ -262,28 +291,84 @@ function payloadContainsRawIdentifier(serialized: string): boolean {
   return FORBIDDEN_PAYLOAD_TEXT.some((token) => serialized.includes(token));
 }
 
+function snapshotLive(
+  live: unknown
+): { ok: true; value: LiveCloudPreflightState } | { ok: false; state: CloudPreflightState } {
+  try {
+    if (live === null || typeof live !== "object") {
+      return { ok: false, state: "SOURCE_NOT_ELIGIBLE" };
+    }
+    const source = live as Record<string, unknown>;
+    const rawNoticeText = source.rawNoticeText;
+    const today = source.today;
+    const presentedSourceGenerationId = source.presentedSourceGenerationId;
+    const noticeGeneration = source.noticeGeneration;
+    const extractionGeneration = source.extractionGeneration;
+    const identifierContextId = source.identifierContextId;
+    const documentContextId = source.documentContextId;
+    const responseGoal = source.responseGoal;
+    const circumstanceFlags = source.circumstanceFlags;
+    const presentedCanonicalBytes = source.presentedCanonicalBytes;
+    const approvalHandle = source.approvalHandle;
+    let flags: readonly string[];
+    if (Array.isArray(circumstanceFlags)) {
+      const copied: string[] = [];
+      for (let index = 0; index < circumstanceFlags.length; index += 1) {
+        copied.push(circumstanceFlags[index] as string);
+      }
+      flags = copied;
+    } else {
+      flags = circumstanceFlags as readonly string[];
+    }
+    return {
+      ok: true,
+      value: {
+        rawNoticeText: rawNoticeText as string,
+        today: today as string,
+        presentedSourceGenerationId: presentedSourceGenerationId as string,
+        noticeGeneration: noticeGeneration as number,
+        extractionGeneration: extractionGeneration as number,
+        identifierContextId: identifierContextId as string,
+        documentContextId: documentContextId as string,
+        responseGoal: responseGoal as string,
+        circumstanceFlags: flags,
+        presentedCanonicalBytes: presentedCanonicalBytes as string,
+        approvalHandle,
+      },
+    };
+  } catch {
+    return { ok: false, state: "SOURCE_NOT_ELIGIBLE" };
+  }
+}
+
 /**
- * Order: supported goal and flags, live generation marker, live eligibility,
- * canonical bytes, then one Phase 4B consumption. A failed check does not
- * consume and does not restore a handle.
+ * Order: one snapshot of the inputs, supported goal and flags, live generation
+ * marker, live eligibility, canonical bytes, then one Phase 4B consumption.
+ * A failed check does not consume and does not restore a handle.
+ * Caller booleans are not read.
  */
 export function evaluateCloudPreflight(live: LiveCloudPreflightState): CloudPreflightDecision {
-  if (unsupportedChoice(live.responseGoal, live.circumstanceFlags)) {
+  const snapshot = snapshotLive(live);
+  if (!snapshot.ok) {
+    return decide(snapshot.state);
+  }
+  const input = snapshot.value;
+  if (unsupportedChoice(input.responseGoal, input.circumstanceFlags)) {
     return decide("UNSUPPORTED_GOAL_OR_FLAGS");
   }
-  if (typeof live.rawNoticeText !== "string" || typeof live.today !== "string") {
+  if (typeof input.rawNoticeText !== "string" || typeof input.today !== "string") {
     return decide("SOURCE_NOT_ELIGIBLE");
   }
 
-  const text = normalizeNewlines(live.rawNoticeText);
+  const text = normalizeNewlines(input.rawNoticeText);
   const liveGenerationId = sourceGenerationId(text);
-  if (live.presentedSourceGenerationId !== liveGenerationId) {
+  if (input.presentedSourceGenerationId !== liveGenerationId) {
     return decide("SOURCE_CHANGED");
   }
 
   let eligible = false;
   try {
-    eligible = assessSupportedNotice({ rawNoticeText: text, today: live.today }).state === "DEMO_ELIGIBLE";
+    eligible = assessSupportedNotice({ rawNoticeText: text, today: input.today }).state === "DEMO_ELIGIBLE";
   } catch {
     eligible = false;
   }
@@ -292,26 +377,26 @@ export function evaluateCloudPreflight(live: LiveCloudPreflightState): CloudPref
   }
 
   if (
-    typeof live.presentedCanonicalBytes !== "string" ||
-    live.presentedCanonicalBytes.length === 0 ||
-    live.presentedCanonicalBytes.length > CLOSED_CLOUD_BRIEF_LIMITS.maxSerializedLength
+    typeof input.presentedCanonicalBytes !== "string" ||
+    input.presentedCanonicalBytes.length === 0 ||
+    input.presentedCanonicalBytes.length > CLOSED_CLOUD_BRIEF_LIMITS.maxSerializedLength
   ) {
     return decide("PAYLOAD_NONCANONICAL");
   }
 
   let duplicateKeys = false;
   try {
-    duplicateKeys = jsonHasDuplicateKeys(live.presentedCanonicalBytes);
+    duplicateKeys = jsonHasDuplicateKeys(input.presentedCanonicalBytes);
   } catch {
-    duplicateKeys = false;
+    return decide("PAYLOAD_NONCANONICAL");
   }
-  if (duplicateKeys || payloadContainsRawIdentifier(live.presentedCanonicalBytes)) {
+  if (duplicateKeys || payloadContainsRawIdentifier(input.presentedCanonicalBytes)) {
     return decide("PAYLOAD_NONCANONICAL");
   }
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(live.presentedCanonicalBytes);
+    parsed = JSON.parse(input.presentedCanonicalBytes);
   } catch {
     return decide("PAYLOAD_NONCANONICAL");
   }
@@ -325,13 +410,13 @@ export function evaluateCloudPreflight(live: LiveCloudPreflightState): CloudPref
     }
     throw error;
   }
-  if (presentedCanonical !== live.presentedCanonicalBytes) {
+  if (presentedCanonical !== input.presentedCanonicalBytes) {
     return decide("PAYLOAD_CHANGED");
   }
 
   let rebuilt: string;
   try {
-    const view = groundNoticeFacts({ rawNoticeText: text, today: live.today });
+    const view = groundNoticeFacts({ rawNoticeText: text, today: input.today });
     rebuilt = buildClosedCloudBrief({
       view,
       responseGoal: SUPPORTED_GOAL,
@@ -342,11 +427,11 @@ export function evaluateCloudPreflight(live: LiveCloudPreflightState): CloudPref
     }
     throw error;
   }
-  if (rebuilt !== live.presentedCanonicalBytes || payloadContainsRawIdentifier(rebuilt)) {
+  if (rebuilt !== input.presentedCanonicalBytes || payloadContainsRawIdentifier(rebuilt)) {
     return decide(payloadContainsRawIdentifier(rebuilt) ? "PAYLOAD_NONCANONICAL" : "PAYLOAD_CHANGED");
   }
 
-  const status = approvalLifecycle(live.approvalHandle);
+  const status = approvalLifecycle(input.approvalHandle);
   if (status === "INVALIDATED") {
     return decide("APPROVAL_INVALIDATED");
   }
@@ -360,15 +445,15 @@ export function evaluateCloudPreflight(live: LiveCloudPreflightState): CloudPref
   const binding: ApprovalBinding = {
     schema: "noticelens.cloud-brief.v2",
     canonicalBytes: rebuilt,
-    noticeGeneration: live.noticeGeneration,
-    identifierContextId: live.identifierContextId,
+    noticeGeneration: input.noticeGeneration,
+    identifierContextId: input.identifierContextId,
     responseGoal: SUPPORTED_GOAL,
     circumstanceFlags: [],
-    extractionGeneration: live.extractionGeneration,
-    documentContextId: live.documentContextId,
+    extractionGeneration: input.extractionGeneration,
+    documentContextId: input.documentContextId,
   };
-  const authorised = authoriseExactApproval(live.approvalHandle, binding);
-  if (!authorised.ok || approvalLifecycle(live.approvalHandle) !== "CONSUMED") {
+  const authorised = authoriseExactApproval(input.approvalHandle, binding);
+  if (!authorised.ok || approvalLifecycle(input.approvalHandle) !== "CONSUMED") {
     if (authorised.ok) {
       return decide("APPROVAL_ALREADY_CONSUMED");
     }

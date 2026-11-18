@@ -41,6 +41,9 @@ import { ReadNoticeScreen } from "../screens/ReadNoticeScreen";
 import { PrivacyApprovalModal } from "../privacy/PrivacyApprovalModal";
 import type { PrivacyApprovalView } from "../../adapters/privacyApproval";
 import { receiptForOnDeviceCall } from "./onDeviceSession";
+import { bindLiveCloudDispatch } from "../../adapters/liveCloudDispatch";
+import { sourceGenerationId } from "../../adapters/supportedNoticeGate";
+import type { LiveCloudPreflightState } from "../../adapters/secureCloudPreflight";
 
 let sessionCounter = 0;
 
@@ -73,7 +76,17 @@ export function NoticeLensApp() {
   const generationRef = useRef(0);
   const requestIdRef = useRef(0);
   const liveBindingRef = useRef<ApprovalBinding | null>(null);
+  const activeHandleRef = useRef<ApprovalHandle | null>(null);
+  const responseGoalRef = useRef(responseGoal);
+  const flagsRef = useRef(flags);
+  const extractionGenerationRef = useRef(0);
+  const identifierEpochRef = useRef(1);
+  const documentEpochRef = useRef(0);
+  const todayRef = useRef(today);
+  const readLiveRef = useRef<() => LiveCloudPreflightState | null>(() => null);
   const dropApproval = () => {
+    activeHandleRef.current = null;
+    liveBindingRef.current = null;
     invalidateActiveApprovals();
     setActiveHandle(null);
   };
@@ -86,11 +99,14 @@ export function NoticeLensApp() {
     noticeTextRef.current = normalizeNewlines(text);
     setOriginalText(noticeTextRef.current);
     setExtraction(null);
-    setExtractionGeneration((current) => current + 1);
+    extractionGenerationRef.current += 1;
+    setExtractionGeneration(extractionGenerationRef.current);
     setReceipts([]);
     setDeviceMessage(null);
     bumpGeneration();
   };
+
+  useEffect(() => bindLiveCloudDispatch(() => readLiveRef.current()), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -160,6 +176,8 @@ export function NoticeLensApp() {
     }
     if (seenIdentifierKey.current !== trackedIdentifierKey) {
       seenIdentifierKey.current = trackedIdentifierKey;
+      activeHandleRef.current = null;
+      liveBindingRef.current = null;
       invalidateActiveApprovals();
       setActiveHandle(null);
     }
@@ -178,6 +196,31 @@ export function NoticeLensApp() {
       }
     : null;
   liveBindingRef.current = approvalBinding;
+  activeHandleRef.current = activeHandle;
+  responseGoalRef.current = responseGoal;
+  flagsRef.current = flags;
+  extractionGenerationRef.current = extractionGeneration;
+  identifierEpochRef.current = identifierEpoch;
+  documentEpochRef.current = documentEpoch;
+  todayRef.current = today;
+  readLiveRef.current = () => {
+    const text = noticeTextRef.current;
+    const binding = liveBindingRef.current;
+    const handle = activeHandleRef.current;
+    return {
+      rawNoticeText: text,
+      today: todayRef.current,
+      presentedSourceGenerationId: sourceGenerationId(text),
+      noticeGeneration: generationRef.current,
+      extractionGeneration: extractionGenerationRef.current,
+      identifierContextId: `ie-${identifierEpochRef.current}`,
+      documentContextId: `${sessionNonce}-doc-${documentEpochRef.current}`,
+      responseGoal: responseGoalRef.current,
+      circumstanceFlags: flagsRef.current.slice(),
+      presentedCanonicalBytes: binding === null ? "" : binding.canonicalBytes,
+      approvalHandle: handle,
+    };
+  };
   const privacy = useMemo<PrivacyApprovalView>(() => {
     const approved =
       !identifierChanging &&
@@ -287,7 +330,8 @@ export function NoticeLensApp() {
                   }
                   setReceipts((current) => [...current, receipt]);
                   setExtraction(record.output);
-                  setExtractionGeneration((current) => current + 1);
+                  extractionGenerationRef.current += 1;
+                  setExtractionGeneration(extractionGenerationRef.current);
                   dropApproval();
                   bumpGeneration();
                 })
@@ -315,12 +359,14 @@ export function NoticeLensApp() {
             identifiers={identifiers}
             responseGoal={responseGoal}
             onResponseGoal={(goal) => {
+              responseGoalRef.current = goal;
               dropApproval();
               setResponseGoal(goal);
               bumpGeneration();
             }}
             flags={flags}
             onFlags={(next) => {
+              flagsRef.current = next;
               dropApproval();
               setFlags(next);
               bumpGeneration();
@@ -341,7 +387,8 @@ export function NoticeLensApp() {
             revisedText={revisedText}
             onRevisedText={(text) => {
               dropApproval();
-              setDocumentEpoch((current) => current + 1);
+              documentEpochRef.current += 1;
+              setDocumentEpoch(documentEpochRef.current);
               setRevisedText(normalizeNewlines(text));
               bumpGeneration();
             }}
@@ -396,6 +443,7 @@ export function NoticeLensApp() {
               releaseInvalidatedApprovals();
               return;
             }
+            activeHandleRef.current = registered.handle;
             setActiveHandle(registered.handle);
           }}
         />

@@ -728,6 +728,20 @@ R5-3, R5-2, R5-4, and R5-5 live send-time enforcement stay OPEN. Legacy approval
 
 `CLOUD_SUBMISSION_ENABLED` remains `false as const`. `requestClosedBriefSend` and `requestCloudSubmission` still throw. Send stays disabled. The production screens do not gain a submit control. No `fetch`, Firebase cloud invocation, `sendBeacon`, or `WebSocket` was added. No new dependency was added. The suite is 1041 tests across 45 files. Before this change it was 962 tests across 44 files.
 
+## Phase 5C-2 live dispatch boundary
+
+This stops at the moment a future network request would start. It does not call Firebase, it does not draft a reply, and it does not enable Send. `PREFLIGHT_READY` still has `authorisesSend: false`. This is not live send-time enforcement, and it is not general financial-grounding safety.
+
+Claude’s review of PR #25 is corrected here. A caller-built object is not the authority for a dispatch. `dispatchLiveCloudBoundary` takes no context argument. The mounted app installs one reader that copies the current notice text, document session, source generation, identifier epoch, extraction generation, response goal, circumstance flags, the canonical bytes in the approval binding, and the approval handle from synchronous refs. A missing or stale ref denies the attempt. React state from an older render is not the source of those values.
+
+The preflight copies each input once before it validates. A throwing getter or a null input is a denial, not an exception that could be treated as success. A scanner error, including a malformed numeric exponent, is `PAYLOAD_NONCANONICAL`. The check does not continue as though no duplicate key was present. Duplicate keys stay `PAYLOAD_NONCANONICAL`.
+
+Dispatch runs only when that function is called. Render, opening the privacy modal, effects, and eligibility preview do not call it, because a successful preflight consumes the approval. An in-flight attempt is `DISPATCH_IN_FLIGHT` and does not consume a second time. The sequence is the explicit call, the synchronous snapshot, the in-flight lock, fixture eligibility, canonical v2 validation, exact approved bytes, one `authoriseExactApproval`, then an immutable copy of those same bytes. There is no await and no rebuild after that copy.
+
+The returned bytes are not a reusable authorisation token. A second call sees the consumed handle. An invalidated handle stays invalidated. Editing the notice, changing the goal, changing a flag, or a stale on-device result cannot restore it. Only `request_billing_review` with no circumstance flags can pass, and a different choice is not rewritten to that goal. Two documents that contain the same fixture text have different sessions, so one approval does not dispatch the other.
+
+R5-3, R5-2, R5-4, and R5-5 live send-time enforcement stay OPEN. Real-browser verification stays OPEN. The production bundle already contains the Firebase client because on-device reading imports it. This change does not add a cloud drafting call, `sendBeacon`, a WebSocket, or `httpsCallable`. The screens never call the dispatch function, so a production user has no way to reach it and the shipped bundle does not keep a send call. Send stays disabled. `CLOUD_SUBMISSION_ENABLED` remains `false as const`. Both request functions still throw. A passing local preflight is not live Firebase enforcement. The suite is 1055 tests across 46 files. Before this change it was 1041 tests across 45 files.
+
 ## Milestone 4
 
 - Inspect network request bodies in real Chrome before the public demo. Mocked calls do not satisfy that gate.
