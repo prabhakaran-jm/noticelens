@@ -181,13 +181,17 @@ export function independentBillLabel(sentence: string): string | null {
  * only when it distinguishes a debt (a digit, or a single invoice letter).
  * One sentence still yields one label.
  */
+const INVOICE_LABEL = /\b(?:invoice|inv)\s*[-#:.]?\s*([a-z0-9]+)\b/i;
+const ACCOUNT_LABEL =
+  /\baccount\s+(?:reference|number|no\.?)?\s*[:#-]?\s*([a-z0-9]+(?:-[a-z0-9]+)?)\b/i;
+const FUEL_LABEL = /\b(electricity|gas|water|council\s+tax)\b/i;
+
 export function independentClaimLabel(sentence: string): string | null {
-  const invoice = /\b(?:invoice|inv)\s*[-#:.]?\s*([a-z0-9]+)\b/i.exec(sentence);
+  const invoice = INVOICE_LABEL.exec(sentence);
   if (invoice && (/\d/.test(invoice[1]!) || /^[a-z]$/i.test(invoice[1]!))) {
     return `invoice:${invoice[1]!.toLowerCase()}`;
   }
-  const account =
-    /\baccount\s+(?:reference|number|no\.?)?\s*[:#-]?\s*([a-z0-9]+(?:-[a-z0-9]+)?)\b/i.exec(sentence);
+  const account = ACCOUNT_LABEL.exec(sentence);
   if (account && /\d/.test(account[1]!)) {
     return `account:${account[1]!.toLowerCase()}`;
   }
@@ -198,7 +202,7 @@ export function independentClaimLabel(sentence: string): string | null {
     const part = (quarter[1] ?? quarter[2] ?? quarter[3] ?? "").toLowerCase();
     return `quarter:${part}`;
   }
-  const product = /\b(electricity|gas|water|council\s+tax)\b/i.exec(sentence);
+  const product = FUEL_LABEL.exec(sentence);
   const month = independentBillLabel(sentence);
   if (month && product) {
     return `${product[1]!.toLowerCase()}:${month}`;
@@ -210,4 +214,26 @@ export function independentClaimLabel(sentence: string): string | null {
     return `product:${product[1]!.toLowerCase()}`;
   }
   return null;
+}
+
+/**
+ * Every identity facet the existing label regexes already recognise.
+ * Unlike `independentClaimLabel`, this does not collapse a sentence to one label.
+ * It does not add a supplier grammar or a revision grammar.
+ */
+export function claimIdentityFacets(sentence: string): {
+  invoice: string | null;
+  account: string | null;
+  fuel: string | null;
+} {
+  const invoiceMatch = INVOICE_LABEL.exec(sentence);
+  const invoice =
+    invoiceMatch && (/\d/.test(invoiceMatch[1]!) || /^[a-z]$/i.test(invoiceMatch[1]!))
+      ? invoiceMatch[1]!.toLowerCase()
+      : null;
+  const accountMatch = ACCOUNT_LABEL.exec(sentence);
+  const account = accountMatch && /\d/.test(accountMatch[1]!) ? accountMatch[1]!.toLowerCase() : null;
+  const fuelMatch = FUEL_LABEL.exec(sentence);
+  const fuel = fuelMatch ? fuelMatch[1]!.toLowerCase().replace(/\s+/g, " ") : null;
+  return { invoice, account, fuel };
 }

@@ -5,7 +5,7 @@ import {
 } from "./amounts";
 import { parseBillingWindow, parseCalendarDate } from "./dates";
 import type { ActionSummaryId, QuoteVerificationResult } from "./types";
-import type { EligibilityDecision, NoticeEligibility } from "./eligibility";
+import { EMPTY_ELIGIBILITY, type EligibilityDecision, type NoticeEligibility } from "./eligibility";
 import {
   genericDateRowIsNotIssueDate,
   independentClaimLabel,
@@ -2420,15 +2420,14 @@ export function analyseNoticeEligibility(text: string): NoticeEligibility {
 export type SourceAmountAuthority = "verified" | "needs_review" | "not_stated" | "conflicting";
 
 /** The same eligible-balance decision Read Notice and v2 use for a fresh notice. */
-export function verifiedBalanceForSource(text: string): {
+export function verifiedBalanceFromEligibility(
+  text: string,
+  eligibility: NoticeEligibility
+): {
   amountGBP: number | null;
   quote: string | null;
   authority: SourceAmountAuthority;
 } {
-  if (noticeExceedsSupportedSize(text)) {
-    return { amountGBP: null, quote: null, authority: "needs_review" };
-  }
-  const eligibility = analyseNoticeEligibility(text);
   const conflicting = eligibility.decisions.some(
     (item) => item.status === "NEEDS_REVIEW" && item.reason === "conflicting_balances" && item.amount !== null
   );
@@ -2457,6 +2456,33 @@ export function verifiedBalanceForSource(text: string): {
     return { amountGBP: null, quote: null, authority: "conflicting" };
   }
   return { amountGBP: null, quote: null, authority: sawAmount ? "needs_review" : "not_stated" };
+}
+
+export function eligibilityAndBalance(text: string): {
+  eligibility: NoticeEligibility;
+  balance: {
+    amountGBP: number | null;
+    quote: string | null;
+    authority: SourceAmountAuthority;
+  };
+} {
+  if (noticeExceedsSupportedSize(text)) {
+    return {
+      eligibility: EMPTY_ELIGIBILITY,
+      balance: { amountGBP: null, quote: null, authority: "needs_review" },
+    };
+  }
+  const eligibility = analyseNoticeEligibility(text);
+  return { eligibility, balance: verifiedBalanceFromEligibility(text, eligibility) };
+}
+
+/** The same eligible-balance decision Read Notice and v2 use for a fresh notice. */
+export function verifiedBalanceForSource(text: string): {
+  amountGBP: number | null;
+  quote: string | null;
+  authority: SourceAmountAuthority;
+} {
+  return eligibilityAndBalance(text).balance;
 }
 
 export function assessPaymentClaims(text: string): PaymentClaimAssessment[] {

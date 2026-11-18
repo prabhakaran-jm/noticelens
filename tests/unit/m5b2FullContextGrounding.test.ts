@@ -207,12 +207,13 @@ describe("Phase 5B-2 Compare uses the verified balance", () => {
     return compareNoticeTexts(left, right, { today: TODAY });
   }
 
-  it("shows £760 lower for the verified demo notices", () => {
+  it("shows both demo amounts and does not verify a £760 change", () => {
     const comparison = compared(original, revised);
     expect(comparison.amount.value).toBe(1280);
     expect(comparison.amount.revised).toBe(520);
-    expect(comparison.amount.differenceGBP).toBe(-760);
-    expect(comparison.amount.status).toBe("changed");
+    expect(comparison.relationship).toBe("RELATIONSHIP_UNVERIFIED");
+    expect(comparison.amount.differenceGBP).toBeNull();
+    expect(comparison.amount.status).not.toBe("unchanged");
     expect(comparison.amount.originalAuthority).toBe("verified");
     expect(comparison.amount.revisedAuthority).toBe("verified");
   });
@@ -280,7 +281,8 @@ describe("Phase 5B-2 Compare uses the verified balance", () => {
     );
     expect(comparison.amount.value).toBe(1280);
     expect(comparison.amount.revised).toBe(520);
-    expect(comparison.amount.differenceGBP).toBe(-760);
+    expect(comparison.amount.differenceGBP).toBeNull();
+    expect(comparison.relationship).toBe("RELATIONSHIP_UNVERIFIED");
   });
 
   it("does not compare a third-party amount", () => {
@@ -299,7 +301,7 @@ describe("Phase 5B-2 Compare uses the verified balance", () => {
   it("drops the previous difference when the revised text changes", () => {
     const before = compared(original, revised);
     const after = compared(original, letter("Our March letter said you owe £520."));
-    expect(before.amount.differenceGBP).toBe(-760);
+    expect(before.amount.differenceGBP).toBeNull();
     expect(after.amount.revised).toBeNull();
     expect(after.amount.differenceGBP).toBeNull();
   });
@@ -307,7 +309,7 @@ describe("Phase 5B-2 Compare uses the verified balance", () => {
   it("drops the previous difference when the original text changes", () => {
     const before = compared(original, revised);
     const after = compared(letter("Imagine your outstanding balance is £1,280."), revised);
-    expect(before.amount.differenceGBP).toBe(-760);
+    expect(before.amount.differenceGBP).toBeNull();
     expect(after.amount.value).toBeNull();
     expect(after.amount.differenceGBP).toBeNull();
   });

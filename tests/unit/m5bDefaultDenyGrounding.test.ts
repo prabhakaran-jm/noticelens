@@ -180,7 +180,8 @@ describe("Phase 5B positive structures", () => {
     expect(amountFactPresentation(first.view)).toBe("verified");
     expect(amountFactPresentation(second.view)).toBe("verified");
     const comparison = compareNoticeTexts(original, revised, { today: TODAY });
-    expect(comparison.amount.differenceGBP).toBe(-760);
+    expect(comparison.amount.differenceGBP).toBeNull();
+    expect(comparison.relationship).toBe("RELATIONSHIP_UNVERIFIED");
   });
 
   it.each(positives)("accepts %s", (_name, text, amount) => {

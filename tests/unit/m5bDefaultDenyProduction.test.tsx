@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CLOUD_SUBMISSION_ENABLED, requestCloudSubmission } from "../../src/adapters/cloudApprovalSession";
@@ -116,7 +117,9 @@ describe("Phase 5B production grounding", () => {
     fireEvent.click(screen.getByTestId("nav-compare"));
     expect(screen.getByTestId("compare-original-amount")).toHaveTextContent("£1,280");
     expect(screen.getByTestId("compare-revised-amount")).toHaveTextContent("£520");
-    expect(screen.getByTestId("amount-difference")).toHaveTextContent("£760 lower");
+    expect(screen.getByTestId("amount-difference")).toHaveTextContent("Needs review");
+    expect(screen.getByTestId("amount-difference")).not.toHaveTextContent("£760");
+    expect(screen.getByTestId("compare-relationship")).toHaveTextContent("needs review");
 
     openAndApprove();
     const approved = (screen.getByTestId("privacy-exact-json").textContent ?? "").trim();
@@ -161,7 +164,9 @@ describe("Phase 5B production grounding", () => {
   it("drops a stale comparison when either notice changes", async () => {
     await boot();
     fireEvent.click(screen.getByTestId("nav-compare"));
-    expect(screen.getByTestId("amount-difference")).toHaveTextContent("£760 lower");
+    expect(screen.getByTestId("amount-difference")).toHaveTextContent("Needs review");
+    expect(screen.getByTestId("amount-difference")).not.toHaveTextContent("£760");
+    expect(screen.getByTestId("compare-relationship")).toHaveTextContent("needs review");
     expect(screen.getByTestId("compare-original-amount")).toHaveTextContent("£1,280");
     expect(screen.getByTestId("compare-revised-amount")).toHaveTextContent("£520");
     fireEvent.change(screen.getByTestId("revised-text"), {
@@ -347,5 +352,83 @@ describe("Phase 5B production grounding", () => {
     expect(screen.queryByTestId("privacy-current")).not.toBeInTheDocument();
     expect(screen.getByTestId("cloud-send-button")).toBeDisabled();
     expect(network).toEqual([]);
+  });
+
+  it("clears a comparison immediately, settles once, and leaves v2 unchanged", async () => {
+    await boot();
+    fireEvent.click(screen.getByTestId("nav-read"));
+    expect(screen.getByTestId("read-issue-date")).toHaveTextContent("18 November 2026");
+    expect(screen.getByTestId("read-deadline")).toHaveTextContent("25 November 2026");
+    fireEvent.click(screen.getByTestId("nav-compare"));
+    expect(screen.getByTestId("compare-original-issue")).toHaveTextContent("18 November 2026");
+    expect(screen.getByTestId("compare-original-issue")).not.toHaveTextContent("Needs review");
+    expect(screen.getByTestId("compare-original-response")).toHaveTextContent("25 November 2026");
+    expect(screen.getByTestId("compare-original-response")).not.toHaveTextContent("Contact deadline");
+    expect(screen.getByTestId("compare-revised-response")).toHaveTextContent("Contact deadline: 16 December 2026");
+    expect(screen.getByTestId("amount-difference")).not.toHaveTextContent("£760");
+    fireEvent.click(screen.getByTestId("nav-reply"));
+    const before = replyJson();
+    expect(before).toContain('"amountsGBP":[1280]');
+    expect(before).toContain('"issueDate":"2026-11-18"');
+    fireEvent.click(screen.getByTestId("nav-compare"));
+    const comparable = `Northwind Energy\n\n2 December 2026\n\nDear A Example,\n\nAccount reference: EXAMPLE-8472\nThe balance now requested is £520 for electricity supplied between January and June 2025.\nPlease pay the outstanding balance by 16 December 2026.\n`;
+    fireEvent.change(screen.getByTestId("revised-text"), { target: { value: comparable } });
+    expect(screen.getByTestId("amount-difference")).toHaveTextContent("Needs review");
+    expect(screen.getByTestId("amount-difference")).not.toHaveTextContent("lower");
+    await advance(300);
+    expect(screen.getByTestId("compare-revised-amount")).toHaveTextContent("£520");
+    expect(screen.getByTestId("amount-difference")).toHaveTextContent("£760 lower");
+    expect(screen.getByTestId("amount-difference")).not.toHaveTextContent("recovered");
+    expect(screen.getByTestId("amount-difference")).not.toHaveTextContent("refund");
+    let latest = comparable;
+    for (let index = 0; index < 10; index += 1) {
+      latest += " ";
+      fireEvent.change(screen.getByTestId("revised-text"), { target: { value: latest } });
+      expect(screen.getByTestId("amount-difference")).toHaveTextContent("Needs review");
+      expect(screen.getByTestId("amount-difference")).not.toHaveTextContent("£760");
+    }
+    fireEvent.change(screen.getByTestId("revised-text"), {
+      target: { value: latest.replace("electricity", "gas") },
+    });
+    expect(screen.getByTestId("amount-difference")).not.toHaveTextContent("£760");
+    await advance(300);
+    expect(screen.getByTestId("amount-difference")).toHaveTextContent("Different liabilities");
+    expect(screen.getByTestId("amount-difference")).not.toHaveTextContent("£760");
+    fireEvent.click(screen.getByTestId("nav-reply"));
+    expect(replyJson()).toBe(before);
+    expect(screen.getByTestId("cloud-send-button")).toBeDisabled();
+    expect(network).toEqual([]);
+  });
+
+  it("drops approval immediately and survives a strict-mode remount", async () => {
+    await boot();
+    openAndApprove();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.getByTestId("privacy-current")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("nav-compare"));
+    fireEvent.change(screen.getByTestId("revised-text"), { target: { value: "Revised notice changed." } });
+    expect(screen.getByTestId("amount-difference")).toHaveTextContent("Needs review");
+    fireEvent.click(screen.getByTestId("nav-reply"));
+    expect(screen.queryByTestId("privacy-current")).not.toBeInTheDocument();
+    expect(screen.getByTestId("cloud-send-button")).toBeDisabled();
+    cleanup();
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByTestId("nav-compare"));
+    fireEvent.change(screen.getByTestId("revised-text"), { target: { value: "First edit." } });
+    fireEvent.change(screen.getByTestId("revised-text"), { target: { value: "Second edit." } });
+    expect(screen.getByTestId("amount-difference")).not.toHaveTextContent("£760");
+    await advance(300);
+    expect(screen.getByTestId("compare-revised-amount")).toHaveTextContent("Not stated");
+    expect(screen.getByTestId("amount-difference")).toHaveTextContent("Needs review");
+    expect(screen.getByTestId("amount-difference")).not.toHaveTextContent("£760");
+    fireEvent.click(screen.getByTestId("nav-reply"));
+    expect(screen.getByTestId("cloud-send-button")).toBeDisabled();
   });
 });
