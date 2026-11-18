@@ -690,6 +690,22 @@ Read Notice still grounds the original notice when that text changes. That per-k
 
 `CLOUD_SUBMISSION_ENABLED` remains `false as const`. `requestClosedBriefSend` and `requestCloudSubmission` still throw. Send stays disabled. Canonical v2 is unchanged. Invoice identifiers and the comparison decision are not added to v2, logs, telemetry, or a cloud payload. No new outbound path and no new dependency were added. Cloud submission stays prohibited. The suite is 939 tests across 43 files. Before this change it was 928 tests across 42 files. A green suite does not close R5-3.
 
+## Phase 5C-0 supported notice gate
+
+This is a safety checkpoint for a future demo. It is not cloud drafting, and it is not general production financial-grounding safety. The financial phrase list, Compare authority, Phase 5A privacy, Phase 4B approval registry, the canonical v2 schema, Firebase inference modes, and App Check are unchanged. This is not default-deny.
+
+Exact supported demo boundary. Two synthetic notices are approved, and only as exact source text after the app’s newline normalisation: `examples/energy-backbill-original.txt` and `examples/energy-backbill-revised.txt`. The original grounds to £1,280, issued 18 November 2026, with a payment obligation due 25 November 2026. The revised grounds to £520, issued 2 December 2026, with a contact obligation due 16 December 2026. The revised sample does not restate the fuel, so its category stays `other_household_notice`. The gate does not relabel it. Eligibility is the exact source. A supplier name, a category, an account shape, a payment phrase, model confidence, or a hard-coded amount does not select a fixture. A checkbox or an approval cannot bypass the check.
+
+The same source must still pass the existing grounding and v2 builders. The verified amount, issue date, deadline, category, billing window, and obligations have to match the facts tested for that file. An unknown amount stays absent. The canonical payload keeps only the closed v2 keys. It does not carry the raw notice or the account, name, or address. A contact obligation is not stored as a payment. The decision carries a source-generation id of the live text and `authorisesSend: false`. A previous id, a new document session, or model text is not authority. Any edit, a copied or quoted copy, or the fixture embedded in other text is local review only.
+
+Arbitrary notices stay local. Uploads, the other benchmark samples, historical payments, cancelled or settled demands, and disputed demands are `LOCAL_REVIEW_ONLY` with `not_approved_fixture`. The gate does not mark those amounts Verified. The screens do not gain a cloud-eligibility control. Send stays disabled. Needs review is not a verified payable amount.
+
+Fixture limits. The binding is these two files only. A one-character edit is a different notice. There is still no supplier parser and no parser for “this statement replaces invoice 1001”. Compare still withholds the demo pair: the shared account is not a verified £760 reduction. An earlier current identifier can still attach to a claim when it is the only one. Read Notice still grounds on each change of the original text. The checks here are jsdom and Node. Real-browser verification is pending.
+
+R5-3, R5-2, R5-4, and R5-5 live send-time enforcement stay OPEN. A future phase that drafts in the cloud must recheck the live source and consume a fresh single-use approval before any network request. This gate does not perform that request.
+
+`CLOUD_SUBMISSION_ENABLED` remains `false as const`. `requestClosedBriefSend` and `requestCloudSubmission` still throw. Send stays disabled. No new outbound path and no new dependency were added. Cloud submission stays prohibited. The suite is 962 tests across 44 files. Before this change it was 939 tests across 43 files. A green suite does not close R5-3.
+
 ## Milestone 4
 
 - Inspect network request bodies in real Chrome before the public demo. Mocked calls do not satisfy that gate.
