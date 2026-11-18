@@ -742,6 +742,24 @@ The returned bytes are not a reusable authorisation token. A second call sees th
 
 R5-3, R5-2, R5-4, and R5-5 live send-time enforcement stay OPEN. Real-browser verification stays OPEN. The production bundle already contains the Firebase client because on-device reading imports it. This change does not add a cloud drafting call, `sendBeacon`, a WebSocket, or `httpsCallable`. The screens never call the dispatch function, so a production user has no way to reach it and the shipped bundle does not keep a send call. Send stays disabled. `CLOUD_SUBMISSION_ENABLED` remains `false as const`. Both request functions still throw. A passing local preflight is not live Firebase enforcement. The suite is 1055 tests across 46 files. Before this change it was 1041 tests across 45 files.
 
+## Phase 5C-3 dispatch hardening
+
+This prepares the boundary a later transport would have to cross. It does not add that transport. `CLOUD_SUBMISSION_ENABLED` stays `false as const`. `requestClosedBriefSend` and `requestCloudSubmission` still throw. Send stays disabled. There is no new `fetch`, Firebase cloud model call, callable, `WebSocket`, or outbound notice route. A passing local dispatch is not live Firebase enforcement.
+
+The mounted app owns its reader by object identity. `bindLiveCloudDispatch` does not let a second owner replace the first. An older cleanup removes only the binding it created, so it cannot drop a newer reader for the same owner. While two apps are mounted, dispatch reads nobody and consumes nothing. Unbinding the extra owner leaves the remaining app's reader. There is no diagnostic function that returns the notice text or the approval handle. Script that is already running in the page can still call the same module. This is not an XSS control.
+
+Unmount invalidates the pending and approved records tagged for that app. A consumed record stays consumed. A newer app's records stay as they are. React Strict Mode runs the effect cleanup before the person has approved anything, so that extra cleanup does not delete a later approval. After a real unmount, the old handle does not become valid on the next mount. An edit, a goal change, a flag change, an identifier change, and a stale on-device result still invalidate immediately. An edit still uses the existing page-wide invalidation, which drops every active approval in the registry.
+
+In a production build, `registerApprovablePayload` and `approvePending` succeed only while the privacy modal's confirm click holds a review token. The token is closed when that click returns, so a saved token cannot approve later. A direct call, and the legacy `recordUserPayloadApproval` and `recordClosedBriefApproval` helpers, fail closed in that build. Unit tests keep those direct calls unless a test turns the production rule on. The modal remains the only screen that opens the token. The registry cannot tell which component imported `openPrivacyReview`. Closing that remaining gap would mean a new trust boundary around every importer, which this pull request does not add. The token also does not stop script that is already running in the page.
+
+A throwing reader, a snapshot whose fields throw, and an unexpected error from the canonical builder all deny the dispatch. The denial is not a success. A consumed approval is not restored. The denial does not log the notice. The existing rejection reasons are unchanged. `evaluateCloudPreflight` still reports those reasons to its own caller; the dispatch boundary is what turns an unexpected throw into a denial.
+
+`deferredDispatchForTests` is the asynchronous hold. It awaits a promise the test already created, and it does not pass notice bytes into that promise. The sequence is the explicit call, a check that nothing is in flight, the live snapshot, preflight, one consume, the frozen canonical bytes, then the hold until the promise settles. Success, rejection, and cancellation release the lock and leave the approval consumed. A second attempt during the hold is `DISPATCH_IN_FLIGHT` and does not consume another approval. An edit while the hold is open does not rewrite the frozen bytes and does not authorise a new request. Those bytes are not a replay token. No screen imports this function. A later transport pull request would be the production consumer, and it is not in this change.
+
+R5-3, R5-2, R5-4, and R5-5 live send-time enforcement stay OPEN. Legacy approval findings, real-browser testing, and unsupported Compare relationships stay OPEN.
+
+The suite is 1070 tests across 47 files. Before this change it was 1055 tests across 46 files.
+
 ## Milestone 4
 
 - Inspect network request bodies in real Chrome before the public demo. Mocked calls do not satisfy that gate.

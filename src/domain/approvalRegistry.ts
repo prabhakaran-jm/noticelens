@@ -73,9 +73,70 @@ interface StoredRecord {
   flagsKey: string;
   extractionGeneration: number;
   documentContextId: string;
+  /** App instance that created this record. Null for legacy and direct test registrations. */
+  owner: object | null;
 }
 
 const handleBrand = Symbol("noticelens.approval-handle");
+const reviewBrand = Symbol("noticelens.privacy-review");
+
+/**
+ * Live only for the duration of the privacy modal's confirm click.
+ * A saved token does not approve anything after that click returns.
+ */
+const liveReviews = new Set<object>();
+
+/**
+ * Production builds require a live privacy-review token.
+ * Vitest leaves this off so existing registry tests keep their direct calls.
+ * A test can force the production rule. Malicious script already running in
+ * the page is outside this check.
+ */
+let privacyReviewOverride: boolean | null = null;
+
+export interface PrivacyReview {
+  readonly kind: "noticelens.privacy-review";
+}
+
+function privacyReviewRequired(): boolean {
+  if (privacyReviewOverride !== null) {
+    return privacyReviewOverride;
+  }
+  return import.meta.env.PROD;
+}
+
+function isLiveReview(review: unknown): review is PrivacyReview {
+  return (
+    review !== null &&
+    typeof review === "object" &&
+    liveReviews.has(review) &&
+    Object.prototype.hasOwnProperty.call(review, reviewBrand)
+  );
+}
+
+function acceptsReview(review: unknown): boolean {
+  if (!privacyReviewRequired()) {
+    return true;
+  }
+  return isLiveReview(review);
+}
+
+/** Opens a review for the modal's confirm click. It is not a send and it is not a boolean grant. */
+export function openPrivacyReview(): PrivacyReview {
+  const review = {};
+  Object.defineProperty(review, reviewBrand, { value: true });
+  Object.defineProperty(review, "kind", {
+    value: "noticelens.privacy-review",
+    enumerable: true,
+  });
+  const frozen = Object.freeze(review) as PrivacyReview;
+  liveReviews.add(frozen);
+  return frozen;
+}
+
+export function closePrivacyReview(review: PrivacyReview): void {
+  liveReviews.delete(review);
+}
 
 interface RegistryState {
   records: WeakMap<object, StoredRecord>;
@@ -100,6 +161,17 @@ const CIRCUMSTANCE_FLAGS = new Set<string>(ALLOWED_CIRCUMSTANCE_FLAGS);
 export const approvalRegistryTestIsolation = {
   reset(): void {
     registryState = freshRegistryState();
+    liveReviews.clear();
+  },
+  /**
+   * Test isolation. Production code does not call this.
+   * `true` matches a production build: register and approve require a live review.
+   */
+  setPrivacyReviewRequired(required: boolean): void {
+    privacyReviewOverride = required;
+  },
+  useDefaultPrivacyReview(): void {
+    privacyReviewOverride = null;
   },
 };
 
@@ -316,12 +388,16 @@ export function approvalBindingsEqual(left: ApprovalBinding, right: ApprovalBind
     {
       status: "PENDING_APPROVAL",
       ...first.value,
+      owner: null,
     },
     second.value
   );
 }
 
-export function registerApprovablePayload(binding: ApprovalBinding): RegisterResult {
+export function registerApprovablePayload(binding: ApprovalBinding, review?: unknown): RegisterResult {
+  if (!acceptsReview(review)) {
+    return { ok: false, lifecycle: "NO_APPROVAL", reason: "malformed-context" };
+  }
   const normalized = normalize(binding);
   if (!normalized.ok) {
     return { ok: false, lifecycle: "NO_APPROVAL", reason: normalized.reason };
@@ -329,6 +405,7 @@ export function registerApprovablePayload(binding: ApprovalBinding): RegisterRes
   const record: StoredRecord = {
     status: "PENDING_APPROVAL",
     ...normalized.value,
+    owner: null,
   };
   const handle = {};
   Object.defineProperty(handle, handleBrand, { value: true });
@@ -347,7 +424,10 @@ export function registerApprovablePayload(binding: ApprovalBinding): RegisterRes
  * matches the registered bytes and context. A second call, a stale binding,
  * a clone, or an invalidated handle does not approve anything.
  */
-export function approvePending(handle: unknown, binding: ApprovalBinding): boolean {
+export function approvePending(handle: unknown, binding: ApprovalBinding, review?: unknown): boolean {
+  if (!acceptsReview(review)) {
+    return false;
+  }
   const record = lookup(handle);
   const normalized = normalize(binding);
   if (!record || !normalized.ok || !matches(record, normalized.value)) {
@@ -476,6 +556,46 @@ export function authoriseExactApproval(handle: unknown, binding: ApprovalBinding
   record.status = "CONSUMED";
   registryState.handles = registryState.handles.filter((item) => item !== handle);
   return { ok: true };
+}
+
+/**
+ * Marks a pending or approved record as belonging to one app instance.
+ * It does not approve, consume, or restore anything.
+ */
+export function attachDispatchOwner(handle: unknown, owner: object): void {
+  const record = lookup(handle);
+  if (!record || (record.status !== "PENDING_APPROVAL" && record.status !== "APPROVED")) {
+    return;
+  }
+  if (owner === null || typeof owner !== "object") {
+    return;
+  }
+  if (record.owner !== null && record.owner !== owner) {
+    return;
+  }
+  record.owner = owner;
+}
+
+/**
+ * Invalidates pending and approved records created by this app instance.
+ * Consumed and invalidated records stay terminal. Other owners are left alone.
+ */
+export function invalidateApprovalsForOwner(owner: object): void {
+  if (owner === null || typeof owner !== "object") {
+    return;
+  }
+  for (const handle of registryState.handles) {
+    const record = registryState.records.get(handle);
+    if (
+      record &&
+      record.owner === owner &&
+      record.status !== "INVALIDATED" &&
+      record.status !== "CONSUMED"
+    ) {
+      record.status = "INVALIDATED";
+    }
+  }
+  releaseInvalidatedApprovals();
 }
 
 export function revokeApproval(handle: unknown): boolean {

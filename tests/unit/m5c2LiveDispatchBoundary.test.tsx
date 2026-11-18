@@ -10,6 +10,7 @@ import {
 import { groundNoticeFacts } from "../../src/adapters/groundNoticeFacts";
 import {
   bindLiveCloudDispatch,
+  createDispatchOwner,
   dispatchLiveCloudBoundary,
   resetLiveCloudDispatchForTests,
 } from "../../src/adapters/liveCloudDispatch";
@@ -214,7 +215,7 @@ describe("Phase 5C-2 preflight input hardening", () => {
 
   it("keeps an in-flight dispatch from consuming a second time", () => {
     let innerState = "";
-    const release = bindLiveCloudDispatch(() => {
+    const release = bindLiveCloudDispatch(createDispatchOwner(), () => {
       const inner = dispatchLiveCloudBoundary();
       innerState = inner.state;
       expect(inner.consumed).toBe(false);
@@ -369,15 +370,15 @@ describe("Phase 5C-2 live dispatch in the app", () => {
     await boot();
     const carried = dispatchLiveCloudBoundary();
     expect(carried.state).not.toBe("PREFLIGHT_READY");
-    expect(activeApprovalCount()).toBe(1);
+    expect(activeApprovalCount()).toBe(0);
     openAndApprove();
-    expect(activeApprovalCount()).toBe(2);
+    expect(activeApprovalCount()).toBe(1);
     const first = dispatchLiveCloudBoundary();
     const second = dispatchLiveCloudBoundary();
     expect(first.state).toBe("PREFLIGHT_READY");
     expect(first.authorisesSend).toBe(false);
     expect(second.state).not.toBe("PREFLIGHT_READY");
-    expect(activeApprovalCount()).toBe(1);
+    expect(activeApprovalCount()).toBe(0);
     expectSendStaysOff();
   });
 
@@ -397,7 +398,7 @@ describe("Phase 5C-2 live dispatch in the app", () => {
     if (!registered.ok) {
       throw new Error(registered.reason);
     }
-    const release = bindLiveCloudDispatch(() => ({ ...state, approvalHandle: registered.handle }));
+    const release = bindLiveCloudDispatch(createDispatchOwner(), () => ({ ...state, approvalHandle: registered.handle }));
     const pending = dispatchLiveCloudBoundary();
     expect(pending.state).toBe("APPROVAL_MISSING");
     expect(pending.consumed).toBe(false);
