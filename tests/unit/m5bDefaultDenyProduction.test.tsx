@@ -216,4 +216,29 @@ describe("Phase 5B production grounding", () => {
     fireEvent.click(screen.getByTestId("nav-reply"));
     expect(screen.getByTestId("cloud-send-button")).toBeDisabled();
   });
+
+  it("keeps a supported balance when a later sentence only offers help", async () => {
+    await boot();
+    setNotice(
+      "Northwind Energy\n\n18 November 2026\n\nDear A Example,\n\nYour outstanding balance is £640.\nPlease pay by 30 November 2026.\nIf you are struggling to pay, our hardship fund may be able to help.\n"
+    );
+    await advance(300);
+    expect(screen.getByTestId("read-amount")).toHaveTextContent("£640");
+    expect(screen.getByTestId("read-amount")).not.toHaveTextContent("Needs review");
+    expect(screen.getByTestId("read-deadline")).toHaveTextContent("30 November 2026");
+    fireEvent.click(screen.getByTestId("nav-plan"));
+    expect(screen.getByTestId("plan-amount")).toHaveTextContent("£640");
+    fireEvent.click(screen.getByTestId("nav-reply"));
+    expect(replyJson()).toContain('"amountsGBP":[640]');
+    fireEvent.click(screen.getByTestId("nav-compare"));
+    expect(screen.getByTestId("compare-original-amount")).toHaveTextContent("£640");
+    expect(screen.getByTestId("compare-original-amount")).not.toHaveTextContent("Needs review");
+    setNotice(unsupported);
+    await advance(300);
+    fireEvent.click(screen.getByTestId("nav-read"));
+    expect(screen.getByTestId("read-amount")).toHaveTextContent("Needs review");
+    expect(screen.getByTestId("read-amount")).not.toHaveTextContent("£520");
+    fireEvent.click(screen.getByTestId("nav-reply"));
+    expect(screen.getByTestId("cloud-send-button")).toBeDisabled();
+  });
 });

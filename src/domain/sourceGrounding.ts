@@ -1146,9 +1146,11 @@ function walkCurrentBalances(text: string): {
         /\b(?:still\s+due|remains\s+due|remains\s+payable)\b/i.test(sentence)
       )
     ) {
-      // Retire amounts already introduced. Do not block a later sentence that
-      // states its own supported current demand.
-      const retired = amounts.length > 0 ? amounts : [...seen];
+      // A completed disposition names its amount, or it follows the one
+      // amount already introduced. Several open amounts and no named figure
+      // are not retired here: that association is uncertain, and a single
+      // verified balance is withheld by the existing conflict check.
+      const retired = amounts.length > 0 ? amounts : seen.size === 1 ? [...seen] : [];
       for (const amount of retired) {
         lastScopedRetirement.set(amount, index);
       }

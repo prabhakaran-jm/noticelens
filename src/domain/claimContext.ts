@@ -16,8 +16,7 @@
  * - claim ownership: the reader's obligation, not a former tenant's or a
  *   third party's
  * - current rather than historical or reported speech
- * - not handed to a charity, hardship scheme, credit, or adjustment, and not
- *   left as only "the charge is disputed"
+ * - not already paid, settled, cleared, waived, or left as "the charge is disputed"
  * - a previous or later statement in the claim does not cancel, settle, or
  *   give the debt to someone else
  * - a payment instruction and its deadline belong to this claim
@@ -38,10 +37,71 @@
  */
 
 const UNRESOLVED_CONTEXT =
-  /\b(?:imagine|training\s+scenario|hypothetical|for\s+example|suppose|supposing|appendix|treat\s+the\s+following|copy\s+of\s+(?:our|the|your|an)|copied\s+letter|earlier\s+payment\s+notice|(?:letter|notice|bill)\s+said|said\s+you\s+owe|would\s+be|once\b|if\s+confirmed|if\s+the\b|former\s+tenant|partner\s+charity|charity\s+has|picked\s+up|hardship|no\s+longer\s+enforceable|credited\s+against|credit\s+offset|adjustment\s+(?:has\s+)?settled)\b|\bparser\s*:/i;
+  /\b(?:imagine|training\s+scenario|hypothetical|for\s+example|suppose|supposing|appendix|treat\s+the\s+following|copy\s+of\s+(?:our|the|your|an)|copied\s+letter|earlier\s+payment\s+notice|(?:letter|notice|bill)\s+said|said\s+you\s+owe|would\s+be|once\b|if\s+confirmed|if\s+the\b|former\s+tenant)\b|\bparser\s*:/i;
 
-const DISPOSES_CURRENT_CLAIM =
-  /\b(?:disput\w*|hardship|partner\s+charity|charity\s+has|picked\s+up|no\s+longer\s+enforceable|credited\s+against|credit\s+offset|adjustment\s+(?:has\s+)?settled|customer\s+services\b[^.]{0,80}\bresolv\w*)\b/i;
+/**
+ * A completed disposition of the debt. A mention of help, a right to
+ * challenge, or a future query is not this. The topic words alone are not
+ * enough: the sentence has to say the debt was paid, settled, cleared,
+ * picked up, or is disputed.
+ */
+function statesCompletedDisposition(sentence: string): boolean {
+  if (/\bno\s+longer\s+enforceable\b/i.test(sentence)) {
+    return true;
+  }
+  if (/\b(?:charge|balance|amount|bill|debt|demand)\s+(?:is|was|remains|has\s+been)\s+disputed\b/i.test(sentence)) {
+    return true;
+  }
+  if (
+    /\b(?:is|was|remains)\s+disputed\b/i.test(sentence) &&
+    /\b(?:charge|balance|amount|bill|debt|demand|it)\b/i.test(sentence)
+  ) {
+    return true;
+  }
+  if (/\b(?:has|have)\s+resolved\s+(?:this|the)\s+(?:charge|balance|demand|bill)\b/i.test(sentence)) {
+    return true;
+  }
+  if (
+    /\bresolved\s+(?:this|the)\s+(?:charge|balance|demand|bill)\b/i.test(sentence) &&
+    !/\bwill\s+resolve\b/i.test(sentence)
+  ) {
+    return true;
+  }
+  if (
+    /\b(?:has|have)\s+(?:paid|settled|cleared)\b/i.test(sentence) &&
+    /\b(?:balance|charge|amount|bill|debt|demand|it|this)\b/i.test(sentence)
+  ) {
+    return true;
+  }
+  if (/\b(?:charity|hardship)\b[^.]{0,80}\bpicked\s+up\b/i.test(sentence)) {
+    return true;
+  }
+  if (/\bpicked\s+up\s+(?:the\s+)?(?:balance|charge|amount|bill|debt|demand)\b/i.test(sentence)) {
+    return true;
+  }
+  if (/\bcredit\s+offset\b[^.]{0,60}\b(?:has|have)\s+(?:cleared|offset)\b/i.test(sentence)) {
+    return true;
+  }
+  if (/\bcredited\s+against\b/i.test(sentence) && /\b(?:balance|charge|amount|bill|debt|demand)\b/i.test(sentence)) {
+    return true;
+  }
+  if (/\bcleared\s+through\s+an\s+adjustment\b/i.test(sentence)) {
+    return true;
+  }
+  if (
+    /\badjustment\s+(?:has\s+)?settled\b/i.test(sentence) &&
+    /\b(?:balance|charge|amount|bill|debt|demand|it|this)\b/i.test(sentence)
+  ) {
+    return true;
+  }
+  if (
+    /\b(?:hardship|charity)\b/i.test(sentence) &&
+    /\b(?:has|have)\s+(?:paid|settled|cleared|picked\s+up)\b/i.test(sentence)
+  ) {
+    return true;
+  }
+  return false;
+}
 
 export type ClaimContextState = "supported-current" | "unsupported";
 
@@ -55,10 +115,11 @@ export function sentenceHasUnresolvedContext(sentence: string): boolean {
 }
 
 /**
- * A later sentence that gives the debt away, disputes it, or says it is no
- * longer the reader's obligation. This retires the claim. It is not a list of
- * every way a debt can be settled.
+ * A later sentence retires a claim only when it clearly records a completed
+ * disposition: the debt was paid, settled, cleared, picked up, or is disputed.
+ * An offer of help, a right to challenge, or a future query does not.
  */
 export function sentenceDisposesCurrentClaim(sentence: string): boolean {
-  return DISPOSES_CURRENT_CLAIM.test(sentence.replace(/\s+/g, " ").trim());
+  const s = sentence.replace(/\s+/g, " ").trim();
+  return statesCompletedDisposition(s);
 }
