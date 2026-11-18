@@ -22,7 +22,12 @@ import {
   type NoticeSentenceSpan,
   type SourceAmountAuthority,
 } from "./sourceGrounding";
-import { claimIdentityFacets, introducesHistoricalCopy } from "./supportedNoticePolicy";
+import {
+  introducesHistoricalCopy,
+  labelledAccountTokens,
+  labelledFuelTokens,
+  labelledInvoiceTokens,
+} from "./supportedNoticePolicy";
 import { introducesParagraphFrame, introducesUntrustedFrame } from "./supportedStructures";
 import type { QuoteVerificationResult } from "./types";
 import { verifyQuoteInSource } from "./verifyQuotes";
@@ -41,6 +46,10 @@ export interface NoticeIdentityFacets {
   invoices: string[];
   fuels: string[];
   periods: string[];
+  /** More than one account, invoice, fuel, or period is tied to the claim. */
+  ambiguous: boolean;
+  /** The claim uses an existing phrase for a separate charge. */
+  separateCharge: boolean;
 }
 
 export type ComparisonStatus =
@@ -322,7 +331,7 @@ export function extractComparableFacts(rawText: string): ComparableNoticeFacts {
     statedAction: actionLine ? statedActionLabel(actionLine) : null,
     actionQuote: actionLine ?? null,
     ...grounded,
-    identity: localIdentityForNotice(rawText),
+    identity: localIdentityForNotice(rawText, amount.amountQuote),
   };
 }
 
@@ -500,32 +509,76 @@ function acceptingSpans(text: string): NoticeSentenceSpan[] {
   return accepted;
 }
 
-export function localIdentityForNotice(text: string): NoticeIdentityFacets {
+const SEPARATE_CHARGE =
+  /\b(?:new\s+and\s+separate|separate\s+(?:charge|bill)|billed\s+separately)\b/i;
+
+function emptyIdentity(): NoticeIdentityFacets {
+  return {
+    accounts: [],
+    invoices: [],
+    fuels: [],
+    periods: [],
+    ambiguous: false,
+    separateCharge: false,
+  };
+}
+
+/**
+ * Identifiers on the verified claim, and on current sentences before it.
+ * A copied or historical sentence is already excluded. A sentence after the
+ * claim is not this claim. Nothing here is a supplier or creditor name.
+ */
+function spansForClaim(text: string, amountQuote: string | null): NoticeSentenceSpan[] {
+  if (!amountQuote) {
+    return [];
+  }
+  const claim = noticeSentenceSpans(text).find((span) => span.raw === amountQuote);
+  if (!claim) {
+    return [];
+  }
+  const accepted = acceptingSpans(text).filter((span) => span.end <= claim.end);
+  if (accepted.some((span) => span.start === claim.start)) {
+    return accepted;
+  }
+  return [...accepted, claim];
+}
+
+export function localIdentityForNotice(text: string, amountQuote: string | null = null): NoticeIdentityFacets {
+  const spans = spansForClaim(text, amountQuote);
+  if (spans.length === 0) {
+    return emptyIdentity();
+  }
   const accounts = new Set<string>();
   const invoices = new Set<string>();
   const fuels = new Set<string>();
   const periods = new Set<string>();
-  for (const span of acceptingSpans(text)) {
-    const facets = claimIdentityFacets(span.raw);
-    if (facets.account) {
-      accounts.add(facets.account);
+  let separateCharge = false;
+  for (const span of spans) {
+    for (const account of labelledAccountTokens(span.raw)) {
+      accounts.add(account);
     }
-    if (facets.invoice) {
-      invoices.add(facets.invoice);
+    for (const invoice of labelledInvoiceTokens(span.raw)) {
+      invoices.add(invoice);
     }
-    if (facets.fuel) {
-      fuels.add(facets.fuel);
+    for (const fuel of labelledFuelTokens(span.raw)) {
+      fuels.add(fuel);
     }
     const period = periodInSentence(span.raw);
     if (period) {
       periods.add(period);
     }
+    if (SEPARATE_CHARGE.test(span.raw)) {
+      separateCharge = true;
+    }
   }
+  const ambiguous = accounts.size > 1 || invoices.size > 1 || fuels.size > 1 || periods.size > 1;
   return {
     accounts: [...accounts].sort(),
     invoices: [...invoices].sort(),
     fuels: [...fuels].sort(),
     periods: [...periods].sort(),
+    ambiguous,
+    separateCharge,
   };
 }
 
@@ -572,18 +625,24 @@ export function decideComparisonRelationship(
   if (facetsDiffer(original.periods, revised.periods)) {
     return { relationship: "NOT_COMPARABLE", reason: "different_period" };
   }
+  if (original.ambiguous || revised.ambiguous) {
+    return { relationship: "RELATIONSHIP_UNVERIFIED", reason: "ambiguous_identifiers" };
+  }
   if (facetsDiffer(original.invoices, revised.invoices)) {
     return { relationship: "RELATIONSHIP_UNVERIFIED", reason: "different_invoice_unresolved" };
-  }
-  if (facetsMatch(original.invoices, revised.invoices)) {
-    return { relationship: "COMPARABLE", reason: "same_invoice" };
   }
   if (
     facetsMatch(original.accounts, revised.accounts) &&
     facetsMatch(original.fuels, revised.fuels) &&
     facetsMatch(original.periods, revised.periods)
   ) {
+    if (original.separateCharge || revised.separateCharge) {
+      return { relationship: "NOT_COMPARABLE", reason: "separate_charges" };
+    }
     return { relationship: "COMPARABLE", reason: "same_account_fuel_period" };
+  }
+  if (facetsMatch(original.invoices, revised.invoices)) {
+    return { relationship: "RELATIONSHIP_UNVERIFIED", reason: "shared_invoice_only" };
   }
   if (facetsMatch(original.accounts, revised.accounts)) {
     return { relationship: "RELATIONSHIP_UNVERIFIED", reason: "shared_account_only" };

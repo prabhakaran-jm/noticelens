@@ -179,17 +179,76 @@ export function independentBillLabel(sentence: string): string | null {
 /**
  * Identity of a current claim. Amount is not an identity. A token is used
  * only when it distinguishes a debt (a digit, or a single invoice letter).
- * One sentence still yields one label.
+ * The label must end on a word boundary, so "invoices" and "invoiced" are
+ * not the identifiers "s" and "d". One sentence still yields one label.
  */
-const INVOICE_LABEL = /\b(?:invoice|inv)\s*[-#:.]?\s*([a-z0-9]+)\b/i;
+const INVOICE_LABEL = /\b(?:invoice|inv)\b\s*[-#:.]?\s*([a-z0-9]+)\b/i;
 const ACCOUNT_LABEL =
   /\baccount\s+(?:reference|number|no\.?)?\s*[:#-]?\s*([a-z0-9]+(?:-[a-z0-9]+)?)\b/i;
 const FUEL_LABEL = /\b(electricity|gas|water|council\s+tax)\b/i;
 
+function qualifyingToken(token: string): string | null {
+  if (/\d/.test(token) || /^[a-z]$/i.test(token)) {
+    return token.toLowerCase();
+  }
+  return null;
+}
+
+/** Every explicitly labelled invoice token in the sentence. Words that only share the prefix are ignored. */
+export function labelledInvoiceTokens(sentence: string): string[] {
+  const found: string[] = [];
+  for (const match of sentence.matchAll(/\b(?:invoice|inv)\b\s*[-#:.]?\s*([a-z0-9]+)\b/gi)) {
+    const token = qualifyingToken(match[1]!);
+    if (token && !found.includes(token)) {
+      found.push(token);
+    }
+  }
+  return found;
+}
+
+/** Every explicitly labelled account token in the sentence. */
+export function labelledAccountTokens(sentence: string): string[] {
+  const found: string[] = [];
+  for (const match of sentence.matchAll(
+    /\baccount\s+(?:reference|number|no\.?)?\s*[:#-]?\s*([a-z0-9]+(?:-[a-z0-9]+)?)\b/gi
+  )) {
+    const token = match[1]!;
+    if (!/\d/.test(token)) {
+      continue;
+    }
+    const value = token.toLowerCase();
+    if (!found.includes(value)) {
+      found.push(value);
+    }
+  }
+  return found;
+}
+
+/** Every fuel or council-tax token the existing fuel pattern already recognises. */
+export function labelledFuelTokens(sentence: string): string[] {
+  const found: string[] = [];
+  for (const match of sentence.matchAll(/\b(electricity|gas|water|council\s+tax)\b/gi)) {
+    const value = match[1]!.toLowerCase().replace(/\s+/g, " ");
+    if (!found.includes(value)) {
+      found.push(value);
+    }
+  }
+  return found;
+}
+
 export function independentClaimLabel(sentence: string): string | null {
   const invoice = INVOICE_LABEL.exec(sentence);
-  if (invoice && (/\d/.test(invoice[1]!) || /^[a-z]$/i.test(invoice[1]!))) {
-    return `invoice:${invoice[1]!.toLowerCase()}`;
+  const invoiceToken = invoice ? qualifyingToken(invoice[1]!) : null;
+  if (invoiceToken) {
+    return `invoice:${invoiceToken}`;
+  }
+  // The plural and the participle are not invoice letters. A distinct marker
+  // keeps them from merging with a real invoice label such as "Invoice S".
+  if (/\binvoices\b/i.test(sentence)) {
+    return "invoice-word:invoices";
+  }
+  if (/\binvoiced\b/i.test(sentence)) {
+    return "invoice-word:invoiced";
   }
   const account = ACCOUNT_LABEL.exec(sentence);
   if (account && /\d/.test(account[1]!)) {
@@ -226,11 +285,8 @@ export function claimIdentityFacets(sentence: string): {
   account: string | null;
   fuel: string | null;
 } {
-  const invoiceMatch = INVOICE_LABEL.exec(sentence);
-  const invoice =
-    invoiceMatch && (/\d/.test(invoiceMatch[1]!) || /^[a-z]$/i.test(invoiceMatch[1]!))
-      ? invoiceMatch[1]!.toLowerCase()
-      : null;
+  const invoiceTokens = labelledInvoiceTokens(sentence);
+  const invoice = invoiceTokens.length === 1 ? invoiceTokens[0]! : null;
   const accountMatch = ACCOUNT_LABEL.exec(sentence);
   const account = accountMatch && /\d/.test(accountMatch[1]!) ? accountMatch[1]!.toLowerCase() : null;
   const fuelMatch = FUEL_LABEL.exec(sentence);
