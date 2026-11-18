@@ -405,7 +405,7 @@ describe("Phase 3G final cloud-fact safety gate", () => {
         "Dear customer,\n\nYour bill dated 2 October 2026 for £1,280 has been cancelled following our review.\n\nWe have since re-issued your bill. Your outstanding balance is £1,280.\n\n" +
           PAY
       );
-      expect(q4.built.payload.amountsGBP).toEqual([1280]);
+      expect(q4.built.payload.amountsGBP).toEqual([]);
     });
 
     it("maintains exact UTF-16 slices across CRLF, NBSP, ZWSP, and NFD/NFC text (k13f, xR, xR2, xS2)", () => {

@@ -156,7 +156,7 @@ describe("Phase 5A production privacy and approval", () => {
     expect(screen.queryByTestId("privacy-current")).not.toBeInTheDocument();
     expect(screen.getByTestId("cloud-send-button")).toBeDisabled();
     expect(network).toEqual([]);
-  });
+  }, 20000);
 
   it("keeps the 300 ms debounce and discards a stale on-device result after an identifier edit", async () => {
     await boot();

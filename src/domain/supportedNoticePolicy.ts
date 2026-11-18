@@ -114,7 +114,7 @@ export function genericDateRowIsNotIssueDate(
   if (!header || /[.!?]["'”’]?$/.test(header)) {
     return header.length > 0;
   }
-  return /\b(?:meter|reading|payment|paid|effective|tariff|history|received|reference|period|activity|telephone|phone|service|price|table|call|correspondence)\b/i.test(
+  return /\b(?:meter|reading|payment|paid|effective|tariff|history|received|reference|period|activity|telephone|phone|service|price|table|call|correspondence|account\s+summary|direct\s+debit|next\s+collection|engineer|price\s+change|schedule)\b/i.test(
     header
   );
 }

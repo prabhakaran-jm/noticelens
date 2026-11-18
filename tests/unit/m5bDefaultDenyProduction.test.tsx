@@ -158,6 +158,30 @@ describe("Phase 5B production grounding", () => {
     expect(revised.length).toBeGreaterThan(0);
   });
 
+  it("drops a stale comparison when either notice changes", async () => {
+    await boot();
+    fireEvent.click(screen.getByTestId("nav-compare"));
+    expect(screen.getByTestId("amount-difference")).toHaveTextContent("£760 lower");
+    expect(screen.getByTestId("compare-original-amount")).toHaveTextContent("£1,280");
+    expect(screen.getByTestId("compare-revised-amount")).toHaveTextContent("£520");
+    fireEvent.change(screen.getByTestId("revised-text"), {
+      target: { value: "Our March letter said you owe £520." },
+    });
+    expect(screen.getByTestId("compare-revised-amount")).toHaveTextContent("Needs review");
+    expect(screen.getByTestId("amount-difference")).toHaveTextContent("Needs review");
+    expect(screen.getByTestId("amount-difference")).not.toHaveTextContent("£760");
+    expect(screen.getByTestId("amount-difference")).not.toHaveTextContent("£0");
+    fireEvent.click(screen.getByTestId("nav-read"));
+    fireEvent.change(screen.getByTestId("notice-text"), {
+      target: { value: "Imagine your outstanding balance is £1,280." },
+    });
+    await advance(300);
+    fireEvent.click(screen.getByTestId("nav-compare"));
+    expect(screen.getByTestId("compare-original-amount")).toHaveTextContent("Needs review");
+    expect(screen.getByTestId("compare-original-amount")).not.toHaveTextContent("£1,280");
+    expect(screen.getByTestId("amount-difference")).not.toHaveTextContent("lower");
+  });
+
   it("does not let a stale on-device result approve an unsupported notice", async () => {
     await boot();
     fireEvent.click(screen.getByTestId("nav-read"));

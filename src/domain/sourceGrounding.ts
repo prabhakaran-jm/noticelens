@@ -15,7 +15,9 @@ import {
   isContingentBalanceStatement,
   isModelOrParserDirected,
 } from "./supportedNoticePolicy";
+import { sentenceDisposesCurrentClaim, sentenceHasUnresolvedContext } from "./claimContext";
 import { introducesParagraphFrame, introducesUntrustedFrame, matchesSupportedBalanceStructure } from "./supportedStructures";
+import { noticeExceedsSupportedSize } from "./noticeInputLimit";
 import { verifyQuoteInSource } from "./verifyQuotes";
 
 export type ClaimSupport =
@@ -605,6 +607,9 @@ function isPositiveCurrentBalance(sentence: string): boolean {
   if (/\bowe(?:\s+us)?\s+nothing\b/i.test(s)) {
     return false;
   }
+  if (sentenceHasUnresolvedContext(s)) {
+    return false;
+  }
   return matchesSupportedBalanceStructure(s);
 }
 
@@ -942,7 +947,7 @@ function namesDistinctNewCharge(sentence: string): boolean {
   ) {
     return false;
   }
-  return /\b(?:new\s+and\s+separate|separate\s+(?:charge|bill)|new\s+charge|corrected\s+bill|replacement\s+(?:charge|bill)|re-?billed|re-?issued)\b/i.test(
+  return /\b(?:new\s+and\s+separate|separate\s+(?:charge|bill)|new\s+charge|corrected\s+bill|replacement\s+(?:charge|bill))\b/i.test(
     text
   );
 }
@@ -1101,8 +1106,6 @@ function walkCurrentBalances(text: string): {
   const seen = new Set<number>();
   let forwardBlock = false;
   let forwardInjectedBlock = false;
-  let pendingReissue = false;
-
   sentences.forEach((sentence, index) => {
     if (untrustedSentences.has(index)) {
       return;
@@ -1116,7 +1119,6 @@ function walkCurrentBalances(text: string): {
           normalizeForRole(sentence).trim()
         );
       forwardInjectedBlock = isBareOverridePreamble;
-      pendingReissue = false;
       return;
     }
     if (forwardInjectedBlock) {
@@ -1129,15 +1131,27 @@ function walkCurrentBalances(text: string): {
     }
     if (forwardBlock && amounts.length > 0) {
       forwardBlock = false;
-      pendingReissue = false;
       for (const amount of amounts) {
         introducedAtTerminal.add(amount);
         lastScopedTerminal.set(amount, index);
       }
       return;
     }
-    if (role === "unsupported" && amounts.length === 0 && namesDistinctNewCharge(sentence)) {
-      pendingReissue = true;
+    if (
+      sentenceDisposesCurrentClaim(sentence) &&
+      !namesDistinctNewCharge(sentence) &&
+      !isReinstatement(sentence) &&
+      !(
+        matchesSupportedBalanceStructure(sentence) &&
+        /\b(?:still\s+due|remains\s+due|remains\s+payable)\b/i.test(sentence)
+      )
+    ) {
+      // Retire amounts already introduced. Do not block a later sentence that
+      // states its own supported current demand.
+      const retired = amounts.length > 0 ? amounts : [...seen];
+      for (const amount of retired) {
+        lastScopedRetirement.set(amount, index);
+      }
       return;
     }
     if (
@@ -1149,16 +1163,16 @@ function walkCurrentBalances(text: string): {
       return;
     }
     if (role === "reinstated_demand") {
-      pendingReissue = false;
-      const targets = amounts.length > 0 ? amounts : [...seen];
-      for (const amount of targets) {
+      if (amounts.length === 0) {
+        return;
+      }
+      for (const amount of amounts) {
         lastReinstatement.set(amount, index);
         rememberPositive(acceptedAt, amount, index, lastPositive);
       }
       return;
     }
     if (role === "historical_payment") {
-      pendingReissue = false;
       if (amounts.length === 0) {
         if (!/\b(?:previous|last|earlier|prior)\s+(?:bill|balance|statement|payment|invoice)\b/i.test(sentence)) {
           lastUnscopedHistorical = index;
@@ -1171,7 +1185,6 @@ function walkCurrentBalances(text: string): {
       return;
     }
     if (TERMINAL_ACCOUNT_ROLES.has(role)) {
-      pendingReissue = false;
       if (pointsAtAmountBelow(sentence, amounts)) {
         forwardBlock = true;
       }
@@ -1192,7 +1205,6 @@ function walkCurrentBalances(text: string): {
       return;
     }
     if (DEMAND_RETIREMENT_ROLES.has(role)) {
-      pendingReissue = false;
       if (pointsAtAmountBelow(sentence, amounts)) {
         forwardBlock = true;
       }
@@ -1206,8 +1218,6 @@ function walkCurrentBalances(text: string): {
       return;
     }
     if (role === "current_balance") {
-      const reissueHere = pendingReissue;
-      pendingReissue = false;
       if (forwardBlock) {
         forwardBlock = false;
         for (const amount of amounts) {
@@ -1224,7 +1234,7 @@ function walkCurrentBalances(text: string): {
           return retired !== undefined && retired < index;
         });
       const deniesNew = deniesDistinctNewCharge(sentence);
-      const distinctNew = namesDistinctNewCharge(sentence) || (reissueHere && !deniesNew);
+      const distinctNew = namesDistinctNewCharge(sentence);
       if (
         (settledBefore || retiredBefore) &&
         (!opensFreshBalance(sentence) || deniesNew) &&
@@ -1313,7 +1323,7 @@ const DISQUALIFYING_PRECEDING_DATE_LABEL =
 
 /** A preamble date under one of these headings is not the notice issue date. */
 const NON_ISSUE_SECTION =
-  /\b(?:activity|readings|telephone|phone\s+call|call\s+with|new\s+price|service\s+table|direct\s+debit)\b/i;
+  /\b(?:activity|readings|telephone|phone\s+call|call\s+with|new\s+price|service\s+table|direct\s+debit|account\s+summary|payment\s+received|next\s+collection|engineer\s+visit|price\s+change)\b/i;
 
 function normalizeDateToken(token: string): string {
   return token.replace(/(\d{1,2})(?:st|nd|rd|th)\b/i, "$1");
@@ -2206,6 +2216,48 @@ export function analyseNoticeEligibility(text: string): NoticeEligibility {
     correspondenceDeadlineConflict,
     issueDateConflict,
   });
+}
+
+export type SourceAmountAuthority = "verified" | "needs_review" | "not_stated" | "conflicting";
+
+/** The same eligible-balance decision Read Notice and v2 use for a fresh notice. */
+export function verifiedBalanceForSource(text: string): {
+  amountGBP: number | null;
+  quote: string | null;
+  authority: SourceAmountAuthority;
+} {
+  if (noticeExceedsSupportedSize(text)) {
+    return { amountGBP: null, quote: null, authority: "needs_review" };
+  }
+  const eligibility = analyseNoticeEligibility(text);
+  const conflicting = eligibility.decisions.some(
+    (item) => item.status === "NEEDS_REVIEW" && item.reason === "conflicting_balances" && item.amount !== null
+  );
+  const eligible = eligibility.decisions.filter(
+    (item) =>
+      item.status === "ELIGIBLE" &&
+      item.amount !== null &&
+      item.amount > 0 &&
+      BALANCE_REASONS.has(item.reason)
+  );
+  const distinct = [...new Set(eligible.map((item) => item.amount!))];
+  if (!conflicting && distinct.length === 1) {
+    const match = eligible.find((item) => item.amount === distinct[0]);
+    const quote = match ? text.slice(match.evidence.start, match.evidence.end) : null;
+    return { amountGBP: distinct[0]!, quote, authority: "verified" };
+  }
+  const sawAmount = eligibility.decisions.some(
+    (item) =>
+      item.amount !== null &&
+      item.reason !== "included_fee" &&
+      item.reason !== "conditional_fee" &&
+      item.reason !== "waived_fee" &&
+      item.reason !== "refunded_fee"
+  );
+  if (conflicting || distinct.length > 1) {
+    return { amountGBP: null, quote: null, authority: "conflicting" };
+  }
+  return { amountGBP: null, quote: null, authority: sawAmount ? "needs_review" : "not_stated" };
 }
 
 export function assessPaymentClaims(text: string): PaymentClaimAssessment[] {

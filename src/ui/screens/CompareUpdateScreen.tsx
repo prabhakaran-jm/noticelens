@@ -1,9 +1,32 @@
 import type { NoticeComparison } from "../../domain/compareNotices";
+import type { SourceAmountAuthority } from "../../domain/sourceGrounding";
 import { formatGbp, formatSignedDifference } from "../format";
 import { SourceNoticeReader } from "../shared/SourceNoticeReader";
 
-function money(value: number | null): string {
-  return value === null ? "Not stated" : formatGbp(value);
+function balanceLabel(value: number | null, authority: SourceAmountAuthority): string {
+  if (authority === "verified" && value !== null) {
+    return formatGbp(value);
+  }
+  if (authority === "not_stated") {
+    return "Not stated";
+  }
+  return "Needs review";
+}
+
+function differenceLabel(comparison: NoticeComparison): string {
+  if (
+    comparison.amount.originalAuthority !== "verified" ||
+    comparison.amount.revisedAuthority !== "verified"
+  ) {
+    if (
+      comparison.amount.originalAuthority === "not_stated" &&
+      comparison.amount.revisedAuthority === "not_stated"
+    ) {
+      return "Not stated";
+    }
+    return "Needs review";
+  }
+  return formatSignedDifference(comparison.amount.differenceGBP);
 }
 
 export function CompareUpdateScreen(props: {
@@ -51,18 +74,16 @@ export function CompareUpdateScreen(props: {
           <tr>
             <th scope="row">Balance</th>
             <td data-label="Original" data-testid="compare-original-amount">
-              {money(props.comparison.amount.verifiedForDisplay)}
+              {balanceLabel(props.comparison.amount.value, props.comparison.amount.originalAuthority)}
             </td>
             <td data-label="Revised" data-testid="compare-revised-amount">
-              {money(props.comparison.amount.revised)}
+              {balanceLabel(props.comparison.amount.revised, props.comparison.amount.revisedAuthority)}
             </td>
           </tr>
           <tr>
             <th scope="row">Difference</th>
             <td colSpan={2} data-label="Difference" data-testid="amount-difference">
-              <span className="delta-badge-reduced">
-                {formatSignedDifference(props.comparison.amount.differenceGBP)}
-              </span>
+              <span className="delta-badge-reduced">{differenceLabel(props.comparison)}</span>
             </td>
           </tr>
           <tr className={props.comparison.billingPeriod.omittedInRevised ? "delta-row is-omitted-row" : "delta-row"}>
