@@ -627,7 +627,7 @@ Focused correction after `31f7980d73bc051d50c3954882cc6d073acaf138`. `sentenceDi
 
 Privacy and approval, not changed. Phase 5A redaction, the v2 key allowlist, exact-byte preview, D1–D3, N1, N2, local identifier storage, the immutable registry, and Phase 4B handle-specific authority stay. R5-2, R5-4, and R5-5 live send-time verification stay open. Legacy `boundContext`, saved-binding send helpers, legacy identifier maps, the test-isolation export, and N4 stay open. No free-text cloud field was added.
 
-`CLOUD_SUBMISSION_ENABLED` remains `false as const`. `requestClosedBriefSend` and `requestCloudSubmission` still throw. Send stays disabled. Firebase configuration, App Check, inference modes, and the v2 schema are unchanged. The suite is 801 tests across 40 files. Before the signpost correction it was 764 tests across 39 files, and before Phase 5B-2 it was 655 tests across 38 files. A green suite does not close R5-3. Live Firebase submission is not authorised.
+`CLOUD_SUBMISSION_ENABLED` remains `false as const`. `requestClosedBriefSend` and `requestCloudSubmission` still throw. Send stays disabled. Firebase configuration, App Check, inference modes, and the v2 schema are unchanged. The suite is 807 tests across 40 files. Before the signpost correction it was 764 tests across 39 files, and before Phase 5B-2 it was 655 tests across 38 files. A green suite does not close R5-3. Live Firebase submission is not authorised.
 
 ## Milestone 4
 

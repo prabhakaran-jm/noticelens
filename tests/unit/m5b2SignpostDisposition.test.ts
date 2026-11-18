@@ -42,6 +42,12 @@ const signposts = [
   "A charity can help you pay.",
   "You may be eligible for a hardship credit.",
   "You have a right to dispute the charge.",
+  "Our hardship team can talk you through the options.",
+  "A partner charity may be able to explain this bill.",
+  "You can raise a dispute with the ombudsman if you choose.",
+  "Ask customer services and they will resolve your question.",
+  "The charity has a helpline if you need advice.",
+  "A credit offset may be offered against future bills if you qualify.",
 ];
 
 const settlements: Array<[string, string, number]> = [
