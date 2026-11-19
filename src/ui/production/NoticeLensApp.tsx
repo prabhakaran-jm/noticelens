@@ -14,9 +14,12 @@ import {
   approvePending,
   invalidateActiveApprovals,
   isHandleApproved,
+  attachDispatchOwner,
+  invalidateApprovalsForOwner,
   registerApprovablePayload,
   releaseInvalidatedApprovals,
   revokeApproval,
+  type PrivacyReview,
   type ApprovalBinding,
   type ApprovalHandle,
 } from "../../domain/approvalRegistry";
@@ -41,7 +44,7 @@ import { ReadNoticeScreen } from "../screens/ReadNoticeScreen";
 import { PrivacyApprovalModal } from "../privacy/PrivacyApprovalModal";
 import type { PrivacyApprovalView } from "../../adapters/privacyApproval";
 import { receiptForOnDeviceCall } from "./onDeviceSession";
-import { bindLiveCloudDispatch } from "../../adapters/liveCloudDispatch";
+import { bindLiveCloudDispatch, createDispatchOwner } from "../../adapters/liveCloudDispatch";
 import { sourceGenerationId } from "../../adapters/supportedNoticeGate";
 import type { LiveCloudPreflightState } from "../../adapters/secureCloudPreflight";
 
@@ -84,6 +87,10 @@ export function NoticeLensApp() {
   const documentEpochRef = useRef(0);
   const todayRef = useRef(today);
   const readLiveRef = useRef<() => LiveCloudPreflightState | null>(() => null);
+  const dispatchOwnerRef = useRef<ReturnType<typeof createDispatchOwner> | null>(null);
+  if (dispatchOwnerRef.current === null) {
+    dispatchOwnerRef.current = createDispatchOwner();
+  }
   const dropApproval = () => {
     activeHandleRef.current = null;
     liveBindingRef.current = null;
@@ -106,7 +113,17 @@ export function NoticeLensApp() {
     bumpGeneration();
   };
 
-  useEffect(() => bindLiveCloudDispatch(() => readLiveRef.current()), []);
+  useEffect(() => {
+    const owner = dispatchOwnerRef.current;
+    if (owner === null) {
+      return;
+    }
+    const release = bindLiveCloudDispatch(owner, () => readLiveRef.current());
+    return () => {
+      release();
+      invalidateApprovalsForOwner(owner);
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -410,19 +427,22 @@ export function NoticeLensApp() {
           identifierContext={`ie-${identifierEpoch}-doc-${documentEpoch}-ex-${extractionGeneration}`}
           actionLabels={actionLabels}
           onClose={() => setPrivacyOpen(false)}
-          onApprove={(serialized) => {
+          onApprove={(serialized, review: PrivacyReview) => {
             const binding = liveBindingRef.current;
+            const owner = dispatchOwnerRef.current;
             if (
               binding === null ||
+              owner === null ||
               serialized !== binding.canonicalBytes ||
               generationRef.current !== binding.noticeGeneration
             ) {
               return;
             }
-            const registered = registerApprovablePayload(binding);
+            const registered = registerApprovablePayload(binding, review);
             if (!registered.ok) {
               return;
             }
+            attachDispatchOwner(registered.handle, owner);
             const latest = liveBindingRef.current;
             if (
               latest === null ||
@@ -438,7 +458,7 @@ export function NoticeLensApp() {
               releaseInvalidatedApprovals();
               return;
             }
-            if (!approvePending(registered.handle, latest)) {
+            if (!approvePending(registered.handle, latest, review)) {
               revokeApproval(registered.handle);
               releaseInvalidatedApprovals();
               return;

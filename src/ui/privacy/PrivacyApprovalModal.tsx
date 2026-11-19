@@ -4,6 +4,11 @@ import {
 } from "../../adapters/cloudApprovalSession";
 import type { PrivacyApprovalView } from "../../adapters/privacyApproval";
 import { STRUCTURAL_VALIDATION_DOES_NOT_ESTABLISH_PAYMENT_CORRECTNESS } from "../../domain/closedCloudBrief";
+import {
+  closePrivacyReview,
+  openPrivacyReview,
+  type PrivacyReview,
+} from "../../domain/approvalRegistry";
 
 export interface PayloadConfirmation {
   readonly serialized: string;
@@ -42,7 +47,7 @@ export function PrivacyApprovalModal(props: {
   generation: number;
   identifierContext: string;
   actionLabels?: readonly string[];
-  onApprove: (serialized: string) => void;
+  onApprove: (serialized: string, review: PrivacyReview) => void;
   onClose: () => void;
 }) {
   const [confirmation, setConfirmation] = useState<PayloadConfirmation | null>(null);
@@ -145,7 +150,12 @@ export function PrivacyApprovalModal(props: {
               ) {
                 return;
               }
-              props.onApprove(serialized);
+              const review = openPrivacyReview();
+              try {
+                props.onApprove(serialized, review);
+              } finally {
+                closePrivacyReview(review);
+              }
             }}
           >
             Approve this exact payload
