@@ -13,6 +13,7 @@
     "test:watch": "vitest",
     "chrome:dev-profile": "node scripts/launch-chrome-d-profile.mjs",
     "verify:chrome": "node scripts/verify-real-chrome.mjs",
+    "verify:approved-cloud": "node scripts/verify-approved-cloud-chrome.mjs",
     "verify:gemma4": "node scripts/inspect-chrome-flags-and-gemma4.mjs",
     "test:real-chrome": "node scripts/verify-real-chrome.mjs"
   },

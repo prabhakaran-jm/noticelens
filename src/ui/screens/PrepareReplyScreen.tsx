@@ -10,8 +10,11 @@ export interface CloudDraftDemo {
   sendEnabled: boolean;
   status: "idle" | "sending" | "accepted" | "error";
   message: string | null;
+  violations?: readonly string[];
   draft: CloudDraftOutput | null;
   inferenceLabel: string | null;
+  modelName?: string | null;
+  diagnostic?: boolean;
   onSend?: () => void;
 }
 
@@ -97,7 +100,16 @@ export function PrepareReplyScreen(props: {
           Review privacy approval
         </button>
         {props.privacyApproved ? (
-          <p data-testid="privacy-current">The current exact payload has a local approval. Sending stays off.</p>
+          <p data-testid="privacy-current">
+            The current exact payload has a local approval.
+            {props.cloudDemo?.sendEnabled ? "" : " Sending stays off."}
+          </p>
+        ) : null}
+        {import.meta.env.DEV === true && props.cloudDemo?.diagnostic ? (
+          <p data-testid="real-cloud-diagnostic">
+            Local loopback diagnostic. Send uses the approved brief and the Firebase AI Logic SDK.
+            This is not a public send.
+          </p>
         ) : null}
         <button
           type="button"
@@ -126,12 +138,22 @@ export function PrepareReplyScreen(props: {
           {props.cloudDemo.message}
         </p>
       ) : null}
+      {props.cloudDemo?.status === "error" && props.cloudDemo.violations && props.cloudDemo.violations.length > 0 ? (
+        <ul data-testid="cloud-draft-violations">
+          {props.cloudDemo.violations.map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
+      ) : null}
       {props.cloudDemo?.status === "accepted" && props.cloudDemo.draft ? (
         <section data-testid="cloud-draft-output">
           <p data-testid="cloud-inference-label">
             Cloud inference: {props.cloudDemo.inferenceLabel ?? "unreported"}. This draft is not a
             verification of the balance, and it is not a verified saving.
           </p>
+          {props.cloudDemo.modelName ? (
+            <p data-testid="cloud-model-name">Model: {props.cloudDemo.modelName}</p>
+          ) : null}
           <p>{props.cloudDemo.draft.summaryPlainEnglish}</p>
           <ul>
             {props.cloudDemo.draft.options.map((option) => (

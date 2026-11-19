@@ -10,6 +10,7 @@ import { CloudOutputValidationError } from "../domain/cloudOutputGuard";
 import { InferenceProvenanceError } from "../domain/inferenceProvenance";
 import type { CloudDraftOutput } from "../domain/types";
 import { CLOUD_SUBMISSION_ENABLED } from "./cloudApprovalSession";
+import { isRealCloudDiagnosticEnabled } from "./realCloudDiagnostic";
 import {
   evaluateCloudPreflight,
   type CloudPreflightState,
@@ -266,6 +267,7 @@ export type LiveCloudDraftResult =
   | {
       readonly outcome: "rejected";
       readonly reason: LiveCloudDraftRejection;
+      readonly violations?: readonly string[];
     }
   | {
       readonly outcome: "accepted";
@@ -331,7 +333,7 @@ function rejectDraft(error: unknown): LiveCloudDraftResult {
     };
   }
   if (error instanceof CloudOutputValidationError || error instanceof ClosedCloudBriefValidationError) {
-    return { outcome: "rejected", reason: "invalid_output" };
+    return { outcome: "rejected", reason: "invalid_output", violations: error.violations };
   }
   if (error instanceof InferenceProvenanceError) {
     return { outcome: "rejected", reason: "provenance" };
@@ -379,7 +381,9 @@ export function liveCloudDraftMessage(result: LiveCloudDraftResult): string {
  * The lock stays held until the Firebase call, or the test double, settles.
  * Failure does not restore the consumed approval.
  * While the production flag is false, a call without the test double returns
- * before that snapshot and does not touch Firebase.
+ * before that snapshot and does not touch Firebase, unless the development
+ * loopback diagnostic is explicitly enabled. That diagnostic does not accept
+ * a caller payload, a reader, or a model-response double.
  */
 export async function sendLiveApprovedCloudDraft(options?: {
   generate?: CloudDraftCallOptions["generate"];
@@ -387,7 +391,8 @@ export async function sendLiveApprovedCloudDraft(options?: {
   timeoutMs?: number;
 }): Promise<LiveCloudDraftResult> {
   const probe = import.meta.env.PROD ? undefined : options?.generate;
-  if (probe === undefined && !CLOUD_SUBMISSION_ENABLED) {
+  const realDiagnostic = import.meta.env.DEV === true && isRealCloudDiagnosticEnabled();
+  if (probe === undefined && !realDiagnostic && !CLOUD_SUBMISSION_ENABLED) {
     return { outcome: "disabled" };
   }
   const attempt = runLocked();
