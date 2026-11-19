@@ -142,7 +142,10 @@ function isoFromParts(day: string, monthName: string, year: string): string | nu
 /**
  * Rejects draft text that adds an amount, a date, a personal-identifier shape,
  * or an Ofgem claim the approved brief does not carry.
- * Unusual names that do not match these shapes can still pass. That does not close R5-2.
+ * A currency or "pounds" match includes its fraction, so a longer amount is not
+ * treated as the shorter one. A token parseMoneyToken cannot read is a violation.
+ * Unrecognised identifiers, dates, URLs, promises, and other money wording can
+ * still pass. That does not close R5-2.
  */
 export function draftConsistencyViolations(
   texts: readonly string[],
@@ -161,8 +164,8 @@ export function draftConsistencyViolations(
     const stripped = text.replace(/\[[A-Z0-9_]+\]/g, " ");
     const dayMonth = new RegExp(`\\b(\\d{1,2}) (${monthNames}) (\\d{4})\\b`, "gi");
     const monthDay = new RegExp(`\\b(${monthNames}) (\\d{1,2}), (\\d{4})\\b`, "gi");
-    const money = /(?:£|GBP)\s*(\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?/gi;
-    const pounds = /\b(\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?\s+pounds?\b/gi;
+    const money = /(?:£|GBP)\s*(\d[\d,]*(?:\.\d+)?)/gi;
+    const pounds = /\b(\d[\d,]*(?:\.\d+)?)\s+pounds?\b/gi;
     for (const match of stripped.matchAll(money)) {
       const value = parseMoneyToken(match[1] ?? "");
       if (value === null || !approved.amountsGBP.some((amount) => sameMoney(amount, value))) {

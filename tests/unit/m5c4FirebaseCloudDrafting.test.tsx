@@ -9,6 +9,11 @@ import {
 } from "../../src/adapters/liveCloudDispatch";
 import { requestClosedBriefSend, resetUserApprovalStateForTests } from "../../src/adapters/privacyApproval";
 import { approvalRegistryTestIsolation, activeApprovalCount } from "../../src/domain/approvalRegistry";
+import {
+  CloudOutputValidationError,
+  validateCloudDraftOutput,
+  type ApprovedCloudDraftFacts,
+} from "../../src/domain/cloudOutputGuard";
 import { normalizeNewlines } from "../../src/domain/textNormalize";
 import type { InferenceCallRecord, RawNoticeExtraction } from "../../src/domain/types";
 import * as firebaseConfig from "../../src/config/firebase";
@@ -506,5 +511,149 @@ describe("Phase 5C-4 Firebase cloud drafting", () => {
     expect(screen.getByTestId("cloud-demo-scope")).toHaveTextContent("synthetic-fixture-only");
     fireEvent.click(button);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects Pay £1,280.99 on the original fixture and keeps the approval consumed", async () => {
+    const cloudAi = vi.spyOn(firebaseConfig, "getCloudFirebaseAI");
+    const generate = vi.fn(async () => ({
+      text: draftJson("Pay £1,280.99"),
+      inferenceSource: "in_cloud" as const,
+    }));
+    await boot(generate);
+    openAndApprove();
+    fireEvent.click(screen.getByTestId("cloud-send-button"));
+    await flush();
+    expect(screen.queryByTestId("cloud-draft-output")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("cloud-inference-label")).not.toBeInTheDocument();
+    const error = screen.getByTestId("cloud-draft-error");
+    expect(error).toHaveTextContent("The cloud response was rejected");
+    expect(error).not.toHaveTextContent("1,280.99");
+    expect(error).not.toHaveTextContent("Pay");
+    for (const marker of RAW_MARKERS) {
+      expect(error).not.toHaveTextContent(marker);
+    }
+    expect(activeApprovalCount()).toBe(0);
+    expect(screen.getByTestId("cloud-send-button")).toBeDisabled();
+    fireEvent.click(screen.getByTestId("cloud-send-button"));
+    await flush();
+    expect(generate).toHaveBeenCalledTimes(1);
+    openAndApprove();
+    fireEvent.click(screen.getByTestId("cloud-send-button"));
+    await flush();
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(screen.queryByTestId("cloud-draft-output")).not.toBeInTheDocument();
+    expect(screen.getByTestId("cloud-draft-error")).toHaveTextContent("rejected");
+    expect(activeApprovalCount()).toBe(0);
+    expect(cloudAi).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+const DECIMAL_FIELDS = [
+  "summaryPlainEnglish",
+  "replyTemplateWithPlaceholders",
+  "title",
+  "rationale",
+  "applicableCondition",
+] as const;
+
+type DecimalField = (typeof DECIMAL_FIELDS)[number];
+
+function decimalFacts(amountsGBP: readonly number[]): ApprovedCloudDraftFacts {
+  return {
+    noticeCategory: "utility_electricity",
+    guidanceIds: [],
+    amountsGBP,
+    issueDate: null,
+    billingPeriod: null,
+    responseDeadlines: [],
+  };
+}
+
+function draftPlacing(field: DecimalField, text: string) {
+  const neutral = "You can ask for a review of the stated balance.";
+  return {
+    summaryPlainEnglish: field === "summaryPlainEnglish" ? text : neutral,
+    options: [
+      {
+        title: field === "title" ? text : "Ask for a billing review",
+        rationale: field === "rationale" ? text : "You can ask the sender to review the stated balance.",
+        applicableCondition:
+          field === "applicableCondition" ? text : "Use this if you want a review of the stated balance.",
+      },
+    ],
+    replyTemplateWithPlaceholders:
+      field === "replyTemplateWithPlaceholders" ? `${text} [ACCOUNT_REF]` : "Please review the stated balance for [ACCOUNT_REF].",
+    citedGuidanceIds: [] as string[],
+  };
+}
+
+function placedText(field: DecimalField, output: { summaryPlainEnglish: string; replyTemplateWithPlaceholders: string; options: Array<{ title: string; rationale: string; applicableCondition: string }> }): string {
+  if (field === "summaryPlainEnglish") {
+    return output.summaryPlainEnglish;
+  }
+  if (field === "replyTemplateWithPlaceholders") {
+    return output.replyTemplateWithPlaceholders;
+  }
+  const option = output.options[0];
+  if (option === undefined) {
+    throw new Error(field);
+  }
+  return option[field];
+}
+
+function expectDecimalRejected(amounts: readonly number[], text: string): void {
+  for (const field of DECIMAL_FIELDS) {
+    let caught: unknown;
+    try {
+      validateCloudDraftOutput(draftPlacing(field, text), decimalFacts(amounts));
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught, field).toBeInstanceOf(CloudOutputValidationError);
+    expect((caught as CloudOutputValidationError).violations, field).toContain(
+      "draft mentions an amount that is not on the approved brief"
+    );
+  }
+}
+
+function expectDecimalAccepted(amounts: readonly number[], text: string): void {
+  for (const field of DECIMAL_FIELDS) {
+    const output = validateCloudDraftOutput(draftPlacing(field, text), decimalFacts(amounts));
+    expect(placedText(field, output), field).toContain(text);
+  }
+}
+
+describe("Phase 5C-4 decimal money tokens", () => {
+  it("A rejects £1,280.99 when £1,280 is approved", () => {
+    expectDecimalRejected([1280], "£1,280.99");
+  });
+
+  it("B accepts £1,280.50 when that amount is approved", () => {
+    expectDecimalAccepted([1280.5], "£1,280.50");
+  });
+
+  it("C rejects £520.75 when £520 is approved", () => {
+    expectDecimalRejected([520], "£520.75");
+  });
+
+  it("D rejects 520.75 pounds when £520 is approved", () => {
+    expectDecimalRejected([520], "520.75 pounds");
+  });
+
+  it("E accepts £520 when £520 is approved", () => {
+    expectDecimalAccepted([520], "£520");
+  });
+
+  it("F rejects GBP 1,280.01 when £1,280 is approved", () => {
+    expectDecimalRejected([1280], "GBP 1,280.01");
+  });
+
+  it("G rejects £1,2800 when £1,280 is approved", () => {
+    expectDecimalRejected([1280], "£1,2800");
+  });
+
+  it("H rejects £1,280.999 when £1,280 is approved", () => {
+    expectDecimalRejected([1280], "£1,280.999");
   });
 });
