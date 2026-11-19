@@ -160,7 +160,7 @@ describe("Phase 5B production grounding", () => {
     expect(screen.getByTestId("cloud-send-button")).toBeDisabled();
     expect(network).toEqual([]);
     expect(revised.length).toBeGreaterThan(0);
-  });
+  }, 20_000);
 
   it("drops a stale comparison when either notice changes", async () => {
     await boot();

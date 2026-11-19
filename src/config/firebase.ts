@@ -151,10 +151,11 @@ function ensureFirebaseAppAndAppCheck(options: {
       const debugToken = cleanStaticEnv(
         import.meta.env.VITE_FIREBASE_APPCHECK_DEBUG_TOKEN
       );
-      (
-        self as unknown as { FIREBASE_APPCHECK_DEBUG_TOKEN?: boolean | string }
-      ).FIREBASE_APPCHECK_DEBUG_TOKEN =
-        debugToken && debugToken !== "true" ? debugToken : true;
+      if (debugToken) {
+        (
+          self as unknown as { FIREBASE_APPCHECK_DEBUG_TOKEN?: boolean | string }
+        ).FIREBASE_APPCHECK_DEBUG_TOKEN = debugToken !== "true" ? debugToken : true;
+      }
     }
 
     cachedAppCheck = initializeAppCheck(cachedApp, {

@@ -42,6 +42,40 @@ const OUTPUT_KEYS = [
 
 const OPTION_KEYS = ["title", "rationale", "applicableCondition"] as const;
 
+const ALLOWED_GREETING_LINES = new Set([
+  "dear sir or madam,",
+  "dear sir/madam,",
+  "dear customer services,",
+  "dear [recipient_name],",
+  "dear [recipient_name]",
+  "dear,",
+  "dear",
+]);
+
+/**
+ * Each line that contains "Dear" must be one complete greeting line:
+ * "Dear Sir or Madam,", "Dear Sir/Madam,", or "Dear Customer Services,".
+ * "Dear [RECIPIENT_NAME]" and "Dear [RECIPIENT_NAME]," are kept. After that
+ * placeholder is removed, the line is "Dear" or "Dear,". The comma belongs
+ * to an allowed salutation. A name or any other text on that line fails
+ * closed, including "Dear Sir or Madam, Sarah Example". A letter on later
+ * lines is not part of the greeting line. A greeting and the letter on the
+ * same line fails closed. A personal name that is not on a Dear line is not
+ * detected here. That limit does not close R5-2.
+ */
+export function hasDisallowedGreeting(text: string): boolean {
+  for (const rawLine of text.split("\n")) {
+    if (!/\bdear\b/i.test(rawLine)) {
+      continue;
+    }
+    const line = rawLine.replace(/\s+/g, " ").trim().toLowerCase().replace(/\s+,/g, ",");
+    if (!line.startsWith("dear") || !ALLOWED_GREETING_LINES.has(line)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 const DEFINITIVE_LEGAL_CONCLUSION =
   /\b(legally invalid|unenforceable|this bill is invalid|this notice is invalid|charge is unlawful|you are not liable|notice is void)\b/i;
 
@@ -200,7 +234,7 @@ export function draftConsistencyViolations(
       /\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b/i.test(stripped) ||
       /\b(?:\+44\d{10}|0\d{10,11})\b/.test(stripped) ||
       /\b[A-Z]{2,}[-/]\d{3,}\b/.test(stripped) ||
-      /\bDear\s+[A-Z][a-z]{2,}\b/.test(stripped) ||
+      hasDisallowedGreeting(stripped) ||
       /\b\d{6,}\b/.test(stripped)
     ) {
       identifier = true;
