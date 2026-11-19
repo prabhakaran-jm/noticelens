@@ -42,6 +42,31 @@ const OUTPUT_KEYS = [
 
 const OPTION_KEYS = ["title", "rationale", "applicableCondition"] as const;
 
+const ALLOWED_GREETINGS = new Set([
+  "dear sir or madam",
+  "dear sir/madam",
+  "dear customer services",
+]);
+
+/**
+ * The greeting check allows three exact phrases and nothing after them.
+ * A placeholder that was removed first leaves "Dear" with no words, which is
+ * not a name. Any other words fail closed.
+ */
+export function hasDisallowedGreeting(text: string): boolean {
+  for (const match of text.matchAll(/\bDear\b([^\n]*)/gi)) {
+    const clause = (match[1] ?? "").split(",")[0] ?? "";
+    const words = clause.replace(/[.!?;:]+$/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+    if (words.length === 0) {
+      continue;
+    }
+    if (!ALLOWED_GREETINGS.has(`dear ${words}`)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 const DEFINITIVE_LEGAL_CONCLUSION =
   /\b(legally invalid|unenforceable|this bill is invalid|this notice is invalid|charge is unlawful|you are not liable|notice is void)\b/i;
 
@@ -200,7 +225,7 @@ export function draftConsistencyViolations(
       /\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b/i.test(stripped) ||
       /\b(?:\+44\d{10}|0\d{10,11})\b/.test(stripped) ||
       /\b[A-Z]{2,}[-/]\d{3,}\b/.test(stripped) ||
-      /\bDear\s+[A-Z][a-z]{2,}\b/.test(stripped) ||
+      hasDisallowedGreeting(stripped) ||
       /\b\d{6,}\b/.test(stripped)
     ) {
       identifier = true;

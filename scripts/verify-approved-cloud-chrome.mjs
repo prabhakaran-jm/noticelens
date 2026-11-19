@@ -17,10 +17,12 @@ import { chromium } from "playwright-core";
 const CHROME_EXE = process.env.NOTICELENS_CHROME_EXE || "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
 const DEV_URL = process.env.NOTICELENS_DEV_URL || "http://127.0.0.1:5174";
 const CDP_PORT = Number(process.env.NOTICELENS_CDP_PORT || "9336");
-const PROFILE_DIR = process.env.NOTICELENS_CHROME_PROFILE_DIR || path.join(os.tmpdir(), "noticelens-m5c5-chrome");
 const EVIDENCE_PATH =
   process.env.NOTICELENS_EVIDENCE_PATH ||
-  path.resolve("tmp", "m5c5-approved-cloud-evidence.json");
+  path.resolve("tmp", "m5c6-approved-cloud-evidence.json");
+const API_KEY_HEADER = "x-goog-api-key";
+const APP_ID_HEADER = "x-firebase-appid";
+const APP_CHECK_HEADER = "x-firebase-appcheck";
 const RAW_MARKERS = ["Sarah Example", "EXAMPLE-8472", "14 Example Road", "RG0 0AA"];
 const GENERATION_HOSTS = ["firebasevertexai.googleapis.com", "generativelanguage.googleapis.com"];
 const APP_CHECK_HOSTS = [
@@ -77,13 +79,21 @@ async function ensureVite() {
   const parsed = new URL(DEV_URL);
   const proc = spawn(process.execPath, [viteBin, "--host", "127.0.0.1", "--port", parsed.port, "--strictPort"], {
     cwd: process.cwd(),
-    env: { ...process.env, VITE_NOTICELENS_REAL_CLOUD_DIAGNOSTIC: "1" },
+    env: {
+      ...process.env,
+      VITE_NOTICELENS_REAL_CLOUD_DIAGNOSTIC: "1",
+      VITE_FIREBASE_APPCHECK_DEBUG_TOKEN: "",
+    },
     stdio: ["ignore", "pipe", "pipe"],
   });
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     if (await isHttpUp(DEV_URL)) {
-      return { startedByScript: true, stop: async () => proc.kill(), note: "Started Vite with the diagnostic flag." };
+      return {
+        startedByScript: true,
+        stop: async () => proc.kill(),
+        note: "Started Vite with the diagnostic flag and without a debug token, so App Check uses reCAPTCHA Enterprise.",
+      };
     }
     await new Promise((resolve) => setTimeout(resolve, 400));
   }
@@ -92,11 +102,11 @@ async function ensureVite() {
 }
 
 async function launchChrome() {
-  fs.mkdirSync(PROFILE_DIR, { recursive: true });
+  const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "noticelens-m5c6-chrome-"));
   const chrome = spawn(
     CHROME_EXE,
     [
-      `--user-data-dir=${PROFILE_DIR}`,
+      `--user-data-dir=${profileDir}`,
       `--remote-debugging-port=${CDP_PORT}`,
       "--no-first-run",
       "--no-default-browser-check",
@@ -126,6 +136,7 @@ async function launchChrome() {
       } catch {
         // The process may already have exited.
       }
+      fs.rmSync(profileDir, { recursive: true, force: true });
     },
   };
 }
@@ -470,31 +481,44 @@ async function main() {
         outcome === "accepted" ? "The screen accepted a draft labelled in_cloud." : `UI outcome: ${outcome}.`
       )
     );
-    const generationUrl = generation[0]?.request.url();
-    if (generationUrl) {
-      evidence.tokenProbe = await probeAppCheckToken(generationUrl);
+    const generationRequest = generation[0]?.request;
+    const validStatus = statuses[0]?.status ?? null;
+    if (generationRequest) {
+      evidence.tokenProbe = await probeAppCheckToken(generationRequest, validStatus);
+      const comparable = evidence.tokenProbe.comparable;
+      evidence.checks.push(
+        checkStatus(
+          "sdk-attached-app-check",
+          evidence.tokenProbe.sdkAttachedAppCheck ? "PASS" : "FAIL",
+          evidence.tokenProbe.sdkAttachedAppCheck
+            ? "The generation request had an App Check header."
+            : "The generation request had no App Check header."
+        )
+      );
       evidence.checks.push(
         checkStatus(
           "missing-app-check-token",
-          evidence.tokenProbe.missing.rejected ? "PASS" : "FAIL",
-          `Missing-token HTTP ${evidence.tokenProbe.missing.httpStatus}.`
+          comparable ? (evidence.tokenProbe.missing.rejected ? "PASS" : "FAIL") : "INCONCLUSIVE",
+          comparable
+            ? `Missing-token HTTP ${evidence.tokenProbe.missing.httpStatus}. Only the App Check header changed.`
+            : "The captured request did not include both the API key and the app ID, so a 403 is not App Check enforcement."
         )
       );
       evidence.checks.push(
         checkStatus(
           "invalid-app-check-token",
-          evidence.tokenProbe.invalid.rejected ? "PASS" : "FAIL",
-          `Invalid-token HTTP ${evidence.tokenProbe.invalid.httpStatus}.`
+          comparable ? (evidence.tokenProbe.invalid.rejected ? "PASS" : "FAIL") : "INCONCLUSIVE",
+          comparable
+            ? `Invalid-token HTTP ${evidence.tokenProbe.invalid.httpStatus}. Only the App Check header changed.`
+            : "The captured request did not include both the API key and the app ID, so a 403 is not App Check enforcement."
         )
       );
     } else {
-      evidence.checks.push(
-        checkStatus("missing-app-check-token", "NOT TESTED", "No generation URL was captured.")
-      );
-      evidence.checks.push(
-        checkStatus("invalid-app-check-token", "NOT TESTED", "No generation URL was captured.")
-      );
+      evidence.checks.push(checkStatus("sdk-attached-app-check", "NOT TESTED", "No generation request was captured."));
+      evidence.checks.push(checkStatus("missing-app-check-token", "NOT TESTED", "No generation request was captured."));
+      evidence.checks.push(checkStatus("invalid-app-check-token", "NOT TESTED", "No generation request was captured."));
     }
+    evidence.checks.push(await consoleEnforcementCheck());
 
     const secondEnabled = await sendButton.isEnabled();
     evidence.checks.push(
@@ -543,7 +567,7 @@ async function main() {
       evidence.checks.push(
         checkStatus(
           "double-submit",
-          heldGenerations <= 1 ? "PASS" : "FAIL",
+          heldGenerations === 1 ? "PASS" : "FAIL",
           `${heldGenerations} generation request(s) started from two clicks.`
         )
       );
@@ -559,6 +583,13 @@ async function main() {
     } else {
       evidence.checks.push(
         checkStatus(
+          "double-submit",
+          "NOT TESTED",
+          "A second approval did not enable Send, so zero requests is not a pass."
+        )
+      );
+      evidence.checks.push(
+        checkStatus(
           "transport-cancellation",
           "NOT TESTED",
           "A second approval did not enable Send, so the abort observation did not start."
@@ -568,7 +599,7 @@ async function main() {
     evidence.elapsedMs = Date.now() - started;
     writeEvidence(evidence);
     const failed = evidence.checks.some((item) => item.status === "FAIL");
-    const blocked = evidence.checks.some((item) => item.status === "BLOCKED");
+    const blocked = evidence.checks.some((item) => item.status === "BLOCKED" || item.status === "INCONCLUSIVE");
     process.exitCode = failed ? 1 : blocked ? 2 : 0;
   } catch (error) {
     evidence.checks.push(checkStatus("script", "BLOCKED", safeErrorMessage(error)));
@@ -625,19 +656,115 @@ function count(entries) {
   };
 }
 
-async function probeAppCheckToken(url) {
-  const body = JSON.stringify({ contents: [{ role: "user", parts: [{ text: "ping" }] }] });
-  const missing = await classifyTokenResponse(
-    await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body })
+function headerPresent(headers, name) {
+  return Object.entries(headers).some(([key, value]) => key.toLowerCase() === name && String(value ?? "").length > 0);
+}
+
+function replayHeaders(headers) {
+  const copy = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === APP_CHECK_HEADER) {
+      continue;
+    }
+    copy[key] = value;
+  }
+  return copy;
+}
+
+async function probeAppCheckToken(request, validStatus) {
+  const headers = request.headers();
+  const hasApiKey = headerPresent(headers, API_KEY_HEADER);
+  const hasAppId = headerPresent(headers, APP_ID_HEADER);
+  const result = {
+    sdkAttachedAppCheck: headerPresent(headers, APP_CHECK_HEADER),
+    hasApiKey,
+    hasAppId,
+    comparable: hasApiKey && hasAppId,
+    valid: { httpStatus: validStatus, accepted: validStatus === 200 },
+    missing: { httpStatus: null, rejected: false },
+    invalid: { httpStatus: null, rejected: false },
+  };
+  if (!result.comparable) {
+    return result;
+  }
+  const kept = replayHeaders(headers);
+  const body = request.postData() ?? "";
+  result.missing = await classifyTokenResponse(
+    await fetch(request.url(), { method: request.method(), headers: kept, body })
   );
-  const invalid = await classifyTokenResponse(
-    await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Firebase-AppCheck": "invalid" },
+  result.invalid = await classifyTokenResponse(
+    await fetch(request.url(), {
+      method: request.method(),
+      headers: { ...kept, "X-Firebase-AppCheck": "invalid" },
       body,
     })
   );
-  return { missing, invalid };
+  return result;
+}
+
+function configuredProjectId() {
+  if (typeof process.env.VITE_FIREBASE_PROJECT_ID === "string" && process.env.VITE_FIREBASE_PROJECT_ID.trim()) {
+    return process.env.VITE_FIREBASE_PROJECT_ID.trim();
+  }
+  try {
+    const line = fs
+      .readFileSync(".env.local", "utf8")
+      .split(/\r?\n/)
+      .find((item) => item.startsWith("VITE_FIREBASE_PROJECT_ID="));
+    return (line ?? "").slice("VITE_FIREBASE_PROJECT_ID=".length).trim();
+  } catch {
+    return "";
+  }
+}
+
+async function consoleEnforcementCheck() {
+  const projectId = configuredProjectId();
+  if (!projectId) {
+    return checkStatus("app-check-console-enforcement", "BLOCKED", "No Firebase project id was available for a console inspection.");
+  }
+  try {
+    const { createRequire } = await import("node:module");
+    const require = createRequire(import.meta.url);
+    const auth = require("firebase-tools/lib/auth");
+    const apiv2 = require("firebase-tools/lib/apiv2");
+    const account = auth.getGlobalDefaultAccount();
+    if (!account?.tokens?.refresh_token) {
+      return checkStatus("app-check-console-enforcement", "BLOCKED", "The Firebase CLI has no stored account.");
+    }
+    apiv2.setRefreshToken(account.tokens.refresh_token);
+    const token = await apiv2.getAccessToken();
+    const services = ["firebaseml.googleapis.com", "firebasevertexai.googleapis.com"];
+    const modes = [];
+    for (const service of services) {
+      const response = await fetch(`https://firebaseappcheck.googleapis.com/v1/projects/${projectId}/services/${service}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const body = await response.json().catch(() => ({}));
+      if (response.status === 401 || response.status === 403) {
+        return checkStatus(
+          "app-check-console-enforcement",
+          "BLOCKED",
+          `Console inspection returned HTTP ${response.status}. Do not disable enforcement.`
+        );
+      }
+      if (typeof body.enforcementMode === "string") {
+        modes.push(body.enforcementMode);
+      }
+    }
+    if (modes.includes("ENFORCED")) {
+      return checkStatus("app-check-console-enforcement", "PASS", "Firebase AI Logic App Check enforcementMode is ENFORCED.");
+    }
+    if (modes.length > 0) {
+      return checkStatus("app-check-console-enforcement", "FAIL", `enforcementMode is ${modes.join(", ")}.`);
+    }
+    return checkStatus(
+      "app-check-console-enforcement",
+      "BLOCKED",
+      "Console inspection did not return an enforcement mode. Do not disable enforcement."
+    );
+  } catch {
+    return checkStatus("app-check-console-enforcement", "BLOCKED", "Console inspection could not authenticate. Do not disable enforcement.");
+  }
 }
 
 async function classifyTokenResponse(response) {
