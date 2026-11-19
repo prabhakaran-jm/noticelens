@@ -155,3 +155,15 @@ App Check in a supported mode, a real `ONLY_IN_CLOUD` call whose `inferenceSourc
 ## What this note does not do
 
 It does not implement v2, edit tests, change Firebase, change dependencies, enable cloud sending, or open a pull request.
+
+## Phase 5C-4, current code
+
+The closed v2 brief is now the production inspection payload. Phase 5C-4 is the first wiring of that payload to the existing Firebase AI Logic drafter. The production switch is still off.
+
+On-device reading and cloud drafting are different calls. On-device reading uses the on-device Firebase AI entry and does not require App Check. Cloud drafting uses `InferenceMode.ONLY_IN_CLOUD`, the JSON schema already on the drafter, and `getCloudFirebaseAI`, which refuses to start without an App Check site key. The installed package is `firebase` 13.3.0. The reported cloud source is `in_cloud`. A test double can stand in for the SDK. The production build does not pass that double.
+
+The fixture boundary is the two exact synthetic notices. The goal is `request_billing_review` with no flags. The reply screen says the demo is synthetic-fixture-only. Consent is the privacy modal's exact bytes. The send reads those bytes once, consumes the Phase 4B approval, and wraps that same string. It does not take a caller-supplied payload.
+
+The network gate is the client preflight plus Firebase App Check. The preflight is local. App Check is Firebase's attestation of the app, not a NoticeLens server checking every amount. This repository does not put a server-side source check on the Firebase AI request. A server that accepted only the two fixtures would be a different design. The timeout is the existing 20 second default, capped at 60 seconds. Output validation reuses `cloudOutputGuard`, including amount, date, and identifier-shape checks against the approved brief. Copy and Download stay off.
+
+What stays blocked until a real Chrome capture and a separate review: the production flag, Send without a test probe, `requestClosedBriefSend`, `requestCloudSubmission`, and any claim that the comparison or a cloud draft verifies £760. R5-3, R5-2, R5-4, and R5-5 stay open.

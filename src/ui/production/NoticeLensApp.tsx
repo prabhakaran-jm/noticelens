@@ -32,7 +32,7 @@ import {
 import { isoDateFromClock } from "../../domain/dates";
 import type { InferenceEvidenceReceipt } from "../../domain/evidenceReceipt";
 import { normalizeNewlines } from "../../domain/textNormalize";
-import type { CircumstanceFlag, RawNoticeExtraction, ResponseGoal } from "../../domain/types";
+import type { CircumstanceFlag, CloudDraftOutput, RawNoticeExtraction, ResponseGoal } from "../../domain/types";
 import { HybridStagesStrip } from "../layout/HybridStagesStrip";
 import { InferenceEvidenceDrawer } from "../layout/InferenceEvidenceDrawer";
 import { LegalScopeFooter } from "../layout/LegalScopeFooter";
@@ -44,7 +44,13 @@ import { ReadNoticeScreen } from "../screens/ReadNoticeScreen";
 import { PrivacyApprovalModal } from "../privacy/PrivacyApprovalModal";
 import type { PrivacyApprovalView } from "../../adapters/privacyApproval";
 import { receiptForOnDeviceCall } from "./onDeviceSession";
-import { bindLiveCloudDispatch, createDispatchOwner } from "../../adapters/liveCloudDispatch";
+import {
+  bindLiveCloudDispatch,
+  createDispatchOwner,
+  liveCloudDraftMessage,
+  sendLiveApprovedCloudDraft,
+  type LiveCloudDraftResult,
+} from "../../adapters/liveCloudDispatch";
 import { sourceGenerationId } from "../../adapters/supportedNoticeGate";
 import type { LiveCloudPreflightState } from "../../adapters/secureCloudPreflight";
 
@@ -53,7 +59,17 @@ let sessionCounter = 0;
 const ORIGINAL_SAMPLE = normalizeNewlines(originalSample);
 const REVISED_SAMPLE = normalizeNewlines(revisedSample);
 
-export function NoticeLensApp() {
+export interface CloudDraftProbe {
+  generate: (args: {
+    prompt: string;
+    signal: AbortSignal;
+    modelName: string;
+  }) => Promise<{ text: string; inferenceSource: string | undefined }>;
+  timeoutMs?: number;
+}
+
+export function NoticeLensApp(props?: { cloudDraftProbe?: CloudDraftProbe }) {
+  const cloudProbe = import.meta.env.PROD ? undefined : props?.cloudDraftProbe;
   const today = useMemo(() => isoDateFromClock(new Date(), "Europe/London"), []);
   const [step, setStep] = useState<WorkflowStep>("read");
   const [originalText, setOriginalText] = useState(ORIGINAL_SAMPLE);
@@ -88,10 +104,35 @@ export function NoticeLensApp() {
   const todayRef = useRef(today);
   const readLiveRef = useRef<() => LiveCloudPreflightState | null>(() => null);
   const dispatchOwnerRef = useRef<ReturnType<typeof createDispatchOwner> | null>(null);
+  const cloudAbortRef = useRef<AbortController | null>(null);
+  const cloudRequestRef = useRef(0);
+  const mountedRef = useRef(true);
+  const [cloudStatus, setCloudStatus] = useState<"idle" | "sending" | "accepted" | "error">("idle");
+  const [cloudDraft, setCloudDraft] = useState<CloudDraftOutput | null>(null);
+  const [cloudError, setCloudError] = useState<string | null>(null);
+  const [cloudInference, setCloudInference] = useState<string | null>(null);
   if (dispatchOwnerRef.current === null) {
     dispatchOwnerRef.current = createDispatchOwner();
   }
+  const stopCloudSend = () => {
+    const inFlightSend = cloudAbortRef.current !== null;
+    cloudRequestRef.current += 1;
+    cloudAbortRef.current?.abort();
+    cloudAbortRef.current = null;
+    setCloudDraft(null);
+    setCloudInference(null);
+    if (inFlightSend) {
+      setCloudStatus("error");
+      setCloudError(
+        "The notice changed before the cloud result could be accepted. A new privacy approval is required to try again."
+      );
+    } else {
+      setCloudStatus("idle");
+      setCloudError(null);
+    }
+  };
   const dropApproval = () => {
+    stopCloudSend();
     activeHandleRef.current = null;
     liveBindingRef.current = null;
     invalidateActiveApprovals();
@@ -119,7 +160,12 @@ export function NoticeLensApp() {
       return;
     }
     const release = bindLiveCloudDispatch(owner, () => readLiveRef.current());
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
+      cloudRequestRef.current += 1;
+      cloudAbortRef.current?.abort();
+      cloudAbortRef.current = null;
       release();
       invalidateApprovalsForOwner(owner);
     };
@@ -296,6 +342,65 @@ export function NoticeLensApp() {
     revised: revisedText !== settledRevised,
   });
   const identifiers = inspection.redaction.ok ? inspection.redaction.localIdentifierMap.entries : [];
+  const fixtureEligible = originalText === ORIGINAL_SAMPLE || originalText === REVISED_SAMPLE;
+  const cloudSendEnabled =
+    cloudProbe !== undefined &&
+    privacy.matchesCurrentPayload &&
+    fixtureEligible &&
+    responseGoal === "request_billing_review" &&
+    flags.length === 0 &&
+    cloudStatus !== "sending";
+  const sendCloudDraft = () => {
+    if (cloudProbe === undefined || cloudAbortRef.current !== null) {
+      return;
+    }
+    const request = cloudRequestRef.current + 1;
+    cloudRequestRef.current = request;
+    const generationAtSend = generationRef.current;
+    const controller = new AbortController();
+    cloudAbortRef.current = controller;
+    setCloudStatus("sending");
+    setCloudDraft(null);
+    setCloudError(null);
+    setCloudInference(null);
+    void sendLiveApprovedCloudDraft({
+      generate: cloudProbe.generate,
+      signal: controller.signal,
+      timeoutMs: cloudProbe.timeoutMs,
+    }).then((result: LiveCloudDraftResult) => {
+      if (cloudAbortRef.current === controller) {
+        cloudAbortRef.current = null;
+      }
+      if (!mountedRef.current || request !== cloudRequestRef.current) {
+        return;
+      }
+      if (generationRef.current !== generationAtSend || result.outcome !== "accepted") {
+        setCloudDraft(null);
+        setCloudInference(null);
+        setCloudStatus("error");
+        setCloudError(
+          liveCloudDraftMessage(result.outcome === "accepted" ? { outcome: "stale" } : result)
+        );
+        return;
+      }
+      setCloudDraft(result.draft);
+      setCloudInference(result.inferenceSource);
+      setCloudStatus("accepted");
+      setCloudError(null);
+      setReceipts((current) => [...current, result.evidence]);
+    }, () => {
+      if (cloudAbortRef.current === controller) {
+        cloudAbortRef.current = null;
+      }
+      if (!mountedRef.current || request !== cloudRequestRef.current) {
+        return;
+      }
+      setCloudDraft(null);
+      setCloudInference(null);
+      setCloudStatus("error");
+      setCloudError("Cloud drafting was rejected. A new privacy approval is required to try again.");
+    });
+  };
 
   return (
     <>
@@ -396,6 +501,18 @@ export function NoticeLensApp() {
             session={session}
             privacyApproved={privacy.matchesCurrentPayload}
             onReviewPrivacy={() => setPrivacyOpen(true)}
+            cloudDemo={
+              cloudProbe
+                ? {
+                    sendEnabled: cloudSendEnabled,
+                    status: cloudStatus,
+                    message: cloudError,
+                    draft: cloudStatus === "accepted" ? cloudDraft : null,
+                    inferenceLabel: cloudInference,
+                    onSend: sendCloudDraft,
+                  }
+                : undefined
+            }
           />
         ) : null}
         {step === "compare" ? (

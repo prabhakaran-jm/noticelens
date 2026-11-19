@@ -4,6 +4,16 @@ import {
   type CloudApprovalSession,
 } from "../../adapters/cloudApprovalSession";
 import { STRUCTURAL_VALIDATION_DOES_NOT_ESTABLISH_PAYMENT_CORRECTNESS } from "../../domain/closedCloudBrief";
+import type { CloudDraftOutput } from "../../domain/types";
+
+export interface CloudDraftDemo {
+  sendEnabled: boolean;
+  status: "idle" | "sending" | "accepted" | "error";
+  message: string | null;
+  draft: CloudDraftOutput | null;
+  inferenceLabel: string | null;
+  onSend?: () => void;
+}
 
 export function PrepareReplyScreen(props: {
   inspection: {
@@ -16,6 +26,7 @@ export function PrepareReplyScreen(props: {
   session: CloudApprovalSession;
   privacyApproved?: boolean;
   onReviewPrivacy?: () => void;
+  cloudDemo?: CloudDraftDemo;
 }) {
   return (
     <section className="stack" data-testid="screen-reply">
@@ -23,13 +34,25 @@ export function PrepareReplyScreen(props: {
         <p className="screen-eyebrow">Screen 3</p>
         <h1 className="screen-title">Prepare a reply</h1>
         <p className="screen-lead">
-          You can inspect the local brief. Cloud drafting is switched off, so there is no reply to
-          copy and no request is made.
+          You can inspect the local brief. Cloud drafting is synthetic-fixture-only.
+          {props.cloudDemo
+            ? " One explicit send uses the approved brief for the two synthetic examples."
+            : " Cloud drafting is switched off, so there is no reply to copy and no request is made."}
         </p>
       </header>
+      <p data-testid="cloud-demo-scope">
+        Cloud drafting in this demo is synthetic-fixture-only. It applies to the two synthetic
+        example notices, and only after a separate review.
+      </p>
       <div className="banner block" role="status" data-testid="cloud-disabled">
-        Cloud sending disabled. {props.session.blockedReason}
+        {props.cloudDemo
+          ? "Production cloud sending stays off. This session can send only the two synthetic examples."
+          : `Cloud sending disabled. ${props.session.blockedReason}`}
       </div>
+      <p data-testid="cloud-fixture-explanation">
+        Cloud drafting is available only for the two synthetic examples. Local analysis stays on
+        this device.
+      </p>
       <p className="banner block" role="note" data-testid="structural-validation-warning">
         {STRUCTURAL_VALIDATION_DOES_NOT_ESTABLISH_PAYMENT_CORRECTNESS}
       </p>
@@ -80,18 +103,46 @@ export function PrepareReplyScreen(props: {
           type="button"
           className="btn"
           data-testid="cloud-send-button"
-          disabled
+          disabled={!props.cloudDemo?.sendEnabled}
           aria-describedby="cloud-disabled"
+          onClick={props.cloudDemo?.sendEnabled ? props.cloudDemo.onSend : undefined}
         >
           Send to cloud drafting
         </button>
-        <button type="button" className="btn secondary" disabled>
+        <button type="button" className="btn secondary" data-testid="cloud-copy-button" disabled>
           Copy reply
         </button>
-        <button type="button" className="btn secondary" disabled>
+        <button type="button" className="btn secondary" data-testid="cloud-download-button" disabled>
           Download .txt
         </button>
       </div>
+      {props.cloudDemo?.status === "sending" ? (
+        <p role="status" data-testid="cloud-draft-status">
+          Sending the approved brief.
+        </p>
+      ) : null}
+      {props.cloudDemo?.status === "error" && props.cloudDemo.message ? (
+        <p role="alert" data-testid="cloud-draft-error">
+          {props.cloudDemo.message}
+        </p>
+      ) : null}
+      {props.cloudDemo?.status === "accepted" && props.cloudDemo.draft ? (
+        <section data-testid="cloud-draft-output">
+          <p data-testid="cloud-inference-label">
+            Cloud inference: {props.cloudDemo.inferenceLabel ?? "unreported"}. This draft is not a
+            verification of the balance, and it is not a verified saving.
+          </p>
+          <p>{props.cloudDemo.draft.summaryPlainEnglish}</p>
+          <ul>
+            {props.cloudDemo.draft.options.map((option) => (
+              <li key={option.title}>
+                <strong>{option.title}</strong> {option.rationale} {option.applicableCondition}
+              </li>
+            ))}
+          </ul>
+          <pre>{props.cloudDemo.draft.replyTemplateWithPlaceholders}</pre>
+        </section>
+      ) : null}
       <p>{CLOUD_SUBMISSION_BLOCKED_REASON}</p>
     </section>
   );
