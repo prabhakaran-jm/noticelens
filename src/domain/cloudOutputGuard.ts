@@ -42,25 +42,34 @@ const OUTPUT_KEYS = [
 
 const OPTION_KEYS = ["title", "rationale", "applicableCondition"] as const;
 
-const ALLOWED_GREETINGS = new Set([
-  "dear sir or madam",
-  "dear sir/madam",
-  "dear customer services",
+const ALLOWED_GREETING_LINES = new Set([
+  "dear sir or madam,",
+  "dear sir/madam,",
+  "dear customer services,",
+  "dear [recipient_name],",
+  "dear [recipient_name]",
+  "dear,",
+  "dear",
 ]);
 
 /**
- * The greeting check allows three exact phrases and nothing after them.
- * A placeholder that was removed first leaves "Dear" with no words, which is
- * not a name. Any other words fail closed.
+ * Each line that contains "Dear" must be one complete greeting line:
+ * "Dear Sir or Madam,", "Dear Sir/Madam,", or "Dear Customer Services,".
+ * "Dear [RECIPIENT_NAME]" and "Dear [RECIPIENT_NAME]," are kept. After that
+ * placeholder is removed, the line is "Dear" or "Dear,". The comma belongs
+ * to an allowed salutation. A name or any other text on that line fails
+ * closed, including "Dear Sir or Madam, Sarah Example". A letter on later
+ * lines is not part of the greeting line. A greeting and the letter on the
+ * same line fails closed. A personal name that is not on a Dear line is not
+ * detected here. That limit does not close R5-2.
  */
 export function hasDisallowedGreeting(text: string): boolean {
-  for (const match of text.matchAll(/\bDear\b([^\n]*)/gi)) {
-    const clause = (match[1] ?? "").split(",")[0] ?? "";
-    const words = clause.replace(/[.!?;:]+$/g, "").replace(/\s+/g, " ").trim().toLowerCase();
-    if (words.length === 0) {
+  for (const rawLine of text.split("\n")) {
+    if (!/\bdear\b/i.test(rawLine)) {
       continue;
     }
-    if (!ALLOWED_GREETINGS.has(`dear ${words}`)) {
+    const line = rawLine.replace(/\s+/g, " ").trim().toLowerCase().replace(/\s+,/g, ",");
+    if (!line.startsWith("dear") || !ALLOWED_GREETING_LINES.has(line)) {
       return true;
     }
   }

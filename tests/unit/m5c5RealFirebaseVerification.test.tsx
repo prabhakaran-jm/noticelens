@@ -255,7 +255,9 @@ describe("Phase 5C-5 real Firebase diagnostic gate", () => {
     const prompt = String(sdk.generateContent.mock.calls[0]?.[0] ?? "");
     expect(prompt).toContain(exact);
     expect(prompt).toContain("USER-APPROVED REDACTED STRUCTURAL BRIEF");
-    expect(prompt).toContain("If a salutation is necessary, use exactly 'Dear Sir or Madam,'.");
+    expect(prompt).toContain(
+      "If a salutation is necessary, use exactly 'Dear Sir or Madam,' on its own line."
+    );
     expect(prompt).toContain("Do not invent any person, supplier or recipient name.");
     for (const marker of RAW_MARKERS) {
       expect(prompt).not.toContain(marker);
