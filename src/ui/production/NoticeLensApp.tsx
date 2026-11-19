@@ -51,6 +51,7 @@ import {
   sendLiveApprovedCloudDraft,
   type LiveCloudDraftResult,
 } from "../../adapters/liveCloudDispatch";
+import { isRealCloudDiagnosticEnabled } from "../../adapters/realCloudDiagnostic";
 import { sourceGenerationId } from "../../adapters/supportedNoticeGate";
 import type { LiveCloudPreflightState } from "../../adapters/secureCloudPreflight";
 
@@ -110,7 +111,10 @@ export function NoticeLensApp(props?: { cloudDraftProbe?: CloudDraftProbe }) {
   const [cloudStatus, setCloudStatus] = useState<"idle" | "sending" | "accepted" | "error">("idle");
   const [cloudDraft, setCloudDraft] = useState<CloudDraftOutput | null>(null);
   const [cloudError, setCloudError] = useState<string | null>(null);
+  const [cloudViolations, setCloudViolations] = useState<readonly string[]>([]);
   const [cloudInference, setCloudInference] = useState<string | null>(null);
+  const [cloudModelName, setCloudModelName] = useState<string | null>(null);
+  const realDiagnostic = import.meta.env.DEV === true && isRealCloudDiagnosticEnabled();
   if (dispatchOwnerRef.current === null) {
     dispatchOwnerRef.current = createDispatchOwner();
   }
@@ -121,14 +125,17 @@ export function NoticeLensApp(props?: { cloudDraftProbe?: CloudDraftProbe }) {
     cloudAbortRef.current = null;
     setCloudDraft(null);
     setCloudInference(null);
+    setCloudModelName(null);
     if (inFlightSend) {
       setCloudStatus("error");
       setCloudError(
         "The notice changed before the cloud result could be accepted. A new privacy approval is required to try again."
       );
+      setCloudViolations([]);
     } else {
       setCloudStatus("idle");
       setCloudError(null);
+      setCloudViolations([]);
     }
   };
   const dropApproval = () => {
@@ -343,15 +350,16 @@ export function NoticeLensApp(props?: { cloudDraftProbe?: CloudDraftProbe }) {
   });
   const identifiers = inspection.redaction.ok ? inspection.redaction.localIdentifierMap.entries : [];
   const fixtureEligible = originalText === ORIGINAL_SAMPLE || originalText === REVISED_SAMPLE;
+  const cloudPathOpen = cloudProbe !== undefined || realDiagnostic;
   const cloudSendEnabled =
-    cloudProbe !== undefined &&
+    cloudPathOpen &&
     privacy.matchesCurrentPayload &&
     fixtureEligible &&
     responseGoal === "request_billing_review" &&
     flags.length === 0 &&
     cloudStatus !== "sending";
   const sendCloudDraft = () => {
-    if (cloudProbe === undefined || cloudAbortRef.current !== null) {
+    if (!cloudPathOpen || cloudAbortRef.current !== null) {
       return;
     }
     const request = cloudRequestRef.current + 1;
@@ -362,12 +370,18 @@ export function NoticeLensApp(props?: { cloudDraftProbe?: CloudDraftProbe }) {
     setCloudStatus("sending");
     setCloudDraft(null);
     setCloudError(null);
+    setCloudViolations([]);
     setCloudInference(null);
-    void sendLiveApprovedCloudDraft({
-      generate: cloudProbe.generate,
-      signal: controller.signal,
-      timeoutMs: cloudProbe.timeoutMs,
-    }).then((result: LiveCloudDraftResult) => {
+    setCloudModelName(null);
+    void sendLiveApprovedCloudDraft(
+      cloudProbe
+        ? {
+            generate: cloudProbe.generate,
+            signal: controller.signal,
+            timeoutMs: cloudProbe.timeoutMs,
+          }
+        : { signal: controller.signal }
+    ).then((result: LiveCloudDraftResult) => {
       if (cloudAbortRef.current === controller) {
         cloudAbortRef.current = null;
       }
@@ -377,16 +391,20 @@ export function NoticeLensApp(props?: { cloudDraftProbe?: CloudDraftProbe }) {
       if (generationRef.current !== generationAtSend || result.outcome !== "accepted") {
         setCloudDraft(null);
         setCloudInference(null);
+        setCloudModelName(null);
         setCloudStatus("error");
         setCloudError(
           liveCloudDraftMessage(result.outcome === "accepted" ? { outcome: "stale" } : result)
         );
+        setCloudViolations(result.outcome === "rejected" ? result.violations ?? [] : []);
         return;
       }
       setCloudDraft(result.draft);
       setCloudInference(result.inferenceSource);
+      setCloudModelName(result.modelName);
       setCloudStatus("accepted");
       setCloudError(null);
+      setCloudViolations([]);
       setReceipts((current) => [...current, result.evidence]);
     }, () => {
       if (cloudAbortRef.current === controller) {
@@ -397,8 +415,10 @@ export function NoticeLensApp(props?: { cloudDraftProbe?: CloudDraftProbe }) {
       }
       setCloudDraft(null);
       setCloudInference(null);
+      setCloudModelName(null);
       setCloudStatus("error");
       setCloudError("Cloud drafting was rejected. A new privacy approval is required to try again.");
+      setCloudViolations([]);
     });
   };
 
@@ -502,13 +522,16 @@ export function NoticeLensApp(props?: { cloudDraftProbe?: CloudDraftProbe }) {
             privacyApproved={privacy.matchesCurrentPayload}
             onReviewPrivacy={() => setPrivacyOpen(true)}
             cloudDemo={
-              cloudProbe
+              cloudPathOpen
                 ? {
                     sendEnabled: cloudSendEnabled,
                     status: cloudStatus,
                     message: cloudError,
+                    violations: cloudViolations,
                     draft: cloudStatus === "accepted" ? cloudDraft : null,
                     inferenceLabel: cloudInference,
+                    modelName: cloudModelName,
+                    diagnostic: realDiagnostic && cloudProbe === undefined,
                     onSend: sendCloudDraft,
                   }
                 : undefined
