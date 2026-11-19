@@ -47,3 +47,7 @@ Source-linked action history / revised notice comparison
 ## Potential technologies
 
 Firebase AI Logic Web SDK, Firebase App Check, Firebase Hosting, TypeScript, React, browser-native local state. Sync and Firebase Remote Config are optional, not MVP requirements.
+
+## Current code, Phase 5C-4
+
+On-device reading stays in the browser. Cloud drafting is a separate Firebase AI Logic call with `ONLY_IN_CLOUD`. The client requires an App Check site key before that call. The production screen can reach it only for the two exact synthetic notices, only after the privacy modal approves the exact v2 bytes, and only when a test probe is present. `CLOUD_SUBMISSION_ENABLED` remains false, so the shipped Send control does not make the call. The in-flight lock lasts until delivery stops, and aborting it does not prove the HTTP request has settled. App Check does not prove the payload is one of those notices, and a live Chrome check of that attestation is still pending. The output guard checks recognised amounts, including decimal fractions, against the approved brief. It does not catch every monetary expression, personal-data expression, unrecognised identifier, date, URL, or promise. Real Chrome verification is still required before the flag can change. R5-2, R5-3, R5-4, and R5-5 stay open. Production Send stays disabled.

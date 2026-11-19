@@ -8,11 +8,15 @@ import {
   canonicalCloudPayload,
   type CloudPayloadGuardOptions,
 } from "../domain/cloudPayloadGuard";
+import { canonicalClosedCloudBrief } from "../domain/closedCloudBrief";
 import {
   CloudOutputValidationError,
   validateCloudDraftOutput,
 } from "../domain/cloudOutputGuard";
-import { buildInferenceEvidenceReceipt } from "../domain/evidenceReceipt";
+import {
+  buildInferenceEvidenceReceipt,
+  type InferenceEvidenceReceipt,
+} from "../domain/evidenceReceipt";
 import { requireInferenceSource } from "../domain/inferenceProvenance";
 import { CANONICAL_PLACEHOLDER_BASES } from "../domain/placeholders";
 import {
@@ -59,7 +63,7 @@ const PLACEHOLDER_LINE = CANONICAL_PLACEHOLDER_BASES.map((base) => `[${base}]`).
 
 export function buildCloudDraftPrompt(
   serializedPayload: string,
-  payload: CloudBoundStructuralPayload
+  payload: { noticeCategory: string; guidanceIds: readonly string[] }
 ): string {
   const guidance: string[] = [];
   const energyCategory =
@@ -178,4 +182,77 @@ export async function runCloudDraftFromApprovedPayload(
     }
     throw error;
   }
+}
+
+export interface FrozenCloudDraft {
+  output: CloudDraftOutput;
+  inferenceSource: "in_cloud";
+  latencyMs: number;
+  modelName: string;
+  evidence: InferenceEvidenceReceipt;
+}
+
+/**
+ * Drafts from one exact canonical v2 string that Phase 4B already consumed.
+ * This function does not approve, and it does not accept a replacement payload.
+ * The prompt wraps that string. It does not rebuild it from later application state.
+ * The raw model text is parsed and dropped. It is not returned.
+ */
+export async function draftFromFrozenCanonicalBytes(
+  frozenBytes: string,
+  signal?: AbortSignal,
+  callOptions?: CloudDraftCallOptions
+): Promise<FrozenCloudDraft> {
+  if (typeof frozenBytes !== "string" || frozenBytes.length === 0) {
+    throw new CloudOutputValidationError(["Approved snapshot did not match the payload to send"]);
+  }
+  throwIfCloudSendAborted(signal);
+  let parsedBytes: unknown;
+  try {
+    parsedBytes = JSON.parse(frozenBytes);
+  } catch {
+    throw new CloudOutputValidationError(["Approved snapshot did not match the payload to send"]);
+  }
+  const canonical = canonicalClosedCloudBrief(parsedBytes);
+  if (canonical.serialized !== frozenBytes) {
+    throw new CloudOutputValidationError(["Approved snapshot did not match the payload to send"]);
+  }
+
+  const modelName = getConfiguredCloudModelName();
+  const prompt = buildCloudDraftPrompt(frozenBytes, canonical.payload);
+  const started = performance.now();
+  const generated = await acceptCloudCallResult({
+    signal,
+    timeoutMs: callOptions?.timeoutMs,
+    execute: (callSignal) => {
+      if (callOptions?.generate) {
+        return callOptions.generate({ prompt, signal: callSignal, modelName });
+      }
+      return generateWithFirebase(prompt, callSignal, modelName);
+    },
+  });
+  const latencyMs = Math.round(performance.now() - started);
+  requireInferenceSource(generated.inferenceSource, "in_cloud");
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(generated.text);
+  } catch {
+    throw new CloudOutputValidationError(["Cloud output was not valid JSON"]);
+  }
+  const output = validateCloudDraftOutput(parsed, canonical.payload);
+  return {
+    output,
+    inferenceSource: "in_cloud",
+    latencyMs,
+    modelName,
+    evidence: buildInferenceEvidenceReceipt({
+      mode: "in_cloud",
+      inferenceSource: "in_cloud",
+      latencyMs,
+      modelName,
+      serializedPayload: frozenBytes,
+      outcome: "accepted",
+    }),
+  };
 }

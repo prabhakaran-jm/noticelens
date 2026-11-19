@@ -1,3 +1,15 @@
+import { CloudDeliveryStoppedError } from "../ai/cloudCallDelivery";
+import {
+  draftFromFrozenCanonicalBytes,
+  type CloudDraftCallOptions,
+  type FrozenCloudDraft,
+} from "../ai/cloudDrafter";
+import { FirebaseSetupBlockerError } from "../config/firebase";
+import { ClosedCloudBriefValidationError } from "../domain/closedCloudBrief";
+import { CloudOutputValidationError } from "../domain/cloudOutputGuard";
+import { InferenceProvenanceError } from "../domain/inferenceProvenance";
+import type { CloudDraftOutput } from "../domain/types";
+import { CLOUD_SUBMISSION_ENABLED } from "./cloudApprovalSession";
 import {
   evaluateCloudPreflight,
   type CloudPreflightState,
@@ -213,7 +225,8 @@ export function dispatchLiveCloudBoundary(): LiveDispatchDecision {
 /**
  * Test-only hold. The promise is a signal the test already created.
  * This function does not call it with notice bytes, and it does not open a socket.
- * A production screen does not import it. PR #27B would be the transport.
+ * A production screen does not import it.
+ * The production transport is `sendLiveApprovedCloudDraft`. It does not use this hold.
  * Success, rejection, and cancellation leave a consumed approval consumed.
  */
 export async function deferredDispatchForTests(gate: Promise<unknown>): Promise<LiveDispatchDecision> {
@@ -235,4 +248,188 @@ export async function deferredDispatchForTests(gate: Promise<unknown>): Promise<
     }
   }
   return attempt.decision;
+}
+
+export type LiveCloudDraftRejection =
+  | "timeout"
+  | "cancelled"
+  | "invalid_output"
+  | "network"
+  | "app_check"
+  | "provenance";
+
+export type LiveCloudDraftResult =
+  | { readonly outcome: "disabled" }
+  | { readonly outcome: "in_flight" }
+  | { readonly outcome: "stale" }
+  | { readonly outcome: "denied"; readonly state: LiveDispatchState }
+  | {
+      readonly outcome: "rejected";
+      readonly reason: LiveCloudDraftRejection;
+    }
+  | {
+      readonly outcome: "accepted";
+      readonly draft: CloudDraftOutput;
+      readonly inferenceSource: "in_cloud";
+      readonly modelName: string;
+      readonly evidence: FrozenCloudDraft["evidence"];
+    };
+
+interface LiveStamp {
+  bytes: string;
+  generation: number;
+  extraction: number;
+  identifier: string;
+  document: string;
+  goal: string;
+  flags: string;
+}
+
+function liveStamp(): LiveStamp | null {
+  const read = soleReader();
+  if (read === null) {
+    return null;
+  }
+  let live: LiveCloudPreflightState | null;
+  try {
+    live = read();
+  } catch {
+    return null;
+  }
+  if (live === null || typeof live !== "object") {
+    return null;
+  }
+  const flags = Array.isArray(live.circumstanceFlags) ? live.circumstanceFlags : null;
+  return {
+    bytes: typeof live.presentedCanonicalBytes === "string" ? live.presentedCanonicalBytes : "",
+    generation: typeof live.noticeGeneration === "number" ? live.noticeGeneration : -1,
+    extraction: typeof live.extractionGeneration === "number" ? live.extractionGeneration : -1,
+    identifier: typeof live.identifierContextId === "string" ? live.identifierContextId : "",
+    document: typeof live.documentContextId === "string" ? live.documentContextId : "",
+    goal: typeof live.responseGoal === "string" ? live.responseGoal : "",
+    flags: JSON.stringify(flags),
+  };
+}
+
+function sameStamp(left: LiveStamp, right: LiveStamp): boolean {
+  return (
+    left.bytes === right.bytes &&
+    left.generation === right.generation &&
+    left.extraction === right.extraction &&
+    left.identifier === right.identifier &&
+    left.document === right.document &&
+    left.goal === right.goal &&
+    left.flags === right.flags
+  );
+}
+
+function rejectDraft(error: unknown): LiveCloudDraftResult {
+  if (error instanceof CloudDeliveryStoppedError) {
+    return {
+      outcome: "rejected",
+      reason: error.reason === "timed_out" ? "timeout" : "cancelled",
+    };
+  }
+  if (error instanceof CloudOutputValidationError || error instanceof ClosedCloudBriefValidationError) {
+    return { outcome: "rejected", reason: "invalid_output" };
+  }
+  if (error instanceof InferenceProvenanceError) {
+    return { outcome: "rejected", reason: "provenance" };
+  }
+  if (error instanceof FirebaseSetupBlockerError) {
+    return { outcome: "rejected", reason: "app_check" };
+  }
+  return { outcome: "rejected", reason: "network" };
+}
+
+/** Fixed sentences. They do not include the notice, the model text, or an approval handle. */
+export function liveCloudDraftMessage(result: LiveCloudDraftResult): string {
+  if (result.outcome === "disabled") {
+    return "Cloud sending is switched off.";
+  }
+  if (result.outcome === "in_flight") {
+    return "A cloud request is already in progress.";
+  }
+  if (result.outcome === "stale") {
+    return "The notice changed before the cloud result could be accepted. A new privacy approval is required to try again.";
+  }
+  if (result.outcome === "denied") {
+    return "Cloud drafting was not sent. The current notice or approval did not pass the check.";
+  }
+  if (result.outcome === "accepted") {
+    return "Cloud drafting returned a validated draft.";
+  }
+  if (result.reason === "timeout") {
+    return "Cloud drafting timed out. A new privacy approval is required to try again.";
+  }
+  if (result.reason === "cancelled") {
+    return "Cloud drafting was cancelled. A new privacy approval is required to try again.";
+  }
+  if (result.reason === "invalid_output") {
+    return "The cloud response was rejected. A new privacy approval is required to try again.";
+  }
+  return "Cloud drafting was rejected. A new privacy approval is required to try again.";
+}
+
+/**
+ * One explicit send. It takes no notice, no canonical bytes, and no reader.
+ * A stored preflight result is not read. The live reader is snapshotted,
+ * the preflight consumes one Phase 4B approval, and the frozen bytes are
+ * the only text wrapped into the prompt.
+ * The lock stays held until the Firebase call, or the test double, settles.
+ * Failure does not restore the consumed approval.
+ * While the production flag is false, a call without the test double returns
+ * before that snapshot and does not touch Firebase.
+ */
+export async function sendLiveApprovedCloudDraft(options?: {
+  generate?: CloudDraftCallOptions["generate"];
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}): Promise<LiveCloudDraftResult> {
+  const probe = import.meta.env.PROD ? undefined : options?.generate;
+  if (probe === undefined && !CLOUD_SUBMISSION_ENABLED) {
+    return { outcome: "disabled" };
+  }
+  const attempt = runLocked();
+  if (!attempt.acquired) {
+    return { outcome: "in_flight" };
+  }
+  const token = flightToken;
+  try {
+    if (attempt.decision.state !== "PREFLIGHT_READY" || !attempt.decision.consumed) {
+      return {
+        outcome: "denied",
+        state: attempt.decision.state === "PREFLIGHT_READY" ? "DISPATCH_DENIED" : attempt.decision.state,
+      };
+    }
+    const bytes = attempt.decision.canonicalBytes;
+    if (bytes === null) {
+      return { outcome: "denied", state: "DISPATCH_DENIED" };
+    }
+    const stamp = liveStamp();
+    if (stamp === null || stamp.bytes !== bytes) {
+      return { outcome: "stale" };
+    }
+    const drafted = await draftFromFrozenCanonicalBytes(bytes, options?.signal, {
+      timeoutMs: options?.timeoutMs,
+      generate: probe,
+    });
+    const after = liveStamp();
+    if (after === null || !sameStamp(stamp, after)) {
+      return { outcome: "stale" };
+    }
+    return {
+      outcome: "accepted",
+      draft: drafted.output,
+      inferenceSource: drafted.inferenceSource,
+      modelName: drafted.modelName,
+      evidence: drafted.evidence,
+    };
+  } catch (error) {
+    return rejectDraft(error);
+  } finally {
+    if (flightToken === token) {
+      inFlight = false;
+    }
+  }
 }
