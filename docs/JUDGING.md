@@ -54,7 +54,7 @@ This step is optional. It uses your own Firebase project, not the owner's projec
 
 Leave `VITE_NOTICELENS_REAL_CLOUD_DIAGNOSTIC` empty. Do not put an App Check debug token in the repository. This page does not include a command that starts a model generation.
 
-When you choose Read in the app, the call uses `InferenceMode.ONLY_ON_DEVICE`. The result is kept only when `inferenceSource` is `on_device`. There is no silent cloud fallback. A browser without a downloaded model stays in Limited Mode.
+When you choose Read in the app, the call uses `InferenceMode.ONLY_ON_DEVICE`. The result is kept only when `inferenceSource` is `on_device`. There is no silent cloud fallback. A browser that cannot run the model stays in Limited Mode. If Chrome reports the model as downloadable, Read can start Chrome's model download on this device.
 
 `on_device` and `in_cloud` are different receipts. The ordinary app does not produce `in_cloud`.
 
@@ -69,7 +69,7 @@ A judge cannot reproduce those two results from the repository alone. A Limited 
 
 ## Commands to leave unused
 
-Do not run these scripts. They can download a model, call Chrome, or repeat a cloud generation that has already been made:
+These are owner-only diagnostic scripts and are not required for judging. Do not run them. They can download a model, modify local Chrome profiles, or make a new cloud generation against the Firebase project configured in `.env.local`:
 
 - `npm run verify:approved-cloud`
 - `npm run verify:chrome`

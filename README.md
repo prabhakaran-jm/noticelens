@@ -70,7 +70,7 @@ npm run dev
 
 `npm run dev` serves the app at `http://127.0.0.1:5173`. On macOS or Linux, use `cp .env.example .env.local`.
 
-Put the judge’s own Firebase web config in the untracked `.env.local`. The names in `.env.example` are:
+The local screens run without Firebase config. Only for the optional on-device Read, put your own Firebase web config in the untracked `.env.local`. The names in `.env.example` are:
 
 - `VITE_FIREBASE_API_KEY`
 - `VITE_FIREBASE_AUTH_DOMAIN`
