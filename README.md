@@ -12,7 +12,7 @@ The app has four screens: Read the notice, Action plan, Prepare a reply, and Com
 
 1. **Read on this device.** Paste notice text or load a synthetic sample. On a supported desktop Chrome setup, **Read on this device** calls Firebase AI Logic with `InferenceMode.ONLY_ON_DEVICE`. The result is kept only when the runtime `inferenceSource` is `on_device`. There is no silent cloud fallback for that reading.
 2. **Check the actions.** Local code compares extracted quotes with the notice and withholds amounts or dates that the text does not support. An action is source-linked. It is not a legal determination.
-3. **Prepare a brief.** The reply screen builds a redacted structural brief. The privacy review shows the exact payload. Personal details are not the cloud request.
+3. **Prepare a brief.** The reply screen builds a redacted structural brief. The privacy review shows the exact payload. The cloud brief uses a closed v2 schema with no free-text fields: category, ISO dates, amounts, action IDs, goal and guidance IDs. Notice prose, names, addresses and account references are not fields in it. The brief still contains the notice's amounts and dates.
 4. **Compare an update.** A revised notice stays beside the original. For the two samples below, the app says the relationship needs review and shows no verified change.
 
 If this browser has not made an on-device model available, Read stays in Limited Mode. Amounts, dates, and quotes then come from local checks. The notice is not sent to a cloud model to fill that gap.
@@ -58,7 +58,7 @@ That diagnostic is development-only. It runs only when `VITE_NOTICELENS_REAL_CLO
 
 ## Setup
 
-Use Node.js 18, Node.js 20, or Node.js 22 or newer. That is the range Vite 6 accepts. npm comes with Node.js.
+Use Node.js 24.12 or newer. The Firebase 13 packages used by this project declare Node.js 24.12.0 or newer as their minimum supported runtime. npm comes with Node.js.
 
 ```bash
 npm ci
