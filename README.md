@@ -58,6 +58,8 @@ That diagnostic is development-only. It runs only when `VITE_NOTICELENS_REAL_CLO
 
 ## Setup
 
+Judging steps are in [How to judge NoticeLens](docs/JUDGING.md).
+
 Use Node.js 24.12 or newer. The Firebase 13 packages used by this project declare Node.js 24.12.0 or newer as their minimum supported runtime. npm comes with Node.js.
 
 ```bash
@@ -68,7 +70,7 @@ npm run dev
 
 `npm run dev` serves the app at `http://127.0.0.1:5173`. On macOS or Linux, use `cp .env.example .env.local`.
 
-Put the judge’s own Firebase web config in the untracked `.env.local`. The names in `.env.example` are:
+The local screens run without Firebase config. Only for the optional on-device Read, put your own Firebase web config in the untracked `.env.local`. The names in `.env.example` are:
 
 - `VITE_FIREBASE_API_KEY`
 - `VITE_FIREBASE_AUTH_DOMAIN`

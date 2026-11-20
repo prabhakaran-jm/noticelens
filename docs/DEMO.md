@@ -1,14 +1,17 @@
-# Three-minute Devpost demo plan
+# Storyboard for a future three-minute video
 
-**Use only synthetic documents and real application behaviour. Do not fabricate inference badges or measured results.**
+This page is a storyboard. It is not a recording, a finished edit, or a public video.
 
-| Time | Scene | Proof |
+Use the fictional notices and the two recorded tests from 20 November 2026. Those tests are separate. Do not start a new cloud generation. Do not imply that Send works. If a wait is shortened in an edit, keep a visible label on screen. The storyboard itself stays under three minutes.
+
+| Time | Scene | What the picture shows |
 | --- | --- | --- |
-| 0:00–0:20 | Open the fictional £1,280 energy notice | Real household problem, deadline and source document |
-| 0:20–1:00 | Run local extraction and click an action | Actual `ON_DEVICE` value and exact source highlight; offline if verified |
-| 1:00–1:40 | Preview user-approved structured payload | Original letter and identifiers excluded; real `IN_CLOUD` result |
-| 1:40–2:15 | Review editable response | Replies cite the extracted source obligations and supplied guidance |
-| 2:15–2:45 | Add fictional £520 revised notice | Evidence-linked before/after comparison |
-| 2:45–3:00 | Show hybrid architecture and repository | Firebase AI Logic used for both steps, clear privacy controls |
+| 0:00–0:20 | Open `examples/energy-backbill-original.txt` | The fictional £1,280 notice. Say that it is synthetic. |
+| 0:20–0:45 | Show local facts and Limited Mode if this browser has no model | Amounts and dates come from local checks. This browser is not the recorded Chrome 158 Read. |
+| 0:45–1:25 | Show the already recorded on-device result | Chrome `158.0.8127.36`, `on_device`, extraction and the screen passed, about 56.7 seconds, no generation request in that browser context. The model was not named. If the wait is shortened, the visible label is "Sped up. The Read took about 56.7 seconds." |
+| 1:25–1:50 | Open the action plan | Actions are source-linked. They are not a legal determination. |
+| 1:50–2:15 | Open Prepare Reply | The closed v2 brief is on screen. Send, copy, and download stay disabled. No new draft is requested. |
+| 2:15–2:40 | Show `examples/energy-backbill-revised.txt` beside the original | £520 stays a separate notice. The relationship needs review. No recovered £760 is shown. |
+| 2:40–3:00 | State the limits | The cloud test was a separate earlier loopback call: `gemini-3.5-flash-lite`, HTTP 200, `in_cloud`, canonical v2 and `cloudOutputGuard` passed, Send stayed disabled. Gemini Nano 4 is unverified. R5-2 through R5-5 remain open. |
 
-If Nano is unavailable in the judge's browser, show the honest Limited mode. Do not present a simulation toggle as proof of genuine on-device inference.
+Judging steps that do not film a new generation are in [docs/JUDGING.md](JUDGING.md).
