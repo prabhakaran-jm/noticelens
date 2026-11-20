@@ -60,7 +60,7 @@ export function TopNavHeader(props: {
           </span>
           <div>
             <p className="brand-title">NoticeLens</p>
-            <p className="brand-subtitle">Local reading first. Cloud drafting is not connected.</p>
+            <p className="brand-subtitle">Understand the notice. Check the source.</p>
           </div>
         </div>
         <nav aria-label="Notice workflow steps">

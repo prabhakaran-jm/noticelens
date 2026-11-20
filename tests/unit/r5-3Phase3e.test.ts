@@ -122,6 +122,7 @@ describe("Phase 3E per-claim authority", () => {
         onReadOnDevice: () => undefined,
         deviceMessage: null,
         reading: false,
+        firebaseConfigured: false,
       })
     );
     expect(screen.getByTestId("read-amount")).toHaveTextContent("£520");

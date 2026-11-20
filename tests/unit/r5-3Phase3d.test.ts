@@ -387,6 +387,7 @@ describe("Phase 3D unified eligibility", () => {
         onReadOnDevice: () => undefined,
         deviceMessage: null,
         reading: false,
+        firebaseConfigured: false,
       })
     );
     expect(screen.getByTestId("read-amount")).toHaveTextContent("Needs review");

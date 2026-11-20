@@ -13,6 +13,34 @@ function balanceLabel(value: number | null, authority: SourceAmountAuthority): s
   return "Needs review";
 }
 
+export function differenceBadgeClass(comparison: NoticeComparison): string {
+  const verifiedReduction =
+    comparison.relationship === "COMPARABLE" &&
+    comparison.amount.originalAuthority === "verified" &&
+    comparison.amount.revisedAuthority === "verified" &&
+    comparison.amount.differenceGBP !== null &&
+    comparison.amount.differenceGBP < 0;
+  if (verifiedReduction) {
+    return "delta-badge-reduced";
+  }
+  if (comparison.relationship === "NOT_COMPARABLE") {
+    return "delta-badge-neutral";
+  }
+  if (
+    comparison.amount.originalAuthority === "not_stated" &&
+    comparison.amount.revisedAuthority === "not_stated"
+  ) {
+    return "delta-badge-neutral";
+  }
+  if (
+    comparison.relationship === "RELATIONSHIP_UNVERIFIED" ||
+    comparison.relationship === "BALANCE_UNVERIFIED"
+  ) {
+    return "delta-badge-review";
+  }
+  return "delta-badge-neutral";
+}
+
 function differenceLabel(comparison: NoticeComparison): string {
   if (comparison.relationship === "COMPARABLE") {
     return formatSignedDifference(comparison.amount.differenceGBP);
@@ -112,7 +140,9 @@ export function CompareUpdateScreen(props: {
           <tr>
             <th scope="row">Difference</th>
             <td colSpan={2} data-label="Difference" data-testid="amount-difference">
-              <span className="delta-badge-reduced">{differenceLabel(props.comparison)}</span>
+              <span className={differenceBadgeClass(props.comparison)} data-testid="difference-badge">
+                {differenceLabel(props.comparison)}
+              </span>
             </td>
           </tr>
           <tr className={props.comparison.billingPeriod.omittedInRevised ? "delta-row is-omitted-row" : "delta-row"}>

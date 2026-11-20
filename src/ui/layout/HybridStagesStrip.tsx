@@ -13,9 +13,8 @@ const STAGES: { id: WorkflowStep; title: string; detail: string; blocked?: boole
   },
   {
     id: "reply",
-    title: "3. Cloud drafting",
-    detail: "Not connected. Nothing is sent.",
-    blocked: true,
+    title: "3. Review response brief",
+    detail: "Inspect the exact local brief before any future cloud use.",
   },
   {
     id: "compare",

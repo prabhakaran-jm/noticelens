@@ -3,6 +3,7 @@ import originalSample from "../../../examples/energy-backbill-original.txt?raw";
 import revisedSample from "../../../examples/energy-backbill-revised.txt?raw";
 import { runOnDeviceNoticeExtraction } from "../../ai/onDeviceExtractor";
 import { probeChromeLanguageModelAvailability, type ChromeCapabilityReport } from "../../ai/capability";
+import { getFirebaseEnvDiagnostics } from "../../config/firebase";
 import { buildClosedCloudInspection } from "../../adapters/closedCloudInspection";
 import {
   CLOUD_SUBMISSION_BLOCKED_REASON,
@@ -450,7 +451,11 @@ export function NoticeLensApp(props?: { cloudDraftProbe?: CloudDraftProbe }) {
             capability={capability}
             reading={reading}
             deviceMessage={deviceMessage}
+            firebaseConfigured={getFirebaseEnvDiagnostics().isCoreFirebaseConfigured}
             onReadOnDevice={() => {
+              if (!getFirebaseEnvDiagnostics().isCoreFirebaseConfigured) {
+                return;
+              }
               const requestId = requestIdRef.current + 1;
               requestIdRef.current = requestId;
               const noticeSnapshot = noticeTextRef.current;

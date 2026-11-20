@@ -144,6 +144,7 @@ describe("Phase 3C strict eligibility", () => {
           onReadOnDevice: () => undefined,
           deviceMessage: null,
           reading: false,
+          firebaseConfigured: false,
         })
       );
       expect(screen.getByTestId("read-amount-support")).toHaveTextContent("Needs review");

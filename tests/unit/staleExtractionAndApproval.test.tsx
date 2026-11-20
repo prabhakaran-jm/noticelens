@@ -15,6 +15,7 @@ import {
 import type { InferenceCallRecord, RawNoticeExtraction } from "../../src/domain/types";
 import { normalizeNewlines } from "../../src/domain/textNormalize";
 import { App } from "../../src/App";
+import { stubCoreFirebaseEnv } from "./stubCoreFirebaseEnv";
 import { PrivacyApprovalModal, payloadConfirmationMatches } from "../../src/ui/privacy/PrivacyApprovalModal";
 
 const harness = vi.hoisted(() => {
@@ -125,6 +126,7 @@ function clickApproveEvenIfDisabled(): void {
 
 describe("stale on-device extraction", () => {
   beforeEach(() => {
+    stubCoreFirebaseEnv();
     harness.pending.length = 0;
   });
 
