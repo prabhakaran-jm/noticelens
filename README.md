@@ -15,7 +15,7 @@ The app has four screens: Read the notice, Action plan, Prepare a reply, and Com
 3. **Prepare a brief.** The reply screen builds a redacted structural brief. The privacy review shows the exact payload. The cloud brief uses a closed v2 schema with no free-text fields: category, ISO dates, amounts, action IDs, goal and guidance IDs. Notice prose, names, addresses and account references are not fields in it. The brief still contains the notice's amounts and dates.
 4. **Compare an update.** A revised notice stays beside the original. For the two samples below, the app says the relationship needs review and shows no verified change.
 
-If this browser has not made an on-device model available, Read stays in Limited Mode. Amounts, dates, and quotes then come from local checks. The notice is not sent to a cloud model to fill that gap.
+If this browser cannot run the model, Read stays in Limited Mode. Amounts, dates, and quotes then come from local checks. If Chrome reports the model as downloadable, Read may start a local model download. There is no silent cloud fallback. Optional Read stays optional.
 
 The production screen says cloud sending is disabled. `CLOUD_SUBMISSION_ENABLED` is fixed `false`. No URL parameter, localStorage value, or production build turns Send on.
 
@@ -64,11 +64,10 @@ Use Node.js 24.12 or newer. The Firebase 13 packages used by this project declar
 
 ```bash
 npm ci
-copy .env.example .env.local
 npm run dev
 ```
 
-`npm run dev` serves the app at `http://127.0.0.1:5173`. On macOS or Linux, use `cp .env.example .env.local`.
+`npm run dev` serves the app at `http://127.0.0.1:5173`. Leave `.env.local` absent for this setup.
 
 The local screens run without Firebase config. Only for the optional on-device Read, put your own Firebase web config in the untracked `.env.local`. The names in `.env.example` are:
 
