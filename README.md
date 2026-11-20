@@ -58,6 +58,8 @@ That diagnostic is development-only. It runs only when `VITE_NOTICELENS_REAL_CLO
 
 ## Setup
 
+Judging steps are in [How to judge NoticeLens](docs/JUDGING.md).
+
 Use Node.js 24.12 or newer. The Firebase 13 packages used by this project declare Node.js 24.12.0 or newer as their minimum supported runtime. npm comes with Node.js.
 
 ```bash
