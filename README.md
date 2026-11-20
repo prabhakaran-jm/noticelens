@@ -2,49 +2,117 @@
 
 **Understand the notice. Know your next step.**
 
-NoticeLens is a planned privacy-conscious hybrid AI web application for understanding UK housing, council and utility correspondence. It turns dense notices into **source-linked action plans**, supports **user-approved response drafting**, and tracks what changes when a follow-up notice arrives.
+NoticeLens is a privacy-conscious hybrid AI web app for fictional UK electricity notices. It keeps the first reading on the device, links actions to the notice text, compares a second notice without treating the two amounts as one verified debt, and can prepare an approved response brief. Optional cloud drafting is a separate step. It is not available from the production Send control.
 
-> **Project status:** Hackathon project scaffold. The AI application and its features are **not implemented yet**. This repository records the intended scope, architecture and test criteria.
+NoticeLens explains a household notice. It does not decide what someone legally has to pay, and it does not promise a financial outcome.
 
-## #BuildHybridAI 2026 submission
+## What you can do
 
-- **Primary platform:** Web (Chrome desktop)
-- **Sponsor technology:** Firebase AI Logic, on-device Gemini Nano when available, and cloud Gemini for user-approved response assistance
-- **Primary demonstration:** A fictional £1,280 electricity back-bill, a source-backed checklist, an editable response, and a fictional revised £520 bill
-- **Primary prize target:** Best Web/Chrome
+The app has four screens: Read the notice, Action plan, Prepare a reply, and Compare an update.
 
-## Intended experience
+1. **Read on this device.** Paste notice text or load a synthetic sample. On a supported desktop Chrome setup, **Read on this device** calls Firebase AI Logic with `InferenceMode.ONLY_ON_DEVICE`. The result is kept only when the runtime `inferenceSource` is `on_device`. There is no silent cloud fallback for that reading.
+2. **Check the actions.** Local code compares extracted quotes with the notice and withholds amounts or dates that the text does not support. An action is source-linked. It is not a legal determination.
+3. **Prepare a brief.** The reply screen builds a redacted structural brief. The privacy review shows the exact payload. The cloud brief uses a closed v2 schema with no free-text fields: category, ISO dates, amounts, action IDs, goal and guidance IDs. Notice prose, names, addresses and account references are not fields in it. The brief still contains the notice's amounts and dates.
+4. **Compare an update.** A revised notice stays beside the original. For the two samples below, the app says the relationship needs review and shows no verified change.
 
-1. **Read privately.** On a supported Chrome setup, Firebase AI Logic runs `ONLY_ON_DEVICE` extraction on the original notice. It extracts dates, amounts, actions, and supporting quotations.
-2. **Verify evidence.** Deterministic code checks each quotation against the document's text. Unmatched claims are visibly unverified rather than silently accepted.
-3. **Prepare an approved brief.** A local privacy gate removes personal identifiers and produces a structured, minimal context payload. The user sees and approves the exact payload.
-4. **Draft with cloud AI.** Firebase AI Logic uses `ONLY_IN_CLOUD` on the approved structural brief and supplied official guidance to generate response options and an editable template.
-5. **Personalise locally.** Personal fields are filled into the draft on the device. The user must approve any use of the draft.
-6. **Track changes.** A later notice is compared against the earlier one, with amount, deadline and obligations linked to their source passages.
+If this browser has not made an on-device model available, Read stays in Limited Mode. Amounts, dates, and quotes then come from local checks. The notice is not sent to a cloud model to fill that gap.
 
-## Key design rules
+The production screen says cloud sending is disabled. `CLOUD_SUBMISSION_ENABLED` is fixed `false`. No URL parameter, localStorage value, or production build turns Send on.
 
-- Never silently upload the raw private notice as a fallback.
-- Never claim that AI has verified legal rights or determined that a bill is invalid.
-- Never claim an on-device inference call happened unless Firebase AI Logic reports `ON_DEVICE`.
-- Do not infer legal rights from model knowledge alone: use curated, attributable official guidance and explain conditions.
-- In unsupported browsers, clearly label **Limited mode** and require review and consent before any sanitized content is sent to the cloud.
-- All application AI inference must go through Firebase AI Logic.
+## Synthetic notices
 
-## Repository contents
+Both files in `examples/` are fictional.
 
-```text
-assets/                 Hackathon thumbnail
-examples/               Fully fictional sample notices
-docs/PRODUCT.md         Scope and acceptance tests
-docs/ARCHITECTURE.md    Proposed architecture and security boundaries
-docs/DEMO.md            3-minute Devpost demo story
+| File | Amount |
+| --- | --- |
+| `examples/energy-backbill-original.txt` | £1,280 |
+| `examples/energy-backbill-revised.txt` | £520 |
+
+They are separate notices. The comparison does not verify that one replaced or settled the other, and it does not show a recovered £760.
+
+## Recorded on-device Read
+
+On 20 November 2026, one Read of the £1,280 sample ran in Chrome `158.0.8127.36` through Firebase AI Logic `ONLY_ON_DEVICE`.
+
+- The runtime source was `on_device`.
+- Structured extraction passed, and the NoticeLens screen accepted the result.
+- The browser context under test made no cloud-generation request. That observation covers that context only. It does not prove every Chrome process was offline.
+- The Read took about 56.7 seconds.
+
+That machine had Chrome’s experimental Gemma 4 built-in AI flag enabled, and component `2026.11.3.1140` was installed. Those are configuration facts. The Read receipt did not name the model that answered. This is not verification of Gemini Nano 4. The Gemma 4 flag is not a requirement for every user.
+
+Firebase’s hybrid web guide requires the Firebase AI Logic JavaScript SDK 12.5.0 or newer and desktop Chrome 139 or newer for on-device inference. This repository depends on `firebase` `^13.3.0`. On-device inference uses Chrome’s Prompt API. The model has its own hardware and storage requirements, and it is downloaded separately from Chrome. JavaScript cannot ask Chrome for the installed model version.
+
+## Recorded cloud draft
+
+A separate local diagnostic on the same day, not the same session, sent one approved brief.
+
+- Mode: `ONLY_IN_CLOUD`.
+- Model label: `gemini-3.5-flash-lite`.
+- HTTP 200. Runtime source: `in_cloud`.
+- The request matched the approved canonical v2 brief, and `cloudOutputGuard` accepted the draft.
+- Exactly one generation. A registered App Check debug token was used on loopback.
+- Production Send stayed disabled.
+
+That diagnostic is development-only. It runs only when `VITE_NOTICELENS_REAL_CLOUD_DIAGNOSTIC` is `1`, the build is a Vite dev build, and the host is loopback. A URL or localStorage value cannot enable it. The authorised run has already been made. This README does not include a command to repeat it.
+
+## Setup
+
+Use Node.js 24.12 or newer. The Firebase 13 packages used by this project declare Node.js 24.12.0 or newer as their minimum supported runtime. npm comes with Node.js.
+
+```bash
+npm ci
+copy .env.example .env.local
+npm run dev
 ```
 
-## Getting started
+`npm run dev` serves the app at `http://127.0.0.1:5173`. On macOS or Linux, use `cp .env.example .env.local`.
 
-Development has not started in this scaffold. Start with the feasibility gate in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): **prove a real Firebase AI Logic `ONLY_ON_DEVICE` response with structured output and check the reported inference source** before building the UI.
+Put the judge’s own Firebase web config in the untracked `.env.local`. The names in `.env.example` are:
+
+- `VITE_FIREBASE_API_KEY`
+- `VITE_FIREBASE_AUTH_DOMAIN`
+- `VITE_FIREBASE_PROJECT_ID`
+- `VITE_FIREBASE_APP_ID`
+- `VITE_FIREBASE_APPCHECK_SITE_KEY`
+
+Leave `VITE_NOTICELENS_REAL_CLOUD_DIAGNOSTIC` empty for the normal app. Do not commit `.env.local`, an App Check debug token, or a service account. App Check is required before a cloud call. For local development, register a debug token in the Firebase console for the judge’s own project and keep that value only in the untracked env file. This README does not contain a token or a key.
+
+Checks:
+
+```bash
+npm test
+npm run typecheck
+npm run build
+```
+
+`npm test` runs Vitest. `npm run typecheck` runs `tsc --noEmit`. `npm run build` typechecks and writes a production bundle. The production bundle does not enable the dev diagnostic, and it does not enable Send.
+
+## Three ways to run it
+
+- **Normal app.** `npm run dev`, then Read, the action plan, and Compare. Cloud Send stays off.
+- **Dev-only diagnostic.** A loopback dev process can be opted into one real cloud call. Production builds omit that path. The recorded call above is the consumed authorised run.
+- **Production-disabled Send.** `CLOUD_SUBMISSION_ENABLED` is `false as const`. The reply screen tells the user that cloud sending is disabled.
+
+## Limitations
+
+- Gemini Nano 4 has not been verified. An `on_device` receipt does not name the Chrome model.
+- On-device Read needs a desktop Chrome build and an installed Prompt API model. Hardware, disk space, and model availability can block it. Limited Mode does not send the raw notice to the cloud.
+- The accepted cloud draft exists only as that local diagnostic. It is not a hosted or production drafting service.
+- R5-2, R5-3, R5-4, and R5-5 remain open. Local checks can miss names, addresses, and account details. They do not prove that personal information was removed. The user still has to review the exact brief and any draft.
+- NoticeLens does not recover money and does not decide a legal right.
+
+## Repository
+
+```text
+examples/     fictional notices
+src/          app, Firebase adapters, and domain checks
+tests/        Vitest suites
+scripts/      local Chrome diagnostics
+docs/         design notes; some sections still describe earlier plans
+assets/       hackathon thumbnail
+```
 
 ## Licence
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
