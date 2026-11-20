@@ -49,6 +49,7 @@ export function ReadNoticeScreen(props: {
   onReadOnDevice: () => void;
   deviceMessage: string | null;
   reading: boolean;
+  firebaseConfigured: boolean;
 }) {
   const [fileMessage, setFileMessage] = useState<string | null>(null);
   const limited =
@@ -56,10 +57,11 @@ export function ReadNoticeScreen(props: {
     props.capability.availability === "api_missing" ||
     props.capability.availability === "unavailable" ||
     props.capability.availability === "probe_error";
-  const canAttempt =
+  const modelReady =
     props.capability?.availability === "available" ||
     props.capability?.availability === "downloadable" ||
     props.capability?.availability === "downloading";
+  const canAttempt = props.firebaseConfigured && modelReady;
   const amount = displayVerifiedAmount(props.grounded);
   const issueDateStated = displayVerifiedIssueDate(props.grounded);
   const verifiedDeadlineIso = verifiedResponseDeadlineIso(props.grounded);
@@ -95,13 +97,20 @@ export function ReadNoticeScreen(props: {
       ) : null}
       {limited ? (
         <div className="banner" data-testid="limited-mode" role="status">
-          <strong>Limited Mode.</strong> This browser has not made an on-device language model
-          available. Amounts, dates, and quotes are read by local checks. The notice text is not
-          sent to a cloud model.
+          <strong>Limited Mode.</strong> This browser cannot run the on-device model. Amounts,
+          dates, and quotes come from local checks. The notice is not sent to a cloud model.
         </div>
       ) : null}
-      {props.capability?.availability === "downloadable" ||
-      props.capability?.availability === "downloading" ? (
+      {!props.firebaseConfigured ? (
+        <div className="banner" data-testid="firebase-config-missing" role="status">
+          Optional on-device Read needs your own Firebase web configuration. Use the names in
+          .env.example and the steps in docs/JUDGING.md. Local fact checks stay available, and
+          Read does not start a download.
+        </div>
+      ) : null}
+      {props.firebaseConfigured &&
+      (props.capability?.availability === "downloadable" ||
+        props.capability?.availability === "downloading") ? (
         <div className="banner info" role="status">
           Chrome can download the on-device model when you ask it to read this notice. That
           download stays on the device.
@@ -216,7 +225,12 @@ export function ReadNoticeScreen(props: {
           className="btn"
           data-testid="read-on-device"
           disabled={!canAttempt}
-          onClick={props.onReadOnDevice}
+          onClick={() => {
+            if (!props.firebaseConfigured) {
+              return;
+            }
+            props.onReadOnDevice();
+          }}
         >
           {props.reading ? "Reading on this device" : "Read on this device"}
         </button>

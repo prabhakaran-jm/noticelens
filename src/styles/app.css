@@ -565,6 +565,8 @@ textarea {
 }
 
 .delta-badge-reduced,
+.delta-badge-review,
+.delta-badge-neutral,
 .delta-badge-omitted {
   display: inline-flex;
   padding: 2px 8px;
@@ -576,6 +578,16 @@ textarea {
 .delta-badge-reduced {
   background: var(--color-diff-reduced-bg);
   color: var(--color-diff-reduced-fg);
+}
+
+.delta-badge-review {
+  background: var(--color-warning-bg);
+  color: var(--color-warning-fg);
+}
+
+.delta-badge-neutral {
+  background: var(--color-bg-subtle);
+  color: var(--color-text-muted);
 }
 
 .delta-badge-omitted {

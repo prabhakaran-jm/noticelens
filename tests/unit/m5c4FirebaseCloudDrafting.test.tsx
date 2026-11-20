@@ -18,6 +18,7 @@ import { normalizeNewlines } from "../../src/domain/textNormalize";
 import type { InferenceCallRecord, RawNoticeExtraction } from "../../src/domain/types";
 import * as firebaseConfig from "../../src/config/firebase";
 import { App } from "../../src/App";
+import { stubCoreFirebaseEnv } from "./stubCoreFirebaseEnv";
 
 const harness = vi.hoisted(() => {
   const pending: Array<{
@@ -129,6 +130,7 @@ describe("Phase 5C-4 Firebase cloud drafting", () => {
   const fetchSpy = vi.fn(() => Promise.reject(new Error("no firebase request")));
 
   beforeEach(() => {
+    stubCoreFirebaseEnv();
     harness.pending.length = 0;
     resetUserApprovalStateForTests();
     resetLiveCloudDispatchForTests();
@@ -508,7 +510,8 @@ describe("Phase 5C-4 Firebase cloud drafting", () => {
     const button = screen.getByTestId("cloud-send-button");
     expect(button).toBeDisabled();
     expect(screen.getByTestId("cloud-disabled")).toHaveTextContent(/Cloud sending disabled/i);
-    expect(screen.getByTestId("cloud-demo-scope")).toHaveTextContent("synthetic-fixture-only");
+    expect(screen.getByTestId("cloud-demo-scope")).toHaveTextContent("Production cloud drafting is disabled");
+    expect(screen.getByTestId("cloud-demo-scope")).not.toHaveTextContent("synthetic-fixture-only");
     fireEvent.click(button);
     expect(fetchSpy).not.toHaveBeenCalled();
   });

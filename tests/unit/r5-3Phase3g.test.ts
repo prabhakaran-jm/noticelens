@@ -116,6 +116,7 @@ describe("Phase 3G final cloud-fact safety gate", () => {
             onReadOnDevice: () => undefined,
             deviceMessage: null,
             reading: false,
+            firebaseConfigured: false,
           })
         );
         expect(screen.getByTestId("read-deadline")).toHaveTextContent("Multiple dates");
@@ -527,6 +528,7 @@ describe("Phase 3G final cloud-fact safety gate", () => {
           onReadOnDevice: () => undefined,
           deviceMessage: null,
           reading: false,
+          firebaseConfigured: false,
         })
       );
       expect(screen.getByTestId("read-issue-date")).toHaveTextContent("Multiple dates");

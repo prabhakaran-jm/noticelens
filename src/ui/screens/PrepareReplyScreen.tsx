@@ -1,8 +1,5 @@
 import type { ReadableInspectionRow } from "../../adapters/cloudBriefBuilder";
-import {
-  CLOUD_SUBMISSION_BLOCKED_REASON,
-  type CloudApprovalSession,
-} from "../../adapters/cloudApprovalSession";
+import type { CloudApprovalSession } from "../../adapters/cloudApprovalSession";
 import { STRUCTURAL_VALIDATION_DOES_NOT_ESTABLISH_PAYMENT_CORRECTNESS } from "../../domain/closedCloudBrief";
 import type { CloudDraftOutput } from "../../domain/types";
 
@@ -37,24 +34,25 @@ export function PrepareReplyScreen(props: {
         <p className="screen-eyebrow">Screen 3</p>
         <h1 className="screen-title">Prepare a reply</h1>
         <p className="screen-lead">
-          You can inspect the local brief. Cloud drafting is synthetic-fixture-only.
           {props.cloudDemo
-            ? " One explicit send uses the approved brief for the two synthetic examples."
-            : " Cloud drafting is switched off, so there is no reply to copy and no request is made."}
+            ? "Inspect the exact local brief. Cloud drafting in this diagnostic session is synthetic-fixture-only."
+            : "Inspect the exact local brief. Production cloud drafting is disabled, so this page does not generate a reply."}
         </p>
       </header>
       <p data-testid="cloud-demo-scope">
-        Cloud drafting in this demo is synthetic-fixture-only. It applies to the two synthetic
-        example notices, and only after a separate review.
+        {props.cloudDemo
+          ? "Cloud drafting in this demo is synthetic-fixture-only. It applies to the two synthetic example notices, and only after a separate review."
+          : "The brief on this page is local. Production cloud drafting is disabled."}
       </p>
-      <div className="banner block" role="status" data-testid="cloud-disabled">
+      <div id="cloud-disabled" className="banner block" role="status" data-testid="cloud-disabled">
         {props.cloudDemo
           ? "Production cloud sending stays off. This session can send only the two synthetic examples."
           : `Cloud sending disabled. ${props.session.blockedReason}`}
       </div>
       <p data-testid="cloud-fixture-explanation">
-        Cloud drafting is available only for the two synthetic examples. Local analysis stays on
-        this device.
+        {props.cloudDemo
+          ? "Cloud drafting is available only for the two synthetic examples. Local analysis stays on this device."
+          : "Local analysis stays on this device. No cloud reply is generated."}
       </p>
       <p className="banner block" role="note" data-testid="structural-validation-warning">
         {STRUCTURAL_VALIDATION_DOES_NOT_ESTABLISH_PAYMENT_CORRECTNESS}
@@ -165,7 +163,6 @@ export function PrepareReplyScreen(props: {
           <pre>{props.cloudDemo.draft.replyTemplateWithPlaceholders}</pre>
         </section>
       ) : null}
-      <p>{CLOUD_SUBMISSION_BLOCKED_REASON}</p>
     </section>
   );
 }

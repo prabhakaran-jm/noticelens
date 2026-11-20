@@ -28,6 +28,7 @@ import {
 import { normalizeNewlines } from "../../src/domain/textNormalize";
 import type { InferenceCallRecord, RawNoticeExtraction } from "../../src/domain/types";
 import { App } from "../../src/App";
+import { stubCoreFirebaseEnv } from "./stubCoreFirebaseEnv";
 
 const harness = vi.hoisted(() => {
   const pending: Array<{
@@ -233,6 +234,7 @@ describe("Phase 5C-2 preflight input hardening", () => {
 
 describe("Phase 5C-2 live dispatch in the app", () => {
   beforeEach(() => {
+    stubCoreFirebaseEnv();
     harness.pending.length = 0;
     resetUserApprovalStateForTests();
     resetLiveCloudDispatchForTests();

@@ -7,6 +7,7 @@ import { requestClosedBriefSend, resetUserApprovalStateForTests } from "../../sr
 import type { InferenceCallRecord, RawNoticeExtraction } from "../../src/domain/types";
 import { normalizeNewlines } from "../../src/domain/textNormalize";
 import { App } from "../../src/App";
+import { stubCoreFirebaseEnv } from "./stubCoreFirebaseEnv";
 
 const harness = vi.hoisted(() => {
   const pending: Array<{
@@ -95,6 +96,7 @@ function extractionRecord(): InferenceCallRecord<RawNoticeExtraction> {
 
 describe("production approval registry", () => {
   beforeEach(() => {
+    stubCoreFirebaseEnv();
     harness.pending.length = 0;
     network.length = 0;
     resetUserApprovalStateForTests();
